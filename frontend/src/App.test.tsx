@@ -44,7 +44,8 @@ test('loads and renders the dashboard on submit', async () => {
   await waitFor(() =>
     expect(screen.getByRole('heading', { name: /apple inc\./i })).toBeInTheDocument(),
   )
-  expect(screen.getByTestId('price-chart')).toBeInTheDocument()
+  // chart is lazy-loaded
+  expect(await screen.findByTestId('price-chart')).toBeInTheDocument()
   expect(mockedLoad).toHaveBeenCalledWith('AAPL')
 })
 

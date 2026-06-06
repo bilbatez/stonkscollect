@@ -4,6 +4,7 @@ pub mod api;
 pub mod collectors;
 pub mod domain;
 pub mod http;
+pub mod pipeline;
 pub mod reconcile;
 pub mod scheduler;
 pub mod store;

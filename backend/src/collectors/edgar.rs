@@ -82,7 +82,9 @@ fn parse_companyfacts(
     now: DateTime<Utc>,
 ) -> Result<Vec<FinancialFact>, CollectorError> {
     let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
-    let mut deduped: BTreeMap<(&'static str, &'static str, NaiveDate), FinancialFact> =
+    // Keep, per (line item, period type, period end), the entry from the
+    // latest filing. "filed" is ISO (YYYY-MM-DD) so lexicographic compare works.
+    let mut deduped: BTreeMap<(&'static str, &'static str, NaiveDate), (String, FinancialFact)> =
         BTreeMap::new();
 
     for (concept, statement, line_item) in CONCEPTS {
@@ -109,22 +111,31 @@ fn parse_companyfacts(
             let Some(value) = entry["val"].as_f64() else {
                 continue;
             };
+            let filed = entry["filed"].as_str().unwrap_or("").to_string();
+            let key = (*line_item, period_type.as_str(), period_end);
+            // Only replace an existing entry if this filing is at least as recent.
+            if deduped.get(&key).is_some_and(|(prev, _)| filed < *prev) {
+                continue;
+            }
             deduped.insert(
-                (line_item, period_type.as_str(), period_end),
-                FinancialFact {
-                    company_id,
-                    statement: *statement,
-                    line_item: (*line_item).to_string(),
-                    period_type,
-                    period_end,
-                    value,
-                    source: "edgar".to_string(),
-                    fetched_at: now,
-                },
+                key,
+                (
+                    filed,
+                    FinancialFact {
+                        company_id,
+                        statement: *statement,
+                        line_item: (*line_item).to_string(),
+                        period_type,
+                        period_end,
+                        value,
+                        source: "edgar".to_string(),
+                        fetched_at: now,
+                    },
+                ),
             );
         }
     }
-    Ok(deduped.into_values().collect())
+    Ok(deduped.into_values().map(|(_, fact)| fact).collect())
 }
 
 #[cfg(test)]
@@ -214,6 +225,19 @@ mod tests {
         );
         // 10-K/A (383285...) supersedes the original 10-K (383000...).
         assert_eq!(rev_2023.value, 383285000000.0);
+    }
+
+    #[test]
+    fn parse_keeps_latest_filed_regardless_of_array_order() {
+        // Amended 10-K/A (filed later, val 999) appears BEFORE the original
+        // 10-K (filed earlier, val 100) in the array; the amendment must win.
+        let json = r#"{"facts":{"us-gaap":{"NetIncomeLoss":{"units":{"USD":[
+            {"end":"2023-12-31","val":999,"fp":"FY","form":"10-K/A","filed":"2024-03-01"},
+            {"end":"2023-12-31","val":100,"fp":"FY","form":"10-K","filed":"2024-01-15"}
+        ]}}}}}"#;
+        let facts = parse_companyfacts(7, json, now()).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].value, 999.0);
     }
 
     #[test]

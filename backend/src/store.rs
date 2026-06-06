@@ -8,7 +8,9 @@ use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::{
@@ -41,8 +43,16 @@ pub struct Store {
 
 impl Store {
     /// Open (creating if needed) the database at `url` and apply migrations.
+    ///
+    /// WAL + a busy timeout let the scheduler's concurrent collectors write
+    /// without hitting "database is locked"; foreign keys are enforced.
     pub async fn connect(url: &str) -> Result<Self> {
-        let opts = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+        let opts = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
         Ok(Self { pool })

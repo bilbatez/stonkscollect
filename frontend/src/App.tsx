@@ -1,13 +1,15 @@
-import { useState, type FormEvent } from 'react'
+import { lazy, Suspense, useState, type FormEvent } from 'react'
 import { loadCompanyData } from './api'
 import { freshness } from './format'
-import PriceChart from './charts/PriceChart'
 import { DiscrepancyPanel } from './components/DiscrepancyPanel'
 import { FreshnessBadge } from './components/FreshnessBadge'
 import { NewsFeed } from './components/NewsFeed'
 import { RatiosPanel } from './components/RatiosPanel'
 import { StatementTable } from './components/StatementTable'
 import type { CompanyData } from './types'
+
+// Code-split the heavy echarts bundle out of the initial page load.
+const PriceChart = lazy(() => import('./charts/PriceChart'))
 
 type Status = 'idle' | 'loading' | 'loaded' | 'error'
 
@@ -24,7 +26,9 @@ function Dashboard({ data, loadedAt }: { data: CompanyData; loadedAt: number }) 
       </header>
 
       <h3>Price</h3>
-      <PriceChart prices={data.prices} />
+      <Suspense fallback={<p>Loading chart…</p>}>
+        <PriceChart prices={data.prices} />
+      </Suspense>
 
       <h3>Statements</h3>
       <StatementTable facts={data.facts} />

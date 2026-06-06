@@ -21,18 +21,30 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 
 ```
 backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage-excluded)
-  src/lib.rs      app() router + handlers
-  src/main.rs     binary entrypoint (bind + serve); NO logic
-  tests/          integration tests (e.g. health.rs)
+  src/lib.rs        app(Arc<Store>) router
+  src/main.rs       entrypoint: open DB, serve; NO logic (coverage-excluded)
+  src/domain.rs     typed models + value objects
+  src/store.rs      SQLite (WAL) CRUD + Parquet export
+  src/collectors/   edgar, fmp, news (rss+finnhub), scrape — behind HttpClient
+  src/http.rs       real reqwest client (coverage-excluded I/O glue)
+  src/reconcile.rs  canonical selection + discrepancy flagging (pure)
+  src/pipeline.rs   ingest: reconcile facts -> persist canonical + discrepancies
+  src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
+  src/api.rs        axum REST handlers
+  tests/            integration tests + fixtures/
 frontend/         React + Vite SPA
-  src/            components, hooks, utils + co-located *.test.tsx (vitest)
-  e2e/            Playwright specs (run against built/preview or running stack)
+  src/            api client, format utils, components/ + co-located *.test.tsx
+  src/charts/     echarts canvas wrappers (lazy-loaded, coverage-excluded)
+  e2e/            Playwright specs (smoke + route-mocked dashboard)
 data/             mounted volume: stonks.db + parquet/ exports + backups (gitignored)
 Makefile          dev tasks
 docker-compose.yml
 ```
 
-Planned backend modules: `domain/`, `store/`, `collectors/`, `reconcile/`, `scheduler/`, `api/`.
+**Remaining integration point:** the live collection driver (loop that fires
+`scheduler::run_tracked` per `Tier`, calls collectors, runs `pipeline::persist_facts`)
+is not wired in `main.rs` yet — it needs config (ticker list, API keys, feed URLs).
+All building blocks are implemented and tested.
 
 ## Run / test / build
 
