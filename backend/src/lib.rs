@@ -1,5 +1,6 @@
 //! StonksCollect backend library.
 
+pub mod api;
 pub mod collectors;
 pub mod domain;
 pub mod http;
@@ -7,12 +8,19 @@ pub mod reconcile;
 pub mod scheduler;
 pub mod store;
 
+use std::sync::Arc;
+
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 
+use crate::store::Store;
+
 /// Build the application router with all routes wired up.
-pub fn app() -> Router {
-    Router::new().route("/health", get(health))
+pub fn app(store: Arc<Store>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .merge(api::routes())
+        .with_state(store)
 }
 
 /// Liveness probe handler.

@@ -1,6 +1,9 @@
 //! Binary entrypoint. Thin bootstrap only — all logic lives in the library.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+
+use stonkscollect_backend::store::Store;
 
 #[tokio::main]
 async fn main() {
@@ -10,6 +13,10 @@ async fn main() {
                 .unwrap_or_else(|_| "info".into()),
         )
         .init();
+
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:///data/stonks.db".into());
+    let store = Arc::new(Store::connect(&database_url).await.expect("open database"));
 
     let port: u16 = std::env::var("PORT")
         .ok()
@@ -22,7 +29,7 @@ async fn main() {
         .expect("bind listener");
     tracing::info!("listening on {addr}");
 
-    axum::serve(listener, stonkscollect_backend::app())
+    axum::serve(listener, stonkscollect_backend::app(store))
         .await
         .expect("server error");
 }

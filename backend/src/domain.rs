@@ -3,7 +3,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 
 /// Reporting period of a financial fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum PeriodType {
     Quarterly,
     Annual,
@@ -29,7 +29,7 @@ impl PeriodType {
 }
 
 /// Which financial statement a fact belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum StatementKind {
     Income,
     Balance,
@@ -67,7 +67,7 @@ pub struct NewCompany {
 }
 
 /// A persisted company.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Company {
     pub id: i64,
     pub cik: String,
@@ -79,7 +79,7 @@ pub struct Company {
 }
 
 /// A single daily closing price from one source.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PricePoint {
     pub company_id: i64,
     pub date: NaiveDate,
@@ -89,7 +89,7 @@ pub struct PricePoint {
 }
 
 /// A single reported financial line-item value from one source.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FinancialFact {
     pub company_id: i64,
     pub statement: StatementKind,
@@ -102,7 +102,7 @@ pub struct FinancialFact {
 }
 
 /// A news headline (title + description only).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NewsItem {
     pub company_id: i64,
     pub title: String,
@@ -114,7 +114,7 @@ pub struct NewsItem {
 }
 
 /// A derived financial ratio for a period.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Ratio {
     pub company_id: i64,
     pub period_end: NaiveDate,
@@ -124,7 +124,7 @@ pub struct Ratio {
 }
 
 /// A record of one collection attempt, for observability.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CollectionRun {
     pub id: i64,
     pub source: String,
@@ -136,7 +136,7 @@ pub struct CollectionRun {
 }
 
 /// A flagged cross-source mismatch on a numeric field.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Discrepancy {
     pub company_id: i64,
     pub field: String,
