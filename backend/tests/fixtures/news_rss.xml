@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Finance Feed</title>
+    <link>https://example.com</link>
+    <description>Headlines</description>
+    <item>
+      <title>Apple reaches record high</title>
+      <description>Shares climbed after strong results.</description>
+      <link>https://example.com/a</link>
+      <pubDate>Tue, 02 Jan 2024 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Minimal item</title>
+    </item>
+    <item>
+      <description>No title, should be skipped.</description>
+      <link>https://example.com/c</link>
+    </item>
+  </channel>
+</rss>
