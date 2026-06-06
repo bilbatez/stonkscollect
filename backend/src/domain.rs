@@ -123,6 +123,18 @@ pub struct Ratio {
     pub computed_at: DateTime<Utc>,
 }
 
+/// A record of one collection attempt, for observability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionRun {
+    pub id: i64,
+    pub source: String,
+    pub scope: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
 /// A flagged cross-source mismatch on a numeric field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Discrepancy {

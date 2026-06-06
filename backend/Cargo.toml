@@ -22,6 +22,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
 chrono = { version = "0.4", features = ["serde"] }
+cron = "0.12"
 arrow = "53"
 parquet = { version = "53", features = ["arrow"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

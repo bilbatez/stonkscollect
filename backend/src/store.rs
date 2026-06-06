@@ -12,8 +12,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::{
-    Company, Discrepancy, FinancialFact, NewCompany, NewsItem, PeriodType, PricePoint, Ratio,
-    StatementKind,
+    CollectionRun, Company, Discrepancy, FinancialFact, NewCompany, NewsItem, PeriodType,
+    PricePoint, Ratio, StatementKind,
 };
 
 /// Errors returned by the store.
@@ -46,6 +46,12 @@ impl Store {
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
         Ok(Self { pool })
+    }
+
+    /// Close the underlying connection pool. After this, queries error
+    /// (used to exercise best-effort failure paths).
+    pub async fn close(&self) {
+        self.pool.close().await;
     }
 
     /// Insert a company, returning its new id.
@@ -301,6 +307,68 @@ impl Store {
                     value_b: r.try_get("value_b")?,
                     pct_diff: r.try_get("pct_diff")?,
                     flagged_at: r.try_get("flagged_at")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Record the start of a collection run, returning its id.
+    pub async fn start_run(
+        &self,
+        source: &str,
+        scope: Option<&str>,
+        started_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<i64> {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO collection_runs (source,scope,started_at,status) VALUES (?,?,?,'running') RETURNING id",
+        )
+        .bind(source)
+        .bind(scope)
+        .bind(started_at)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    /// Mark a collection run finished with a final status and optional error.
+    pub async fn finish_run(
+        &self,
+        id: i64,
+        status: &str,
+        finished_at: chrono::DateTime<chrono::Utc>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE collection_runs SET status=?, finished_at=?, error=? WHERE id=?",
+        )
+        .bind(status)
+        .bind(finished_at)
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// List the most recent collection runs, newest first.
+    pub async fn recent_runs(&self, limit: i64) -> Result<Vec<CollectionRun>> {
+        let rows = sqlx::query(
+            "SELECT id,source,scope,started_at,finished_at,status,error FROM collection_runs \
+             ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(CollectionRun {
+                    id: r.try_get("id")?,
+                    source: r.try_get("source")?,
+                    scope: r.try_get("scope")?,
+                    started_at: r.try_get("started_at")?,
+                    finished_at: r.try_get("finished_at")?,
+                    status: r.try_get("status")?,
+                    error: r.try_get("error")?,
                 })
             })
             .collect()
@@ -567,6 +635,32 @@ mod tests {
         assert_eq!(list[0].pct_diff, 0.1);
         assert_eq!(list[0].period, Some("2023-12-31".into()));
         assert!(format!("{:?}", list[0].clone()).contains("Revenue"));
+    }
+
+    #[tokio::test]
+    async fn collection_runs_lifecycle_and_recent_order() {
+        let (store, _d) = temp_store().await;
+        let t = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let id1 = store.start_run("edgar", Some("AAPL"), t).await.unwrap();
+        store.finish_run(id1, "ok", t, None).await.unwrap();
+        let id2 = store.start_run("fmp", None, t).await.unwrap();
+        store.finish_run(id2, "error", t, Some("boom")).await.unwrap();
+
+        let runs = store.recent_runs(10).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        // newest (highest id) first
+        assert_eq!(runs[0].id, id2);
+        assert_eq!(runs[0].source, "fmp");
+        assert_eq!(runs[0].scope, None);
+        assert_eq!(runs[0].status, "error");
+        assert_eq!(runs[0].error, Some("boom".into()));
+        assert_eq!(runs[0].finished_at, Some(t));
+        assert_eq!(runs[1].id, id1);
+        assert_eq!(runs[1].scope, Some("AAPL".into()));
+        assert_eq!(runs[1].status, "ok");
+        assert_eq!(runs[1].error, None);
+        assert_eq!(runs[1].clone(), runs[1]);
+        assert!(format!("{:?}", runs[0]).contains("fmp"));
     }
 
     #[tokio::test]
