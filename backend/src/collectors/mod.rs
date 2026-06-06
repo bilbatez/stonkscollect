@@ -5,6 +5,7 @@
 pub mod edgar;
 pub mod fmp;
 pub mod news;
+pub mod scrape;
 
 use crate::domain::PeriodType;
 
