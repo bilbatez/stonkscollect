@@ -3,6 +3,7 @@
 pub mod collectors;
 pub mod domain;
 pub mod http;
+pub mod reconcile;
 pub mod store;
 
 use axum::{routing::get, Json, Router};
