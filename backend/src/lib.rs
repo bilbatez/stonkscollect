@@ -1,5 +1,8 @@
 //! StonksCollect backend library.
 
+pub mod domain;
+pub mod store;
+
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 

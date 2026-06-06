@@ -20,7 +20,12 @@ serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+chrono = { version = "0.4", features = ["serde"] }
+arrow = "53"
+parquet = { version = "53", features = ["arrow"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

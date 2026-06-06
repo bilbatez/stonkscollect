@@ -1,0 +1,176 @@
+//! Core domain models. Pure data + value-object conversions, no I/O.
+
+use chrono::{DateTime, NaiveDate, Utc};
+
+/// Reporting period of a financial fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeriodType {
+    Quarterly,
+    Annual,
+}
+
+impl PeriodType {
+    /// Canonical lowercase token stored in the database.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PeriodType::Quarterly => "quarterly",
+            PeriodType::Annual => "annual",
+        }
+    }
+
+    /// Parse a stored token; `None` if unrecognized.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "quarterly" => Some(PeriodType::Quarterly),
+            "annual" => Some(PeriodType::Annual),
+            _ => None,
+        }
+    }
+}
+
+/// Which financial statement a fact belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatementKind {
+    Income,
+    Balance,
+    CashFlow,
+}
+
+impl StatementKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StatementKind::Income => "income",
+            StatementKind::Balance => "balance",
+            StatementKind::CashFlow => "cashflow",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "income" => Some(StatementKind::Income),
+            "balance" => Some(StatementKind::Balance),
+            "cashflow" => Some(StatementKind::CashFlow),
+            _ => None,
+        }
+    }
+}
+
+/// A company before it has a database-assigned id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCompany {
+    pub cik: String,
+    pub ticker: String,
+    pub name: String,
+    pub exchange: Option<String>,
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+}
+
+/// A persisted company.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Company {
+    pub id: i64,
+    pub cik: String,
+    pub ticker: String,
+    pub name: String,
+    pub exchange: Option<String>,
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+}
+
+/// A single daily closing price from one source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PricePoint {
+    pub company_id: i64,
+    pub date: NaiveDate,
+    pub close: f64,
+    pub volume: Option<i64>,
+    pub source: String,
+}
+
+/// A single reported financial line-item value from one source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinancialFact {
+    pub company_id: i64,
+    pub statement: StatementKind,
+    pub line_item: String,
+    pub period_type: PeriodType,
+    pub period_end: NaiveDate,
+    pub value: f64,
+    pub source: String,
+    pub fetched_at: DateTime<Utc>,
+}
+
+/// A news headline (title + description only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsItem {
+    pub company_id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub url: String,
+    pub source: String,
+    pub published_at: DateTime<Utc>,
+    pub dedup_hash: String,
+}
+
+/// A flagged cross-source mismatch on a numeric field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Discrepancy {
+    pub company_id: i64,
+    pub field: String,
+    pub period: Option<String>,
+    pub source_a: String,
+    pub value_a: f64,
+    pub source_b: String,
+    pub value_b: f64,
+    pub pct_diff: f64,
+    pub flagged_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn period_type_round_trips_through_str() {
+        for pt in [PeriodType::Quarterly, PeriodType::Annual] {
+            assert_eq!(PeriodType::parse(pt.as_str()), Some(pt.clone()));
+        }
+    }
+
+    #[test]
+    fn period_type_parse_rejects_unknown() {
+        assert_eq!(PeriodType::parse("weekly"), None);
+    }
+
+    #[test]
+    fn statement_kind_round_trips_through_str() {
+        for sk in [
+            StatementKind::Income,
+            StatementKind::Balance,
+            StatementKind::CashFlow,
+        ] {
+            assert_eq!(StatementKind::parse(sk.as_str()), Some(sk.clone()));
+        }
+    }
+
+    #[test]
+    fn statement_kind_parse_rejects_unknown() {
+        assert_eq!(StatementKind::parse("equity"), None);
+    }
+
+    #[test]
+    fn company_is_cloneable_and_comparable() {
+        let c = Company {
+            id: 1,
+            cik: "0000320193".into(),
+            ticker: "AAPL".into(),
+            name: "Apple Inc.".into(),
+            exchange: Some("NASDAQ".into()),
+            sector: None,
+            industry: None,
+        };
+        assert_eq!(c.clone(), c);
+        assert!(format!("{c:?}").contains("AAPL"));
+    }
+}
