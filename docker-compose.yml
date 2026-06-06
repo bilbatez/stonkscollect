@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      PORT: "8080"
+      # SQLite file lives on the shared volume so it is easy to back up / export.
+      DATABASE_URL: "sqlite:///data/stonks.db"
+      RUST_LOG: "info"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

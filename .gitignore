@@ -1,0 +1,17 @@
+# Rust
+/backend/target/
+
+# Node
+node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/playwright-report/
+/frontend/test-results/
+
+# Data volume — keep the dir, ignore DB + exports
+/data/*
+!/data/.gitkeep
+
+# Misc
+.DS_Store
+*.log
