@@ -19,6 +19,10 @@ export default defineConfig({
         'src/vite-env.d.ts',
         'src/**/*.test.{ts,tsx}',
         'src/test/**',
+        // Canvas chart wrappers: untestable rendering glue (echarts needs a
+        // real canvas), analogous to the backend's network glue.
+        'src/charts/**',
+        'src/types.ts',
       ],
       thresholds: {
         lines: 100,
