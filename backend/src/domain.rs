@@ -3,7 +3,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 
 /// Reporting period of a financial fact.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeriodType {
     Quarterly,
     Annual,
@@ -29,7 +29,7 @@ impl PeriodType {
 }
 
 /// Which financial statement a fact belongs to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
     Income,
     Balance,
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn period_type_round_trips_through_str() {
         for pt in [PeriodType::Quarterly, PeriodType::Annual] {
-            assert_eq!(PeriodType::parse(pt.as_str()), Some(pt.clone()));
+            assert_eq!(PeriodType::parse(pt.as_str()), Some(pt));
         }
     }
 
@@ -150,7 +150,7 @@ mod tests {
             StatementKind::Balance,
             StatementKind::CashFlow,
         ] {
-            assert_eq!(StatementKind::parse(sk.as_str()), Some(sk.clone()));
+            assert_eq!(StatementKind::parse(sk.as_str()), Some(sk));
         }
     }
 

@@ -1,6 +1,8 @@
 //! StonksCollect backend library.
 
+pub mod collectors;
 pub mod domain;
+pub mod http;
 pub mod store;
 
 use axum::{routing::get, Json, Router};

@@ -3,7 +3,7 @@
 
 BACKEND := backend
 FRONTEND := frontend
-COV_IGNORE := main\.rs
+COV_IGNORE := (main|http)\.rs
 
 .PHONY: test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
 

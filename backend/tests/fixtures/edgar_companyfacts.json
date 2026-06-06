@@ -1,0 +1,68 @@
+{
+  "cik": 320193,
+  "entityName": "Apple Inc.",
+  "facts": {
+    "us-gaap": {
+      "Revenues": {
+        "label": "Revenues",
+        "units": {
+          "USD": [
+            { "end": "2022-09-24", "val": 394328000000, "fy": 2022, "fp": "FY", "form": "10-K", "filed": "2022-10-28", "accn": "0000320193-22-000108" },
+            { "end": "2023-09-30", "val": 383000000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-02", "accn": "0000320193-23-000106" },
+            { "end": "2023-09-30", "val": 383285000000, "fy": 2023, "fp": "FY", "form": "10-K/A", "filed": "2023-12-01", "accn": "0000320193-23-000200" },
+            { "end": "2023-07-01", "val": 81797000000, "fy": 2023, "fp": "Q3", "form": "10-Q", "filed": "2023-08-04", "accn": "0000320193-23-000077" },
+            { "end": "2020-12-31", "val": 999, "fy": 2020, "fp": "CY", "form": "8-K", "filed": "2021-02-01", "accn": "x" }
+          ]
+        }
+      },
+      "NetIncomeLoss": {
+        "label": "Net Income",
+        "units": {
+          "USD": [
+            { "end": "2023-09-30", "val": 96995000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-02", "accn": "0000320193-23-000106" }
+          ]
+        }
+      },
+      "NetCashProvidedByUsedInOperatingActivities": {
+        "label": "Operating Cash Flow",
+        "units": {
+          "USD": [
+            { "end": "2023-09-30", "val": 110543000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-02", "accn": "0000320193-23-000106" }
+          ]
+        }
+      },
+      "NetCashProvidedByUsedInInvestingActivities": {
+        "label": "Investing Cash Flow (non-USD unit key)",
+        "units": {
+          "pure": [
+            { "end": "2023-09-30", "val": 3705000000, "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-11-02", "accn": "0000320193-23-000106" }
+          ]
+        }
+      },
+      "Assets": {
+        "label": "units object present but empty",
+        "units": {}
+      },
+      "StockholdersEquity": {
+        "label": "no units key at all"
+      },
+      "Liabilities": {
+        "label": "edge-case entries",
+        "units": {
+          "USD": [
+            { "end": "2023-09-30", "val": 1.0 },
+            { "end": "2023-09-30", "val": 2.0, "fp": "CY" },
+            { "val": 3.0, "fp": "FY" },
+            { "end": "not-a-date", "val": 4.0, "fp": "FY" },
+            { "end": "2023-09-30", "fp": "FY" },
+            { "end": "2023-09-30", "val": 290437000000, "fp": "FY", "form": "10-K" }
+          ]
+        }
+      },
+      "UnmappedConcept": {
+        "label": "ignored",
+        "units": { "USD": [ { "end": "2023-09-30", "val": 777, "fp": "FY" } ] }
+      }
+    }
+  }
+}
