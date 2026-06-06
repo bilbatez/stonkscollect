@@ -113,6 +113,16 @@ pub struct NewsItem {
     pub dedup_hash: String,
 }
 
+/// A derived financial ratio for a period.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ratio {
+    pub company_id: i64,
+    pub period_end: NaiveDate,
+    pub metric: String,
+    pub value: f64,
+    pub computed_at: DateTime<Utc>,
+}
+
 /// A flagged cross-source mismatch on a numeric field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Discrepancy {
@@ -157,6 +167,19 @@ mod tests {
     #[test]
     fn statement_kind_parse_rejects_unknown() {
         assert_eq!(StatementKind::parse("equity"), None);
+    }
+
+    #[test]
+    fn ratio_is_cloneable_and_comparable() {
+        let r = Ratio {
+            company_id: 1,
+            period_end: chrono::NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+            metric: "pe".into(),
+            value: 28.5,
+            computed_at: chrono::Utc::now(),
+        };
+        assert_eq!(r.clone(), r);
+        assert!(format!("{r:?}").contains("pe"));
     }
 
     #[test]

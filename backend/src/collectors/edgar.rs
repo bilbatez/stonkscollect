@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 
-use crate::collectors::{CollectorError, HttpClient};
-use crate::domain::{FinancialFact, PeriodType, StatementKind};
+use crate::collectors::{period_type_from_fp, CollectorError, HttpClient};
+use crate::domain::{FinancialFact, StatementKind};
 
 /// XBRL us-gaap concept -> (statement, normalized line item).
 const CONCEPTS: &[(&str, StatementKind, &str)] = &[
@@ -71,15 +71,6 @@ impl<H: HttpClient> EdgarCollector<H> {
         let url = Self::companyfacts_url(cik);
         let body = self.http.get_text(&url).await?;
         parse_companyfacts(company_id, &body, now)
-    }
-}
-
-/// Map an XBRL fiscal-period token to our [`PeriodType`].
-fn period_type_from_fp(fp: &str) -> Option<PeriodType> {
-    match fp {
-        "FY" => Some(PeriodType::Annual),
-        "Q1" | "Q2" | "Q3" | "Q4" => Some(PeriodType::Quarterly),
-        _ => None,
     }
 }
 

@@ -3,6 +3,19 @@
 //! tested offline against captured fixtures.
 
 pub mod edgar;
+pub mod fmp;
+
+use crate::domain::PeriodType;
+
+/// Map an XBRL/FMP fiscal-period token ("FY", "Q1".."Q4") to a [`PeriodType`].
+/// Returns `None` for tokens we do not model (e.g. "TTM", "CY").
+pub(crate) fn period_type_from_fp(fp: &str) -> Option<PeriodType> {
+    match fp {
+        "FY" => Some(PeriodType::Annual),
+        "Q1" | "Q2" | "Q3" | "Q4" => Some(PeriodType::Quarterly),
+        _ => None,
+    }
+}
 
 /// Errors produced while collecting from an external source.
 #[derive(Debug, thiserror::Error)]

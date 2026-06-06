@@ -1,0 +1,6 @@
+[
+  { "date": "2023-09-30", "period": "FY", "revenue": 383285000000, "netIncome": 96995000000 },
+  { "date": "2023-07-01", "period": "Q3", "revenue": 81797000000 },
+  { "date": "2023-12-31", "period": "TTM", "revenue": 1, "netIncome": 2 },
+  { "date": "2022-09-24", "period": "FY", "netIncome": 99803000000 }
+]

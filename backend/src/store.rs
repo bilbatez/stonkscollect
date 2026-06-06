@@ -12,7 +12,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::{
-    Company, Discrepancy, FinancialFact, NewCompany, NewsItem, PeriodType, PricePoint,
+    Company, Discrepancy, FinancialFact, NewCompany, NewsItem, PeriodType, PricePoint, Ratio,
     StatementKind,
 };
 
@@ -216,6 +216,44 @@ impl Store {
                     source: r.try_get("source")?,
                     published_at: r.try_get("published_at")?,
                     dedup_hash: r.try_get("dedup_hash")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Insert or update a derived ratio, keyed by (company, period, metric).
+    pub async fn upsert_ratio(&self, r: &Ratio) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ratios (company_id,period_end,metric,value,computed_at) VALUES (?,?,?,?,?) \
+             ON CONFLICT(company_id,period_end,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at",
+        )
+        .bind(r.company_id)
+        .bind(r.period_end)
+        .bind(&r.metric)
+        .bind(r.value)
+        .bind(r.computed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// List a company's ratios ordered by period then metric.
+    pub async fn get_ratios(&self, company_id: i64) -> Result<Vec<Ratio>> {
+        let rows = sqlx::query(
+            "SELECT company_id,period_end,metric,value,computed_at FROM ratios \
+             WHERE company_id=? ORDER BY period_end, metric",
+        )
+        .bind(company_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(Ratio {
+                    company_id: r.try_get("company_id")?,
+                    period_end: r.try_get("period_end")?,
+                    metric: r.try_get("metric")?,
+                    value: r.try_get("value")?,
+                    computed_at: r.try_get("computed_at")?,
                 })
             })
             .collect()
@@ -473,6 +511,38 @@ mod tests {
         assert_eq!(news[0].title, "New");
         assert_eq!(news[1].description, Some("d".into()));
         assert!(format!("{:?}", news[0].clone()).contains("New"));
+    }
+
+    #[tokio::test]
+    async fn upsert_ratio_inserts_then_updates_and_lists() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let pe = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
+        store
+            .upsert_ratio(&Ratio {
+                company_id: id,
+                period_end: pe,
+                metric: "pe".into(),
+                value: 28.5,
+                computed_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+            })
+            .await
+            .unwrap();
+        // same (company, period, metric) updates
+        store
+            .upsert_ratio(&Ratio {
+                company_id: id,
+                period_end: pe,
+                metric: "pe".into(),
+                value: 30.0,
+                computed_at: Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap(),
+            })
+            .await
+            .unwrap();
+        let ratios = store.get_ratios(id).await.unwrap();
+        assert_eq!(ratios.len(), 1);
+        assert_eq!(ratios[0].value, 30.0);
+        assert_eq!(ratios[0].metric, "pe");
     }
 
     #[tokio::test]

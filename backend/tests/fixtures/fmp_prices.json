@@ -1,0 +1,7 @@
+{
+  "symbol": "AAPL",
+  "historical": [
+    { "date": "2024-01-03", "close": 184.25, "volume": 58414460 },
+    { "date": "2024-01-02", "close": 185.64 }
+  ]
+}
