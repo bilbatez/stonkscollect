@@ -10,6 +10,10 @@ pub struct Config {
     pub finnhub_api_key: Option<String>,
     /// Tickers to collect (from `TICKERS`, comma-separated).
     pub tickers: Vec<String>,
+    /// Collect the entire bootstrapped US universe (ignores `tickers`).
+    pub collect_all: bool,
+    /// Milliseconds to wait between companies in bulk collection (politeness).
+    pub request_delay_ms: u64,
     /// Relative threshold above which cross-source values are flagged.
     pub reconcile_threshold: f64,
 }
@@ -27,11 +31,20 @@ impl Config {
             fmp_api_key: get("FMP_API_KEY"),
             finnhub_api_key: get("FINNHUB_API_KEY"),
             tickers: get("TICKERS").map(|s| parse_tickers(&s)).unwrap_or_default(),
+            collect_all: get("COLLECT_ALL").is_some_and(|v| is_truthy(&v)),
+            request_delay_ms: get("REQUEST_DELAY_MS")
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(150),
             reconcile_threshold: get("RECONCILE_THRESHOLD")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0.05),
         }
     }
+}
+
+/// Interpret common truthy strings.
+fn is_truthy(v: &str) -> bool {
+    matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes")
 }
 
 /// Split a comma-separated list into trimmed, non-empty, upper-cased tickers.
@@ -62,6 +75,8 @@ mod tests {
             ("FMP_API_KEY", "fk"),
             ("FINNHUB_API_KEY", "nk"),
             ("TICKERS", "aapl, msft ,"),
+            ("COLLECT_ALL", "TRUE"),
+            ("REQUEST_DELAY_MS", "200"),
             ("RECONCILE_THRESHOLD", "0.1"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
@@ -70,6 +85,8 @@ mod tests {
         assert_eq!(cfg.fmp_api_key, Some("fk".into()));
         assert_eq!(cfg.finnhub_api_key, Some("nk".into()));
         assert_eq!(cfg.tickers, vec!["AAPL", "MSFT"]);
+        assert!(cfg.collect_all);
+        assert_eq!(cfg.request_delay_ms, 200);
         assert_eq!(cfg.reconcile_threshold, 0.1);
         assert_eq!(cfg.clone(), cfg);
     }
@@ -83,13 +100,22 @@ mod tests {
         assert_eq!(cfg.fmp_api_key, None);
         assert_eq!(cfg.finnhub_api_key, None);
         assert!(cfg.tickers.is_empty());
+        assert!(!cfg.collect_all);
+        assert_eq!(cfg.request_delay_ms, 150);
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }
 
     #[test]
     fn invalid_numeric_values_fall_back_to_defaults() {
-        let cfg = Config::parse(getter(&[("PORT", "nope"), ("RECONCILE_THRESHOLD", "x")]));
+        let cfg = Config::parse(getter(&[
+            ("PORT", "nope"),
+            ("REQUEST_DELAY_MS", "x"),
+            ("COLLECT_ALL", "maybe"),
+            ("RECONCILE_THRESHOLD", "x"),
+        ]));
         assert_eq!(cfg.port, 8080);
+        assert_eq!(cfg.request_delay_ms, 150);
+        assert!(!cfg.collect_all); // "maybe" is not truthy
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }
 }

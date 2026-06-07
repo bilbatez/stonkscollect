@@ -31,11 +31,14 @@ enum Command {
     Serve,
     /// Fetch SEC's ticker->CIK directory and upsert companies.
     Bootstrap,
-    /// Collect data for tickers now, persist, and exit.
+    /// Collect data now, persist, and exit.
     Collect {
         /// Ticker to collect (repeatable). Defaults to the TICKERS env list.
         #[arg(long = "ticker")]
         tickers: Vec<String>,
+        /// Collect the entire bootstrapped US universe (overrides --ticker).
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -59,7 +62,7 @@ async fn main() {
     match command {
         Command::Serve => serve(store, &cfg).await,
         Command::Bootstrap => bootstrap(&store, &cfg).await,
-        Command::Collect { tickers } => collect(&store, &cfg, tickers).await,
+        Command::Collect { tickers, all } => collect(&store, &cfg, tickers, all).await,
     }
 }
 
@@ -76,22 +79,29 @@ async fn serve(store: Store, cfg: &Config) {
     }
 }
 
-/// Background loop: sleep until the next tier fires, then collect the configured
-/// tickers (wrapped in a tracked run). Runs only if tickers are configured.
+/// Background loop: sleep until the next tier fires, then collect (the whole
+/// universe if COLLECT_ALL, else the configured tickers). Idle when neither is set.
 async fn scheduler_loop(store: &Store, cfg: &Config) {
-    if cfg.tickers.is_empty() {
-        tracing::info!("no TICKERS configured; collection loop idle");
+    if !cfg.collect_all && cfg.tickers.is_empty() {
+        tracing::info!("no TICKERS and COLLECT_ALL unset; collection loop idle");
         std::future::pending::<()>().await;
     }
 
+    // Bulk runs use EDGAR (+FMP if keyed) only — scraping the whole universe
+    // would abuse the scrape host. Targeted runs add the scrape fallback.
     let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
-    let scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
-    let mut sources: Vec<&dyn FactSource> = vec![&edgar, &scrape];
+    let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
         fmp = FmpCollector::new(ReqwestClient::new(&cfg.user_agent), key.clone());
         sources.push(&fmp);
     }
+    let scrape;
+    if !cfg.collect_all {
+        scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
+        sources.push(&scrape);
+    }
+    let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
 
     while let Some((tier, at)) = scheduler::next_tier(chrono::Utc::now()) {
         let now = chrono::Utc::now();
@@ -100,14 +110,33 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
         tokio::time::sleep(wait).await;
 
         let fired = chrono::Utc::now();
-        let result = scheduler::run_tracked(store, tier.label(), None, fired, || {
-            pipeline::collect_tickers(store, &sources, &cfg.tickers, cfg.reconcile_threshold, fired)
-        })
-        .await;
-        match result {
-            Ok(outcomes) => tracing::info!("{} tier collected {} tickers", tier.label(), outcomes.len()),
-            Err(e) => tracing::error!("{} tier collection failed: {e}", tier.label()),
+        let label = tier.label();
+        if cfg.collect_all {
+            let r = scheduler::run_tracked(store, label, None, fired, || {
+                pipeline::collect_all(store, &sources, cfg.reconcile_threshold, fired, delay)
+            })
+            .await;
+            report_bulk(label, r);
+        } else {
+            let r = scheduler::run_tracked(store, label, None, fired, || {
+                pipeline::collect_tickers(store, &sources, &cfg.tickers, cfg.reconcile_threshold, fired)
+            })
+            .await;
+            match r {
+                Ok(out) => tracing::info!("{label} tier collected {} tickers", out.len()),
+                Err(e) => tracing::error!("{label} tier failed: {e}"),
+            }
         }
+    }
+}
+
+fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError>) {
+    match result {
+        Ok(s) => tracing::info!(
+            "{label} tier: {} companies, {} facts, {} discrepancies, {} source errors",
+            s.companies, s.facts_written, s.discrepancies_written, s.source_errors
+        ),
+        Err(e) => tracing::error!("{label} tier failed: {e}"),
     }
 }
 
@@ -120,33 +149,44 @@ async fn bootstrap(store: &Store, cfg: &Config) {
     tracing::info!("bootstrapped {n} companies");
 }
 
-async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>) {
-    if tickers.is_empty() {
-        tickers = cfg.tickers.clone();
-    }
-    tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
+async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
+    let bulk = all || cfg.collect_all;
 
     let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
-    let scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
-    let mut sources: Vec<&dyn FactSource> = vec![&edgar, &scrape];
-
+    let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
         fmp = FmpCollector::new(ReqwestClient::new(&cfg.user_agent), key.clone());
         sources.push(&fmp);
     }
+    let scrape;
+    if !bulk {
+        scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
+        sources.push(&scrape);
+    }
 
     let now = chrono::Utc::now();
-    let outcomes = pipeline::collect_tickers(store, &sources, &tickers, cfg.reconcile_threshold, now)
-        .await
-        .expect("collect tickers");
-
-    for (ticker, report) in outcomes {
-        tracing::info!(
-            "{ticker}: {} facts, {} discrepancies, {} source errors",
-            report.facts_written,
-            report.discrepancies_written,
-            report.source_errors.len()
-        );
+    if bulk {
+        let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+        let s = pipeline::collect_all(store, &sources, cfg.reconcile_threshold, now, delay)
+            .await
+            .expect("collect all");
+        report_bulk("collect", Ok(s));
+    } else {
+        if tickers.is_empty() {
+            tickers = cfg.tickers.clone();
+        }
+        tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
+        let outcomes = pipeline::collect_tickers(store, &sources, &tickers, cfg.reconcile_threshold, now)
+            .await
+            .expect("collect tickers");
+        for (ticker, report) in outcomes {
+            tracing::info!(
+                "{ticker}: {} facts, {} discrepancies, {} source errors",
+                report.facts_written,
+                report.discrepancies_written,
+                report.source_errors.len()
+            );
+        }
     }
 }

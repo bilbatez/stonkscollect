@@ -73,9 +73,13 @@ cargo run -- bootstrap
 cargo run -- collect --ticker AAPL --ticker MSFT
 #    ...or rely on the TICKERS list from .env:
 cargo run -- collect
+#    ...or collect the entire bootstrapped US universe (~10k companies,
+#    EDGAR-only, throttled by REQUEST_DELAY_MS — takes a while):
+cargo run -- collect --all
 
 # 3. Serve the REST API (default :8080). Also runs a background loop that
-#    collects the configured TICKERS on the tiered schedule (idle if none set).
+#    collects on the tiered schedule — the whole universe if COLLECT_ALL=true,
+#    else the configured TICKERS (idle if neither is set).
 cargo run -- serve
 ```
 
@@ -93,7 +97,9 @@ Copy `.env.example` to `.env` and edit. The backend loads `.env` automatically
 (via `dotenvy`); real environment variables override it. Keys:
 
 `DATABASE_URL`, `PORT`, `USER_AGENT` (SEC requires a contact UA), `FMP_API_KEY`,
-`FINNHUB_API_KEY`, `TICKERS` (comma-separated), `RECONCILE_THRESHOLD` (default 0.05).
+`FINNHUB_API_KEY`, `TICKERS` (comma-separated), `COLLECT_ALL` (collect the whole
+universe; overrides `TICKERS`), `REQUEST_DELAY_MS` (bulk throttle, default 150),
+`RECONCILE_THRESHOLD` (default 0.05).
 
 ## Project layout
 

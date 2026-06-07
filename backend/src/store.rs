@@ -125,6 +125,28 @@ impl Store {
         }
     }
 
+    /// List every company, ordered by ticker (for bulk collection).
+    pub async fn all_companies(&self) -> Result<Vec<Company>> {
+        let rows = sqlx::query(
+            "SELECT id,cik,ticker,name,exchange,sector,industry FROM companies ORDER BY ticker",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(Company {
+                    id: r.try_get("id")?,
+                    cik: r.try_get("cik")?,
+                    ticker: r.try_get("ticker")?,
+                    name: r.try_get("name")?,
+                    exchange: r.try_get("exchange")?,
+                    sector: r.try_get("sector")?,
+                    industry: r.try_get("industry")?,
+                })
+            })
+            .collect()
+    }
+
     /// Insert or update a daily price for `(company_id, date, source)`.
     pub async fn upsert_price(&self, p: &PricePoint) -> Result<()> {
         sqlx::query(
@@ -489,6 +511,19 @@ mod tests {
         assert_eq!(id1, id2); // same row
         let got = store.get_company("AAPL").await.unwrap().unwrap();
         assert_eq!(got.name, "Apple (renamed)");
+    }
+
+    #[tokio::test]
+    async fn all_companies_lists_every_company_ordered() {
+        let (store, _d) = temp_store().await;
+        store.upsert_company(&sample_company()).await.unwrap();
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        store.upsert_company(&msft).await.unwrap();
+        let all = store.all_companies().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].ticker, "AAPL"); // ordered by ticker
+        assert_eq!(all[1].ticker, "MSFT");
     }
 
     #[tokio::test]

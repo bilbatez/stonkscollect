@@ -26,6 +26,44 @@ pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<u
     Ok(refs.len())
 }
 
+/// Aggregate totals from collecting many companies.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollectSummary {
+    pub companies: usize,
+    pub facts_written: usize,
+    pub discrepancies_written: usize,
+    pub source_errors: usize,
+}
+
+/// Collect every company in the store (the full US universe once bootstrapped),
+/// sleeping `delay` between companies to stay polite to upstream APIs.
+pub async fn collect_all(
+    store: &Store,
+    sources: &[&dyn FactSource],
+    threshold: f64,
+    now: DateTime<Utc>,
+    delay: std::time::Duration,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let mut summary = CollectSummary::default();
+    for company in &companies {
+        // Throttle between companies (not before the first).
+        if summary.companies > 0 {
+            tokio::time::sleep(delay).await;
+        }
+        let target = SourceTarget {
+            cik: company.cik.clone(),
+            symbol: company.ticker.clone(),
+        };
+        let report = ingest(store, sources, company.id, &target, threshold, now).await?;
+        summary.companies += 1;
+        summary.facts_written += report.facts_written;
+        summary.discrepancies_written += report.discrepancies_written;
+        summary.source_errors += report.source_errors.len();
+    }
+    Ok(summary)
+}
+
 /// Run [`ingest`] for each known ticker. Unknown tickers (not yet bootstrapped)
 /// are skipped. Returns the per-ticker reports.
 pub async fn collect_tickers(
@@ -238,6 +276,30 @@ mod tests {
         // rerun is safe and still resolves
         bootstrap_companies(&store, &refs).await.unwrap();
         assert_eq!(store.get_company("MSFT").await.unwrap().unwrap().cik, "0000789019");
+    }
+
+    #[tokio::test]
+    async fn collect_all_iterates_every_company() {
+        let (store, _id, _d) = store_with_company().await; // inserts AAPL (cik "1")
+        bootstrap_companies(
+            &store,
+            &[
+                CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() },
+                CompanyRef { cik: "320193".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+            ],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.companies, 2);
+        assert!(summary.facts_written > 0);
+        assert_eq!(summary.clone(), summary);
     }
 
     #[tokio::test]
