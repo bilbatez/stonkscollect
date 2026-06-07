@@ -53,6 +53,15 @@ impl Tier {
     }
 }
 
+/// The tier that fires soonest after `now`, and when. `None` only if no tier
+/// has an upcoming fire (not possible with the current cron expressions).
+pub fn next_tier(now: DateTime<Utc>) -> Option<(Tier, DateTime<Utc>)> {
+    Tier::all()
+        .into_iter()
+        .filter_map(|tier| tier.next_after(now).map(|at| (tier, at)))
+        .min_by_key(|&(_, at)| at)
+}
+
 /// Run `task`, recording start/finish in `collection_runs`. Run-tracking is
 /// best-effort observability: failures to record never alter or abort the
 /// task; the task's own `Result` is returned unchanged.
@@ -114,6 +123,19 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn next_tier_picks_the_soonest() {
+        // Tue 00:00: news (06:00) beats price (21:00) and fundamentals (next Mon).
+        let (tier, when) = next_tier(at(2024, 1, 2, 0)).unwrap();
+        assert_eq!(tier, Tier::News);
+        assert_eq!(when, at(2024, 1, 2, 6));
+
+        // Tue 22:00: news next fire (Wed 00:00) is soonest.
+        let (tier, when) = next_tier(at(2024, 1, 2, 22)).unwrap();
+        assert_eq!(tier, Tier::News);
+        assert_eq!(when, at(2024, 1, 3, 0));
+    }
 
     #[tokio::test]
     async fn run_tracked_records_success() {

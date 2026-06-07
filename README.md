@@ -74,7 +74,8 @@ cargo run -- collect --ticker AAPL --ticker MSFT
 #    ...or rely on the TICKERS list from .env:
 cargo run -- collect
 
-# 3. Serve the REST API (default :8080).
+# 3. Serve the REST API (default :8080). Also runs a background loop that
+#    collects the configured TICKERS on the tiered schedule (idle if none set).
 cargo run -- serve
 ```
 
@@ -148,9 +149,6 @@ functions — see the `Makefile`.
 
 ## Roadmap
 
-- **Scheduled driver:** the `collect` CLI runs ingest on demand; the remaining
-  step is a long-running loop that fires `pipeline::collect_tickers` per
-  `Tier::next_after` (price/news/fundamentals cadences) inside `serve`.
 - Persist prices + news (collectors exist; only facts are wired into ingest).
 - Ratios computed from stored facts; segment/ownership/guidance ingestion;
   per-ticker schedule overrides; scheduled Parquet exports.

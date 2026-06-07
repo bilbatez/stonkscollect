@@ -15,8 +15,8 @@ use stonkscollect_backend::collectors::scrape::ScrapeCollector;
 use stonkscollect_backend::collectors::FactSource;
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
-use stonkscollect_backend::{app, pipeline};
 use stonkscollect_backend::store::Store;
+use stonkscollect_backend::{app, pipeline, scheduler};
 
 #[derive(Parser)]
 #[command(name = "stonkscollect", about = "US-equity fundamental data collector")]
@@ -57,19 +57,58 @@ async fn main() {
     let store = Store::connect(&cfg.database_url).await.expect("open database");
 
     match command {
-        Command::Serve => serve(store, cfg.port).await,
+        Command::Serve => serve(store, &cfg).await,
         Command::Bootstrap => bootstrap(&store, &cfg).await,
         Command::Collect { tickers } => collect(&store, &cfg, tickers).await,
     }
 }
 
-async fn serve(store: Store, port: u16) {
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+async fn serve(store: Store, cfg: &Config) {
+    let store = Arc::new(store);
+    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
-    axum::serve(listener, app(Arc::new(store)))
-        .await
-        .expect("server error");
+
+    // Serve the API and run the tiered collection loop on the same task.
+    tokio::select! {
+        result = axum::serve(listener, app(store.clone())) => result.expect("server error"),
+        _ = scheduler_loop(&store, cfg) => {}
+    }
+}
+
+/// Background loop: sleep until the next tier fires, then collect the configured
+/// tickers (wrapped in a tracked run). Runs only if tickers are configured.
+async fn scheduler_loop(store: &Store, cfg: &Config) {
+    if cfg.tickers.is_empty() {
+        tracing::info!("no TICKERS configured; collection loop idle");
+        std::future::pending::<()>().await;
+    }
+
+    let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
+    let scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
+    let mut sources: Vec<&dyn FactSource> = vec![&edgar, &scrape];
+    let fmp;
+    if let Some(key) = &cfg.fmp_api_key {
+        fmp = FmpCollector::new(ReqwestClient::new(&cfg.user_agent), key.clone());
+        sources.push(&fmp);
+    }
+
+    while let Some((tier, at)) = scheduler::next_tier(chrono::Utc::now()) {
+        let now = chrono::Utc::now();
+        let wait = (at - now).to_std().unwrap_or(std::time::Duration::ZERO);
+        tracing::info!("next collection: {} at {at}", tier.label());
+        tokio::time::sleep(wait).await;
+
+        let fired = chrono::Utc::now();
+        let result = scheduler::run_tracked(store, tier.label(), None, fired, || {
+            pipeline::collect_tickers(store, &sources, &cfg.tickers, cfg.reconcile_threshold, fired)
+        })
+        .await;
+        match result {
+            Ok(outcomes) => tracing::info!("{} tier collected {} tickers", tier.label(), outcomes.len()),
+            Err(e) => tracing::error!("{} tier collection failed: {e}", tier.label()),
+        }
+    }
 }
 
 async fn bootstrap(store: &Store, cfg: &Config) {

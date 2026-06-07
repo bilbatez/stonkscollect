@@ -46,9 +46,12 @@ docker-compose.yml
 [--ticker]` (scrape→reconcile→persist now), `serve` (REST API). Driven by
 `pipeline::{bootstrap_companies, collect_tickers, ingest}`.
 
-**Remaining integration point:** a scheduled loop in `serve` that fires
-`collect_tickers` per `Tier::next_after`. The on-demand `collect` path is done
-and tested; prices/news pipelines are not yet wired into ingest (only facts).
+`serve` also runs a background loop (concurrent via `tokio::select!`) that fires
+`collect_tickers` per `scheduler::next_tier` for the configured `TICKERS` (idle
+if none). `next_tier` is tested; the loop is thin glue in `main.rs`.
+
+**Remaining:** prices/news pipelines aren't yet wired into ingest (only facts);
+ratios computed from facts; segment/ownership/guidance ingestion.
 
 ## Run / test / build
 
