@@ -1,10 +1,11 @@
 //! HTML scrape fallback. Supplements/cross-checks API + EDGAR data by parsing
 //! a financials table. Includes a politeness rate-limit primitive.
 
+use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use scraper::{Html, Selector};
 
-use crate::collectors::{CollectorError, HttpClient};
+use crate::collectors::{CollectorError, FactSource, HttpClient, SourceTarget};
 use crate::domain::{FinancialFact, PeriodType, StatementKind};
 
 const SOURCE: &str = "scrape";
@@ -115,30 +116,30 @@ impl<H: HttpClient> ScrapeCollector<H> {
     }
 }
 
+#[async_trait(?Send)]
+impl<H: HttpClient> FactSource for ScrapeCollector<H> {
+    fn name(&self) -> &'static str {
+        "scrape"
+    }
+
+    async fn fetch_facts(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FinancialFact>, CollectorError> {
+        self.collect(company_id, &target.symbol, now).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collectors::CollectorError;
     use crate::domain::{PeriodType, StatementKind};
-    use chrono::{Duration, NaiveDate, TimeZone, Utc};
-    use std::cell::RefCell;
+    use crate::testutil::{fixed_now as now, FakeHttp};
+    use chrono::{Duration, NaiveDate};
 
     const HTML: &str = include_str!("../../tests/fixtures/scrape_financials.html");
-
-    struct FakeHttp {
-        body: String,
-        last_url: RefCell<Option<String>>,
-    }
-    impl HttpClient for FakeHttp {
-        async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
-            *self.last_url.borrow_mut() = Some(url.to_string());
-            Ok(self.body.clone())
-        }
-    }
-
-    fn now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
-    }
 
     #[test]
     fn financials_url_includes_symbol() {
@@ -173,11 +174,10 @@ mod tests {
 
     #[tokio::test]
     async fn collector_fetches_then_parses() {
-        let http = FakeHttp { body: HTML.to_string(), last_url: RefCell::new(None) };
-        let c = ScrapeCollector::new(http);
+        let c = ScrapeCollector::new(FakeHttp::new(HTML));
         let facts = c.collect(7, "AAPL", now()).await.unwrap();
         assert_eq!(facts.len(), 3);
-        assert!(c.http.last_url.borrow().as_deref().unwrap().contains("AAPL"));
+        assert!(c.http.url().unwrap().contains("AAPL"));
     }
 
     #[test]

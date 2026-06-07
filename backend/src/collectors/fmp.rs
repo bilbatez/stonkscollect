@@ -1,10 +1,11 @@
 //! Financial Modeling Prep collector — ratios, prices, and income-statement
 //! facts (the latter let the reconcile layer cross-check EDGAR).
 
+use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 
-use crate::collectors::{period_type_from_fp, CollectorError, HttpClient};
+use crate::collectors::{period_type_from_fp, CollectorError, FactSource, HttpClient, SourceTarget};
 use crate::domain::{FinancialFact, PricePoint, Ratio, StatementKind};
 
 const BASE: &str = "https://financialmodelingprep.com/api/v3";
@@ -69,6 +70,22 @@ impl<H: HttpClient> FmpCollector<H> {
             .get_text(&Self::ratios_url(symbol, &self.api_key))
             .await?;
         parse_ratios(company_id, &body, now)
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> FactSource for FmpCollector<H> {
+    fn name(&self) -> &'static str {
+        "fmp"
+    }
+
+    async fn fetch_facts(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FinancialFact>, CollectorError> {
+        self.collect_income(company_id, &target.symbol, now).await
     }
 }
 
@@ -183,27 +200,12 @@ mod tests {
     use super::*;
     use crate::collectors::CollectorError;
     use crate::domain::{PeriodType, StatementKind};
-    use chrono::{NaiveDate, TimeZone, Utc};
-    use std::cell::RefCell;
+    use crate::testutil::{fixed_now as now, FakeHttp};
+    use chrono::NaiveDate;
 
     const PRICES: &str = include_str!("../../tests/fixtures/fmp_prices.json");
     const INCOME: &str = include_str!("../../tests/fixtures/fmp_income.json");
     const RATIOS: &str = include_str!("../../tests/fixtures/fmp_ratios.json");
-
-    struct FakeHttp {
-        body: String,
-        last_url: RefCell<Option<String>>,
-    }
-    impl HttpClient for FakeHttp {
-        async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
-            *self.last_url.borrow_mut() = Some(url.to_string());
-            Ok(self.body.clone())
-        }
-    }
-
-    fn now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
-    }
 
     #[test]
     fn url_builders_include_symbol_and_key() {
@@ -272,25 +274,22 @@ mod tests {
 
     #[tokio::test]
     async fn collect_prices_fetches_then_parses() {
-        let http = FakeHttp { body: PRICES.to_string(), last_url: RefCell::new(None) };
-        let c = FmpCollector::new(http, "KEY".into());
+        let c = FmpCollector::new(FakeHttp::new(PRICES), "KEY".into());
         let prices = c.collect_prices(7, "AAPL").await.unwrap();
         assert_eq!(prices.len(), 2);
-        assert!(c.http.last_url.borrow().as_deref().unwrap().contains("AAPL"));
+        assert!(c.http.url().unwrap().contains("AAPL"));
     }
 
     #[tokio::test]
     async fn collect_income_fetches_then_parses() {
-        let http = FakeHttp { body: INCOME.to_string(), last_url: RefCell::new(None) };
-        let c = FmpCollector::new(http, "KEY".into());
+        let c = FmpCollector::new(FakeHttp::new(INCOME), "KEY".into());
         let facts = c.collect_income(7, "AAPL", now()).await.unwrap();
         assert_eq!(facts.len(), 4);
     }
 
     #[tokio::test]
     async fn collect_ratios_fetches_then_parses() {
-        let http = FakeHttp { body: RATIOS.to_string(), last_url: RefCell::new(None) };
-        let c = FmpCollector::new(http, "KEY".into());
+        let c = FmpCollector::new(FakeHttp::new(RATIOS), "KEY".into());
         let ratios = c.collect_ratios(7, "AAPL", now()).await.unwrap();
         assert_eq!(ratios.len(), 5);
     }

@@ -3,9 +3,46 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::collectors::{FactSource, SourceTarget};
 use crate::domain::FinancialFact;
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
+
+/// Outcome of an ingest run across multiple sources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestReport {
+    pub facts_written: usize,
+    pub discrepancies_written: usize,
+    /// `(source name, error message)` for sources that failed; ingest continues.
+    pub source_errors: Vec<(String, String)>,
+}
+
+/// Collect facts from every source (best-effort — a failing source is recorded,
+/// not fatal), reconcile, and persist canonical facts + discrepancies.
+pub async fn ingest(
+    store: &Store,
+    sources: &[&dyn FactSource],
+    company_id: i64,
+    target: &SourceTarget,
+    threshold: f64,
+    now: DateTime<Utc>,
+) -> Result<IngestReport, StoreError> {
+    let mut all_facts = Vec::new();
+    let mut source_errors = Vec::new();
+    for source in sources {
+        match source.fetch_facts(company_id, target, now).await {
+            Ok(facts) => all_facts.extend(facts),
+            Err(e) => source_errors.push((source.name().to_string(), e.to_string())),
+        }
+    }
+    let (facts_written, discrepancies_written) =
+        persist_facts(store, &all_facts, threshold, now).await?;
+    Ok(IngestReport {
+        facts_written,
+        discrepancies_written,
+        source_errors,
+    })
+}
 
 /// Reconcile `facts` (from any mix of sources) and persist the canonical value
 /// per period plus flagged discrepancies. Returns
@@ -29,13 +66,38 @@ pub async fn persist_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collectors::edgar::EdgarCollector;
+    use crate::collectors::fmp::FmpCollector;
+    use crate::collectors::scrape::ScrapeCollector;
+    use crate::collectors::CollectorError;
     use crate::domain::{NewCompany, PeriodType, StatementKind};
+    use crate::testutil::{fixed_now, FakeHttp};
+    use async_trait::async_trait;
     use chrono::{NaiveDate, TimeZone};
 
+    const EDGAR: &str = include_str!("../tests/fixtures/edgar_companyfacts.json");
+    const FMP_INCOME: &str = include_str!("../tests/fixtures/fmp_income.json");
+    const SCRAPE_HTML: &str = include_str!("../tests/fixtures/scrape_financials.html");
+
+    /// A source that always fails, to exercise error capture.
+    struct FailingSource;
+    #[async_trait(?Send)]
+    impl FactSource for FailingSource {
+        fn name(&self) -> &'static str {
+            "boom"
+        }
+        async fn fetch_facts(
+            &self,
+            _company_id: i64,
+            _target: &SourceTarget,
+            _now: DateTime<Utc>,
+        ) -> Result<Vec<FinancialFact>, CollectorError> {
+            Err(CollectorError::Http("down".into()))
+        }
+    }
+
     async fn store_with_company() -> (Store, i64, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let url = format!("sqlite://{}", dir.path().join("t.db").display());
-        let store = Store::connect(&url).await.unwrap();
+        let (store, dir) = crate::testutil::temp_store().await;
         let id = store
             .insert_company(&NewCompany {
                 cik: "1".into(),
@@ -90,5 +152,56 @@ mod tests {
         store.close().await;
         let err = persist_facts(&store, &[fact(id, "edgar", "Revenue", 1.0)], 0.05, now).await;
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn fact_sources_expose_stable_names() {
+        assert_eq!(EdgarCollector::new(FakeHttp::new("")).name(), "edgar");
+        assert_eq!(FmpCollector::new(FakeHttp::new(""), "K".into()).name(), "fmp");
+        assert_eq!(ScrapeCollector::new(FakeHttp::new("")).name(), "scrape");
+    }
+
+    #[tokio::test]
+    async fn ingest_aggregates_all_sources_and_persists() {
+        let (store, id, _d) = store_with_company().await;
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let fmp = FmpCollector::new(FakeHttp::new(FMP_INCOME), "KEY".into());
+        let scrape = ScrapeCollector::new(FakeHttp::new(SCRAPE_HTML));
+        let sources: [&dyn FactSource; 3] = [&edgar, &fmp, &scrape];
+        let target = SourceTarget {
+            cik: "320193".into(),
+            symbol: "AAPL".into(),
+        };
+
+        let report = ingest(&store, &sources, id, &target, 0.05, fixed_now())
+            .await
+            .unwrap();
+
+        assert!(report.source_errors.is_empty());
+        assert!(report.facts_written > 0);
+        assert!(!store.get_facts(id).await.unwrap().is_empty());
+        // exercise IngestReport derives
+        assert_eq!(report.clone(), report);
+        assert!(format!("{report:?}").contains("facts_written"));
+    }
+
+    #[tokio::test]
+    async fn ingest_records_source_errors_without_aborting() {
+        let (store, id, _d) = store_with_company().await;
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 2] = [&FailingSource, &edgar];
+        let target = SourceTarget {
+            cik: "320193".into(),
+            symbol: "AAPL".into(),
+        };
+
+        let report = ingest(&store, &sources, id, &target, 0.05, fixed_now())
+            .await
+            .unwrap();
+
+        assert_eq!(report.source_errors.len(), 1);
+        assert_eq!(report.source_errors[0].0, "boom");
+        // the healthy EDGAR source still produced + persisted facts
+        assert!(report.facts_written > 0);
     }
 }

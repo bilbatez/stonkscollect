@@ -9,6 +9,9 @@ pub mod reconcile;
 pub mod scheduler;
 pub mod store;
 
+#[cfg(test)]
+mod testutil;
+
 use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};

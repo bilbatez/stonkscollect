@@ -2893,6 +2893,7 @@ name = "stonkscollect-backend"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "axum",
  "chrono",
  "cron",

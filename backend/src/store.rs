@@ -419,14 +419,9 @@ impl Store {
 mod tests {
     use super::*;
     use crate::domain::*;
+    use crate::testutil::temp_store;
     use chrono::{NaiveDate, TimeZone, Utc};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-    async fn temp_store() -> (Store, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let url = format!("sqlite://{}", dir.path().join("test.db").display());
-        (Store::connect(&url).await.unwrap(), dir)
-    }
 
     fn sample_company() -> NewCompany {
         NewCompany {

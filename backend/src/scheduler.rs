@@ -87,6 +87,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::temp_store;
     use chrono::TimeZone;
 
     fn at(y: i32, mo: u32, d: u32, h: u32) -> DateTime<Utc> {
@@ -113,15 +114,10 @@ mod tests {
         );
     }
 
-    async fn store() -> (Store, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let url = format!("sqlite://{}", dir.path().join("t.db").display());
-        (Store::connect(&url).await.unwrap(), dir)
-    }
 
     #[tokio::test]
     async fn run_tracked_records_success() {
-        let (s, _d) = store().await;
+        let (s, _d) = temp_store().await;
         let now = at(2024, 1, 1, 0);
         let out: u32 = run_tracked(&s, "price", Some("AAPL"), now, || async { Ok::<_, String>(42) })
             .await
@@ -136,7 +132,7 @@ mod tests {
     async fn run_tracked_tolerates_recording_failure() {
         // With the store closed, start_run fails; the task must still run and
         // its result is returned unchanged (best-effort observability).
-        let (s, _d) = store().await;
+        let (s, _d) = temp_store().await;
         s.close().await;
         let out: u32 = run_tracked(&s, "price", None, at(2024, 1, 1, 0), || async {
             Ok::<_, String>(7)
@@ -148,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_tracked_records_failure_and_returns_task_error() {
-        let (s, _d) = store().await;
+        let (s, _d) = temp_store().await;
         let now = at(2024, 1, 1, 0);
         let err = run_tracked(&s, "news", None, now, || async {
             Err::<u32, String>("boom".to_string())

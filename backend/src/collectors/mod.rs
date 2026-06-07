@@ -7,7 +7,36 @@ pub mod fmp;
 pub mod news;
 pub mod scrape;
 
-use crate::domain::PeriodType;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+
+use crate::domain::{FinancialFact, PeriodType};
+
+/// Identifies a company across sources: EDGAR keys on CIK, vendors on ticker.
+#[derive(Debug, Clone)]
+pub struct SourceTarget {
+    pub cik: String,
+    pub symbol: String,
+}
+
+/// A source that yields financial facts for a company (Strategy pattern).
+///
+/// Implemented by EDGAR, FMP, and the HTML scraper so the ingest pipeline can
+/// aggregate from a heterogeneous, open-ended set of sources without knowing
+/// their concrete types. `?Send`: futures are awaited inline by the driver.
+#[async_trait(?Send)]
+pub trait FactSource {
+    /// Stable identifier used in error reports and run tags.
+    fn name(&self) -> &'static str;
+
+    /// Fetch and normalize this source's facts for `target`.
+    async fn fetch_facts(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FinancialFact>, CollectorError>;
+}
 
 /// Map an XBRL/FMP fiscal-period token ("FY", "Q1".."Q4") to a [`PeriodType`].
 /// Returns `None` for tokens we do not model (e.g. "TTM", "CY").

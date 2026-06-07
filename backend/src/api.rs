@@ -102,9 +102,7 @@ mod tests {
     use crate::store::Store;
 
     async fn seeded() -> (Arc<Store>, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let url = format!("sqlite://{}", dir.path().join("t.db").display());
-        let store = Store::connect(&url).await.unwrap();
+        let (store, dir) = crate::testutil::temp_store().await;
         let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let id = store
             .insert_company(&NewCompany {

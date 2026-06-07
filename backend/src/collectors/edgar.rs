@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::Value;
 
-use crate::collectors::{period_type_from_fp, CollectorError, HttpClient};
+use async_trait::async_trait;
+
+use crate::collectors::{period_type_from_fp, CollectorError, FactSource, HttpClient, SourceTarget};
 use crate::domain::{FinancialFact, StatementKind};
 
 /// XBRL us-gaap concept -> (statement, normalized line item).
@@ -71,6 +73,22 @@ impl<H: HttpClient> EdgarCollector<H> {
         let url = Self::companyfacts_url(cik);
         let body = self.http.get_text(&url).await?;
         parse_companyfacts(company_id, &body, now)
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> FactSource for EdgarCollector<H> {
+    fn name(&self) -> &'static str {
+        "edgar"
+    }
+
+    async fn fetch_facts(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FinancialFact>, CollectorError> {
+        self.collect_facts(company_id, &target.cik, now).await
     }
 }
 
@@ -143,25 +161,10 @@ mod tests {
     use super::*;
     use crate::collectors::CollectorError;
     use crate::domain::{PeriodType, StatementKind};
-    use chrono::{NaiveDate, TimeZone, Utc};
-    use std::cell::RefCell;
+    use crate::testutil::{fixed_now as now, FakeHttp};
+    use chrono::NaiveDate;
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/edgar_companyfacts.json");
-
-    struct FakeHttp {
-        body: String,
-        last_url: RefCell<Option<String>>,
-    }
-    impl HttpClient for FakeHttp {
-        async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
-            *self.last_url.borrow_mut() = Some(url.to_string());
-            Ok(self.body.clone())
-        }
-    }
-
-    fn now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
-    }
 
     #[test]
     fn companyfacts_url_zero_pads_cik() {
@@ -282,15 +285,11 @@ mod tests {
 
     #[tokio::test]
     async fn collect_facts_fetches_then_parses() {
-        let http = FakeHttp {
-            body: FIXTURE.to_string(),
-            last_url: RefCell::new(None),
-        };
-        let collector = EdgarCollector::new(http);
+        let collector = EdgarCollector::new(FakeHttp::new(FIXTURE));
         let facts = collector.collect_facts(7, "320193", now()).await.unwrap();
         assert!(!facts.is_empty());
         assert_eq!(
-            collector.http.last_url.borrow().as_deref(),
+            collector.http.url().as_deref(),
             Some("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json")
         );
     }

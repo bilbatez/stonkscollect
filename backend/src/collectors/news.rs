@@ -151,26 +151,11 @@ impl<H: HttpClient> FinnhubCollector<H> {
 mod tests {
     use super::*;
     use crate::collectors::CollectorError;
+    use crate::testutil::{fixed_now as now, FakeHttp};
     use chrono::{TimeZone, Utc};
-    use std::cell::RefCell;
 
     const RSS: &str = include_str!("../../tests/fixtures/news_rss.xml");
     const FINNHUB: &str = include_str!("../../tests/fixtures/news_finnhub.json");
-
-    struct FakeHttp {
-        body: String,
-        last_url: RefCell<Option<String>>,
-    }
-    impl HttpClient for FakeHttp {
-        async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
-            *self.last_url.borrow_mut() = Some(url.to_string());
-            Ok(self.body.clone())
-        }
-    }
-
-    fn now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()
-    }
 
     #[test]
     fn dedup_hash_normalizes_case_and_whitespace() {
@@ -232,19 +217,17 @@ mod tests {
 
     #[tokio::test]
     async fn rss_collector_fetches_then_parses() {
-        let http = FakeHttp { body: RSS.to_string(), last_url: RefCell::new(None) };
-        let c = RssCollector::new(http);
+        let c = RssCollector::new(FakeHttp::new(RSS));
         let items = c.collect(7, "https://feed", "reuters", now()).await.unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(c.http.last_url.borrow().as_deref(), Some("https://feed"));
+        assert_eq!(c.http.url().as_deref(), Some("https://feed"));
     }
 
     #[tokio::test]
     async fn finnhub_collector_fetches_then_parses() {
-        let http = FakeHttp { body: FINNHUB.to_string(), last_url: RefCell::new(None) };
-        let c = FinnhubCollector::new(http, "KEY".into());
+        let c = FinnhubCollector::new(FakeHttp::new(FINNHUB), "KEY".into());
         let items = c.collect(7, "AAPL", "2024-01-01", "2024-01-31", now()).await.unwrap();
         assert_eq!(items.len(), 2);
-        assert!(c.http.last_url.borrow().as_deref().unwrap().contains("symbol=AAPL"));
+        assert!(c.http.url().unwrap().contains("symbol=AAPL"));
     }
 }
