@@ -57,11 +57,13 @@ discrepancies between sources surfaced so you can trust the numbers.
 
 Prereqs: Rust toolchain, Node 20+, (optional) Docker with the compose plugin.
 
-The backend is a CLI with three subcommands:
+The backend is a CLI with three subcommands. Config comes from a `.env` file
+(loaded automatically) or real env vars:
 
 ```bash
 cd backend
-export DATABASE_URL="sqlite://../data/stonks.db"
+cp ../.env.example ../.env        # then edit (set USER_AGENT contact, keys)
+mkdir -p ../data
 
 # 1. Populate the ticker -> CIK universe from SEC (~10k companies).
 cargo run -- bootstrap
@@ -69,8 +71,8 @@ cargo run -- bootstrap
 # 2. Scrape + reconcile + persist data for tickers, then exit.
 #    (EDGAR needs no key; set FMP_API_KEY / FINNHUB_API_KEY for more sources.)
 cargo run -- collect --ticker AAPL --ticker MSFT
-#    ...or rely on the TICKERS env list:
-TICKERS="AAPL,MSFT,GOOG" cargo run -- collect
+#    ...or rely on the TICKERS list from .env:
+cargo run -- collect
 
 # 3. Serve the REST API (default :8080).
 cargo run -- serve
@@ -84,7 +86,10 @@ cd frontend && npm install && npm run dev
 docker compose up --build      # frontend on :3000, shared ./data volume
 ```
 
-### Configuration (env)
+### Configuration
+
+Copy `.env.example` to `.env` and edit. The backend loads `.env` automatically
+(via `dotenvy`); real environment variables override it. Keys:
 
 `DATABASE_URL`, `PORT`, `USER_AGENT` (SEC requires a contact UA), `FMP_API_KEY`,
 `FINNHUB_API_KEY`, `TICKERS` (comma-separated), `RECONCILE_THRESHOLD` (default 0.05).

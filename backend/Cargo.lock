@@ -3006,6 +3006,7 @@ dependencies = [
  "chrono",
  "clap",
  "cron",
+ "dotenvy",
  "http-body-util",
  "parquet",
  "reqwest",

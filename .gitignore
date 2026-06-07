@@ -12,6 +12,9 @@ node_modules/
 /data/*
 !/data/.gitkeep
 
+# Secrets / local config
+.env
+
 # Misc
 .DS_Store
 *.log

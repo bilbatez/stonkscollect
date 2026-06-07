@@ -41,6 +41,9 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
+    // Load .env (searching cwd upward) if present; real env vars win.
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
