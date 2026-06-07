@@ -53,42 +53,44 @@ discrepancies between sources surfaced so you can trust the numbers.
 | Storage | SQLite (WAL) single file + scheduled Parquet export |
 | Deploy | Two Dockerfiles (Rust backend, nginx-served frontend) + `docker-compose.yml` |
 
-## Quickstart
+## Get started
 
 Prereqs: Rust toolchain, Node 20+, (optional) Docker with the compose plugin.
 
-The backend is a CLI with three subcommands. Config comes from a `.env` file
-(loaded automatically) or real env vars:
+```bash
+make setup          # one-time: creates .env, data/ dir, installs deps, builds backend
+# edit .env -> set USER_AGENT to "yourapp your@email" (SEC requires a contact)
+
+make bootstrap                     # load SEC ticker->CIK universe (~10k companies)
+make collect ARGS="--ticker AAPL"  # collect one company...  (omit ARGS for --all)
+make serve                         # REST API + scheduled collection on :8080
+make dev-frontend                  # dashboard dev server (in another terminal)
+```
+
+`make help` lists everything. That's the whole setup.
+
+<details><summary>Without make (raw CLI)</summary>
+
+The backend is a CLI; config comes from `.env` (auto-loaded via `dotenvy`) or
+real env vars (which override `.env`).
 
 ```bash
 cd backend
-cp ../.env.example ../.env        # then edit (set USER_AGENT contact, keys)
-mkdir -p ../data
-
-# 1. Populate the ticker -> CIK universe from SEC (~10k companies).
-cargo run -- bootstrap
-
-# 2. Scrape + reconcile + persist data for tickers, then exit.
-#    (EDGAR needs no key; set FMP_API_KEY / FINNHUB_API_KEY for more sources.)
+cargo run -- bootstrap                          # ticker universe
 cargo run -- collect --ticker AAPL --ticker MSFT
-#    ...or rely on the TICKERS list from .env:
-cargo run -- collect
-#    ...or collect the entire bootstrapped US universe (~10k companies,
-#    EDGAR-only, throttled by REQUEST_DELAY_MS — takes a while):
-cargo run -- collect --all
-
-# 3. Serve the REST API (default :8080). Also runs a background loop that
-#    collects on the tiered schedule — the whole universe if COLLECT_ALL=true,
-#    else the configured TICKERS (idle if neither is set).
-cargo run -- serve
+cargo run -- collect                            # uses TICKERS from .env
+cargo run -- collect --all                      # entire US universe (EDGAR-only, throttled)
+cargo run -- serve                              # API + background scheduler
+cargo run -- --help
 ```
+</details>
+
+### Docker
 
 ```bash
-# Frontend (dev server, proxies /api -> :8080)
-cd frontend && npm install && npm run dev
-
-# Everything in containers
-docker compose up --build      # frontend on :3000, shared ./data volume
+docker compose up --build          # frontend :3000, backend :8080, shared ./data
+# one-off collection inside the stack:
+docker compose run --rm backend stonkscollect-backend collect --ticker AAPL
 ```
 
 ### Configuration
@@ -136,6 +138,28 @@ a relative threshold are flagged in the `discrepancies` table and the dashboard.
 `GET /health` and, under `/api`:
 `companies/:ticker`, `…/prices`, `…/facts`, `…/ratios`, `…/news`,
 `…/discrepancies`, and `runs` (recent collection runs).
+
+## Performance & concurrency
+
+- **Batched writes.** Each company's reconciled facts + discrepancies are
+  persisted in a *single* SQLite transaction (`Store::save_reconciled`), and the
+  ~10k-company bootstrap is one transaction (`upsert_companies`) — instead of a
+  commit per row. This is the dominant speedup for bulk collection.
+- **WAL + small pool.** SQLite runs in WAL mode with `synchronous=NORMAL`, a
+  5-connection pool, a 5s `busy_timeout`, and a 10s `acquire_timeout`. WAL lets
+  the read-only API serve concurrently with the single writer.
+- **No long-held locks / no deadlock.** Writes happen in one place (the
+  scheduler loop / `collect_*`), one short transaction per company; the API is
+  read-only. There is no lock ordering to invert, and `acquire_timeout` bounds
+  any pool wait so nothing hangs indefinitely.
+- **Responsive while collecting.** `serve` runs the API and the collection loop
+  on the same task via `tokio::select!`; collection yields at every await
+  (HTTP, DB, the inter-request throttle), so the API stays responsive even
+  during a full-universe pass.
+- **Polite + bounded.** Bulk collection is EDGAR-only and throttled
+  (`REQUEST_DELAY_MS`); facts stream to the DB per company, so memory stays flat.
+- **Lazy frontend.** ECharts is code-split out of the initial bundle (~196 kB
+  initial vs ~1.3 MB before).
 
 ## Testing & quality
 

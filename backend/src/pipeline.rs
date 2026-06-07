@@ -11,19 +11,18 @@ use crate::store::{Store, StoreError};
 
 /// Upsert a batch of company identities (idempotent). Returns the count.
 pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
-    for r in refs {
-        store
-            .upsert_company(&NewCompany {
-                cik: r.cik.clone(),
-                ticker: r.ticker.clone(),
-                name: r.name.clone(),
-                exchange: None,
-                sector: None,
-                industry: None,
-            })
-            .await?;
-    }
-    Ok(refs.len())
+    let companies: Vec<NewCompany> = refs
+        .iter()
+        .map(|r| NewCompany {
+            cik: r.cik.clone(),
+            ticker: r.ticker.clone(),
+            name: r.name.clone(),
+            exchange: None,
+            sector: None,
+            industry: None,
+        })
+        .collect();
+    store.upsert_companies(&companies).await
 }
 
 /// Aggregate totals from collecting many companies.
@@ -134,12 +133,9 @@ pub async fn persist_facts(
     now: DateTime<Utc>,
 ) -> Result<(usize, usize), StoreError> {
     let result = reconcile(facts, threshold, now);
-    for fact in &result.canonical {
-        store.upsert_fact(fact).await?;
-    }
-    for discrepancy in &result.discrepancies {
-        store.insert_discrepancy(discrepancy).await?;
-    }
+    store
+        .save_reconciled(&result.canonical, &result.discrepancies)
+        .await?;
     Ok((result.canonical.len(), result.discrepancies.len()))
 }
 

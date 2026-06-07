@@ -36,6 +36,23 @@ fn other<E: std::fmt::Display>(e: E) -> StoreError {
 
 type Result<T> = std::result::Result<T, StoreError>;
 
+// Shared write SQL, reused by single-row and batched (transactional) methods.
+const FACT_UPSERT_SQL: &str = "INSERT INTO financial_facts \
+     (company_id,statement,line_item,period_type,period_end,value,source,fetched_at) \
+     VALUES (?,?,?,?,?,?,?,?) \
+     ON CONFLICT(company_id,statement,line_item,period_type,period_end,source) \
+     DO UPDATE SET value=excluded.value, fetched_at=excluded.fetched_at";
+
+const DISCREPANCY_INSERT_SQL: &str = "INSERT INTO discrepancies \
+     (company_id,field,period,source_a,value_a,source_b,value_b,pct_diff,flagged_at) \
+     VALUES (?,?,?,?,?,?,?,?,?)";
+
+const COMPANY_UPSERT_SQL: &str = "INSERT INTO companies (cik,ticker,name,exchange,sector,industry) \
+     VALUES (?,?,?,?,?,?) \
+     ON CONFLICT(ticker) DO UPDATE SET \
+     cik=excluded.cik, name=excluded.name, exchange=excluded.exchange, \
+     sector=excluded.sector, industry=excluded.industry";
+
 /// SQLite-backed data store.
 pub struct Store {
     pool: SqlitePool,
@@ -53,7 +70,13 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(std::time::Duration::from_secs(5))
             .foreign_keys(true);
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        // A small pool: WAL lets the read-only API run concurrently with the
+        // single writer; acquire_timeout bounds waits so we never hang forever.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect_with(opts)
+            .await?;
         sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
         Ok(Self { pool })
     }
@@ -101,6 +124,24 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Upsert many companies in a single transaction (fast bulk bootstrap).
+    pub async fn upsert_companies(&self, companies: &[NewCompany]) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        for c in companies {
+            sqlx::query(COMPANY_UPSERT_SQL)
+                .bind(&c.cik)
+                .bind(&c.ticker)
+                .bind(&c.name)
+                .bind(&c.exchange)
+                .bind(&c.sector)
+                .bind(&c.industry)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(companies.len())
     }
 
     /// Fetch a company by ticker.
@@ -186,23 +227,17 @@ impl Store {
 
     /// Insert or update a financial fact (keyed by its natural composite key).
     pub async fn upsert_fact(&self, f: &FinancialFact) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO financial_facts \
-             (company_id,statement,line_item,period_type,period_end,value,source,fetched_at) \
-             VALUES (?,?,?,?,?,?,?,?) \
-             ON CONFLICT(company_id,statement,line_item,period_type,period_end,source) \
-             DO UPDATE SET value=excluded.value, fetched_at=excluded.fetched_at",
-        )
-        .bind(f.company_id)
-        .bind(f.statement.as_str())
-        .bind(&f.line_item)
-        .bind(f.period_type.as_str())
-        .bind(f.period_end)
-        .bind(f.value)
-        .bind(&f.source)
-        .bind(f.fetched_at)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(FACT_UPSERT_SQL)
+            .bind(f.company_id)
+            .bind(f.statement.as_str())
+            .bind(&f.line_item)
+            .bind(f.period_type.as_str())
+            .bind(f.period_end)
+            .bind(f.value)
+            .bind(&f.source)
+            .bind(f.fetched_at)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -338,6 +373,45 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Persist reconciled facts + discrepancies in a single transaction.
+    /// One commit per call keeps bulk collection fast and the WAL bounded.
+    pub async fn save_reconciled(
+        &self,
+        facts: &[FinancialFact],
+        discrepancies: &[Discrepancy],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for f in facts {
+            sqlx::query(FACT_UPSERT_SQL)
+                .bind(f.company_id)
+                .bind(f.statement.as_str())
+                .bind(&f.line_item)
+                .bind(f.period_type.as_str())
+                .bind(f.period_end)
+                .bind(f.value)
+                .bind(&f.source)
+                .bind(f.fetched_at)
+                .execute(&mut *tx)
+                .await?;
+        }
+        for d in discrepancies {
+            sqlx::query(DISCREPANCY_INSERT_SQL)
+                .bind(d.company_id)
+                .bind(&d.field)
+                .bind(&d.period)
+                .bind(&d.source_a)
+                .bind(d.value_a)
+                .bind(&d.source_b)
+                .bind(d.value_b)
+                .bind(d.pct_diff)
+                .bind(d.flagged_at)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// List a company's flagged discrepancies.
@@ -499,6 +573,53 @@ mod tests {
         // exercise derives
         assert_eq!(got.clone(), got);
         assert!(format!("{got:?}").contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn upsert_companies_batch_inserts_in_one_tx() {
+        let (store, _d) = temp_store().await;
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        let n = store
+            .upsert_companies(&[sample_company(), msft])
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(store.all_companies().await.unwrap().len(), 2);
+        // idempotent
+        store.upsert_companies(&[sample_company()]).await.unwrap();
+        assert_eq!(store.all_companies().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn save_reconciled_persists_facts_and_discrepancies_in_one_tx() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let fact = FinancialFact {
+            company_id: id,
+            statement: StatementKind::Income,
+            line_item: "Revenue".into(),
+            period_type: PeriodType::Annual,
+            period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+            value: 100.0,
+            source: "edgar".into(),
+            fetched_at: now,
+        };
+        let disc = Discrepancy {
+            company_id: id,
+            field: "Revenue".into(),
+            period: None,
+            source_a: "edgar".into(),
+            value_a: 100.0,
+            source_b: "fmp".into(),
+            value_b: 130.0,
+            pct_diff: 0.3,
+            flagged_at: now,
+        };
+        store.save_reconciled(&[fact], &[disc]).await.unwrap();
+        assert_eq!(store.get_facts(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_discrepancies(id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

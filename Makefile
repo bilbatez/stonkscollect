@@ -1,11 +1,43 @@
-# StonksCollect dev tasks.
+# StonksCollect dev tasks. Run `make help` for the common ones.
 # Coverage gates are 100%; main.rs / main.tsx bootstrap is excluded.
 
 BACKEND := backend
 FRONTEND := frontend
 COV_IGNORE := (main|http)\.rs
+# Pass tickers to `make collect`, e.g. `make collect ARGS="--ticker AAPL"`.
+ARGS ?= --all
 
-.PHONY: test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
+.PHONY: help setup bootstrap collect serve dev-backend dev-frontend \
+        test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
+
+help:
+	@echo "Setup:    make setup        (one-time: .env, data dir, deps, build)"
+	@echo "Run:      make bootstrap    (load SEC ticker universe)"
+	@echo "          make collect      (collect; ARGS=\"--ticker AAPL\" or default --all)"
+	@echo "          make serve        (API + scheduled collection on :8080)"
+	@echo "          make dev-frontend (dashboard dev server)"
+	@echo "Quality:  make test | cov | lint | e2e"
+	@echo "Docker:   make up | down | build"
+
+# One-time setup: create .env, data dir, install deps, build backend.
+setup:
+	@test -f .env || (cp .env.example .env && echo "created .env — edit USER_AGENT/keys")
+	@mkdir -p data
+	cd $(BACKEND) && cargo build
+	cd $(FRONTEND) && npm install
+	@echo "Setup done. Next: make bootstrap && make collect ARGS='--ticker AAPL' && make serve"
+
+bootstrap:
+	cd $(BACKEND) && cargo run -- bootstrap
+
+collect:
+	cd $(BACKEND) && cargo run -- collect $(ARGS)
+
+serve dev-backend:
+	cd $(BACKEND) && cargo run -- serve
+
+dev-frontend:
+	cd $(FRONTEND) && npm run dev
 
 test: test-backend test-frontend
 

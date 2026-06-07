@@ -20,4 +20,6 @@ COPY --from=builder /app/target/release/stonkscollect-backend /usr/local/bin/sto
 USER app
 ENV PORT=8080
 EXPOSE 8080
-CMD ["stonkscollect-backend"]
+# Default to serving the API; override for `bootstrap`/`collect`, e.g.
+#   docker compose run --rm backend stonkscollect-backend collect --all
+CMD ["stonkscollect-backend", "serve"]
