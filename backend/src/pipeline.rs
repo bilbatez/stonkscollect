@@ -3,10 +3,52 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::collectors::edgar::CompanyRef;
 use crate::collectors::{FactSource, SourceTarget};
-use crate::domain::FinancialFact;
+use crate::domain::{FinancialFact, NewCompany};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
+
+/// Upsert a batch of company identities (idempotent). Returns the count.
+pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
+    for r in refs {
+        store
+            .upsert_company(&NewCompany {
+                cik: r.cik.clone(),
+                ticker: r.ticker.clone(),
+                name: r.name.clone(),
+                exchange: None,
+                sector: None,
+                industry: None,
+            })
+            .await?;
+    }
+    Ok(refs.len())
+}
+
+/// Run [`ingest`] for each known ticker. Unknown tickers (not yet bootstrapped)
+/// are skipped. Returns the per-ticker reports.
+pub async fn collect_tickers(
+    store: &Store,
+    sources: &[&dyn FactSource],
+    tickers: &[String],
+    threshold: f64,
+    now: DateTime<Utc>,
+) -> Result<Vec<(String, IngestReport)>, StoreError> {
+    let mut outcomes = Vec::new();
+    for ticker in tickers {
+        let Some(company) = store.get_company(ticker).await? else {
+            continue;
+        };
+        let target = SourceTarget {
+            cik: company.cik.clone(),
+            symbol: company.ticker.clone(),
+        };
+        let report = ingest(store, sources, company.id, &target, threshold, now).await?;
+        outcomes.push((ticker.clone(), report));
+    }
+    Ok(outcomes)
+}
 
 /// Outcome of an ingest run across multiple sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +225,46 @@ mod tests {
         // exercise IngestReport derives
         assert_eq!(report.clone(), report);
         assert!(format!("{report:?}").contains("facts_written"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_companies_upserts_idempotently() {
+        let (store, _id, _d) = store_with_company().await;
+        let refs = vec![
+            CompanyRef { cik: "0000320193".into(), ticker: "AAPL".into(), name: "Apple".into() },
+            CompanyRef { cik: "0000789019".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+        ];
+        assert_eq!(bootstrap_companies(&store, &refs).await.unwrap(), 2);
+        // rerun is safe and still resolves
+        bootstrap_companies(&store, &refs).await.unwrap();
+        assert_eq!(store.get_company("MSFT").await.unwrap().unwrap().cik, "0000789019");
+    }
+
+    #[tokio::test]
+    async fn collect_tickers_collects_known_and_skips_unknown() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() }],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+
+        let outcomes = collect_tickers(
+            &store,
+            &sources,
+            &["AAPL".to_string(), "UNKNOWN".to_string()],
+            0.05,
+            fixed_now(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcomes.len(), 1); // UNKNOWN skipped
+        assert_eq!(outcomes[0].0, "AAPL");
+        assert!(outcomes[0].1.facts_written > 0);
     }
 
     #[tokio::test]

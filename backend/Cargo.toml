@@ -25,6 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 cron = "0.12"
 arrow = "53"
 async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
 parquet = { version = "53", features = ["arrow"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rss = "2"

@@ -81,6 +81,28 @@ impl Store {
         Ok(id)
     }
 
+    /// Insert a company or update it if the ticker already exists. Returns its id.
+    /// Idempotent — safe to re-run when bootstrapping the ticker universe.
+    pub async fn upsert_company(&self, c: &NewCompany) -> Result<i64> {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO companies (cik,ticker,name,exchange,sector,industry) \
+             VALUES (?,?,?,?,?,?) \
+             ON CONFLICT(ticker) DO UPDATE SET \
+             cik=excluded.cik, name=excluded.name, exchange=excluded.exchange, \
+             sector=excluded.sector, industry=excluded.industry \
+             RETURNING id",
+        )
+        .bind(&c.cik)
+        .bind(&c.ticker)
+        .bind(&c.name)
+        .bind(&c.exchange)
+        .bind(&c.sector)
+        .bind(&c.industry)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
     /// Fetch a company by ticker.
     pub async fn get_company(&self, ticker: &str) -> Result<Option<Company>> {
         let row = sqlx::query(
@@ -455,6 +477,18 @@ mod tests {
         // exercise derives
         assert_eq!(got.clone(), got);
         assert!(format!("{got:?}").contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn upsert_company_is_idempotent_and_updates() {
+        let (store, _d) = temp_store().await;
+        let id1 = store.upsert_company(&sample_company()).await.unwrap();
+        let mut updated = sample_company();
+        updated.name = "Apple (renamed)".into();
+        let id2 = store.upsert_company(&updated).await.unwrap();
+        assert_eq!(id1, id2); // same row
+        let got = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(got.name, "Apple (renamed)");
     }
 
     #[tokio::test]

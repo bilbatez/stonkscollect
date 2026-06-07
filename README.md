@@ -57,19 +57,37 @@ discrepancies between sources surfaced so you can trust the numbers.
 
 Prereqs: Rust toolchain, Node 20+, (optional) Docker with the compose plugin.
 
-```bash
-# Backend (API on :8080)
-cd backend
-DATABASE_URL="sqlite://../data/stonks.db" cargo run
+The backend is a CLI with three subcommands:
 
-# Frontend (dev server on :5173, proxies /api -> :8080)
-cd frontend
-npm install
-npm run dev
+```bash
+cd backend
+export DATABASE_URL="sqlite://../data/stonks.db"
+
+# 1. Populate the ticker -> CIK universe from SEC (~10k companies).
+cargo run -- bootstrap
+
+# 2. Scrape + reconcile + persist data for tickers, then exit.
+#    (EDGAR needs no key; set FMP_API_KEY / FINNHUB_API_KEY for more sources.)
+cargo run -- collect --ticker AAPL --ticker MSFT
+#    ...or rely on the TICKERS env list:
+TICKERS="AAPL,MSFT,GOOG" cargo run -- collect
+
+# 3. Serve the REST API (default :8080).
+cargo run -- serve
+```
+
+```bash
+# Frontend (dev server, proxies /api -> :8080)
+cd frontend && npm install && npm run dev
 
 # Everything in containers
 docker compose up --build      # frontend on :3000, shared ./data volume
 ```
+
+### Configuration (env)
+
+`DATABASE_URL`, `PORT`, `USER_AGENT` (SEC requires a contact UA), `FMP_API_KEY`,
+`FINNHUB_API_KEY`, `TICKERS` (comma-separated), `RECONCILE_THRESHOLD` (default 0.05).
 
 ## Project layout
 
@@ -125,10 +143,11 @@ functions — see the `Makefile`.
 
 ## Roadmap
 
-- **Live collection driver:** wire `scheduler::run_tracked` per `Tier` →
-  collectors → `pipeline::ingest` in the binary. Needs config (ticker→CIK map,
-  API keys, feed URLs). All building blocks exist and are tested.
+- **Scheduled driver:** the `collect` CLI runs ingest on demand; the remaining
+  step is a long-running loop that fires `pipeline::collect_tickers` per
+  `Tier::next_after` (price/news/fundamentals cadences) inside `serve`.
+- Persist prices + news (collectors exist; only facts are wired into ingest).
 - Ratios computed from stored facts; segment/ownership/guidance ingestion;
-  per-ticker schedule overrides.
+  per-ticker schedule overrides; scheduled Parquet exports.
 
 See `CLAUDE.md` / `AGENTS.md` for contributor + AI-agent conventions.

@@ -22,7 +22,8 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 ```
 backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage-excluded)
   src/lib.rs        app(Arc<Store>) router
-  src/main.rs       entrypoint: open DB, serve; NO logic (coverage-excluded)
+  src/main.rs       CLI: serve | bootstrap | collect; NO logic (coverage-excluded)
+  src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
   src/store.rs      SQLite (WAL) CRUD + Parquet export
   src/collectors/   edgar, fmp, news (rss+finnhub), scrape — behind HttpClient
@@ -41,10 +42,13 @@ Makefile          dev tasks
 docker-compose.yml
 ```
 
-**Remaining integration point:** the live collection driver (loop that fires
-`scheduler::run_tracked` per `Tier`, calls collectors, runs `pipeline::persist_facts`)
-is not wired in `main.rs` yet — it needs config (ticker list, API keys, feed URLs).
-All building blocks are implemented and tested.
+**CLI:** `stonkscollect bootstrap` (load SEC ticker/CIK universe), `collect
+[--ticker]` (scrape→reconcile→persist now), `serve` (REST API). Driven by
+`pipeline::{bootstrap_companies, collect_tickers, ingest}`.
+
+**Remaining integration point:** a scheduled loop in `serve` that fires
+`collect_tickers` per `Tier::next_after`. The on-demand `collect` path is done
+and tested; prices/news pipelines are not yet wired into ingest (only facts).
 
 ## Run / test / build
 

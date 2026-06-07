@@ -48,6 +48,14 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
     ),
 ];
 
+/// A company identity from SEC's ticker directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanyRef {
+    pub cik: String,
+    pub ticker: String,
+    pub name: String,
+}
+
 /// Collects canonical fundamentals from SEC EDGAR's companyfacts API.
 pub struct EdgarCollector<H: HttpClient> {
     http: H,
@@ -74,6 +82,39 @@ impl<H: HttpClient> EdgarCollector<H> {
         let body = self.http.get_text(&url).await?;
         parse_companyfacts(company_id, &body, now)
     }
+
+    /// Fetch SEC's full ticker -> CIK directory (for bootstrapping companies).
+    pub async fn collect_company_tickers(&self) -> Result<Vec<CompanyRef>, CollectorError> {
+        let body = self
+            .http
+            .get_text("https://www.sec.gov/files/company_tickers.json")
+            .await?;
+        parse_company_tickers(&body)
+    }
+}
+
+/// Parse SEC's `company_tickers.json` (an object keyed by index). Entries
+/// missing a CIK or ticker are skipped.
+fn parse_company_tickers(json: &str) -> Result<Vec<CompanyRef>, CollectorError> {
+    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let Some(entries) = doc.as_object() else {
+        return Ok(Vec::new());
+    };
+    let mut refs = Vec::new();
+    for entry in entries.values() {
+        let Some(cik) = entry["cik_str"].as_i64() else {
+            continue;
+        };
+        let Some(ticker) = entry["ticker"].as_str() else {
+            continue;
+        };
+        refs.push(CompanyRef {
+            cik: format!("{cik:0>10}"),
+            ticker: ticker.to_uppercase(),
+            name: entry["title"].as_str().unwrap_or("").to_string(),
+        });
+    }
+    Ok(refs)
 }
 
 #[async_trait(?Send)]
@@ -165,6 +206,38 @@ mod tests {
     use chrono::NaiveDate;
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/edgar_companyfacts.json");
+    const TICKERS: &str = include_str!("../../tests/fixtures/company_tickers.json");
+
+    #[test]
+    fn parse_company_tickers_pads_cik_and_skips_incomplete() {
+        let refs = parse_company_tickers(TICKERS).unwrap();
+        // AAPL, MSFT, NONAME(no title) kept; missing-ticker + missing-cik skipped.
+        assert_eq!(refs.len(), 3);
+        let aapl = refs.iter().find(|r| r.ticker == "AAPL").unwrap();
+        assert_eq!(aapl.cik, "0000320193");
+        assert_eq!(aapl.name, "Apple Inc.");
+        let noname = refs.iter().find(|r| r.ticker == "NONAME").unwrap();
+        assert_eq!(noname.name, "");
+        assert_eq!(aapl.clone(), *aapl);
+    }
+
+    #[test]
+    fn parse_company_tickers_non_object_is_empty() {
+        assert!(parse_company_tickers("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_company_tickers_invalid_json_errors() {
+        assert!(matches!(parse_company_tickers("x").unwrap_err(), CollectorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn collect_company_tickers_fetches_directory() {
+        let collector = EdgarCollector::new(FakeHttp::new(TICKERS));
+        let refs = collector.collect_company_tickers().await.unwrap();
+        assert_eq!(refs.len(), 3);
+        assert!(collector.http.url().unwrap().contains("company_tickers.json"));
+    }
 
     #[test]
     fn companyfacts_url_zero_pads_cik() {
