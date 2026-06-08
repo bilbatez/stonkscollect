@@ -1,6 +1,7 @@
 //! StonksCollect backend library.
 
 pub mod api;
+pub mod auth;
 pub mod collectors;
 pub mod config;
 pub mod domain;

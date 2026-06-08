@@ -661,6 +661,124 @@ impl Store {
             .collect()
     }
 
+    // --- Auth: users, sessions, watchlists ---
+
+    /// Create a user, returning its id (errors on duplicate email).
+    pub async fn create_user(&self, email: &str, password_hash: &str) -> Result<i64> {
+        let id: i64 =
+            sqlx::query_scalar("INSERT INTO users (email,password_hash) VALUES (?,?) RETURNING id")
+                .bind(email)
+                .bind(password_hash)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(id)
+    }
+
+    /// `(id, password_hash)` for a login lookup by email.
+    pub async fn user_credentials(&self, email: &str) -> Result<Option<(i64, String)>> {
+        let row = sqlx::query("SELECT id,password_hash FROM users WHERE email=?")
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(r) => Ok(Some((r.try_get("id")?, r.try_get("password_hash")?))),
+            None => Ok(None),
+        }
+    }
+
+    /// A user's email by id.
+    pub async fn user_email(&self, user_id: i64) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar("SELECT email FROM users WHERE id=?")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    /// Persist a session token hash with an expiry.
+    pub async fn create_session(
+        &self,
+        token_hash: &str,
+        user_id: i64,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,?)")
+            .bind(token_hash)
+            .bind(user_id)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The user id for a valid (unexpired) session token hash.
+    pub async fn session_user(
+        &self,
+        token_hash: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<i64>> {
+        Ok(sqlx::query_scalar(
+            "SELECT user_id FROM sessions WHERE token_hash=? AND expires_at > ?",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Delete a session (logout).
+    pub async fn delete_session(&self, token_hash: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE token_hash=?")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Add a company to a user's watchlist (idempotent).
+    pub async fn add_watch(&self, user_id: i64, company_id: i64) -> Result<()> {
+        sqlx::query("INSERT OR IGNORE INTO watchlists (user_id,company_id) VALUES (?,?)")
+            .bind(user_id)
+            .bind(company_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Remove a company from a user's watchlist.
+    pub async fn remove_watch(&self, user_id: i64, company_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM watchlists WHERE user_id=? AND company_id=?")
+            .bind(user_id)
+            .bind(company_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The companies on a user's watchlist, ordered by ticker.
+    pub async fn list_watch(&self, user_id: i64) -> Result<Vec<Company>> {
+        let rows = sqlx::query(
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry \
+             FROM watchlists w JOIN companies c ON c.id = w.company_id \
+             WHERE w.user_id=? ORDER BY c.ticker",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(Company {
+                    id: r.try_get("id")?,
+                    cik: r.try_get("cik")?,
+                    ticker: r.try_get("ticker")?,
+                    name: r.try_get("name")?,
+                    exchange: r.try_get("exchange")?,
+                    sector: r.try_get("sector")?,
+                    industry: r.try_get("industry")?,
+                })
+            })
+            .collect()
+    }
+
     /// Export a company's prices to a Parquet file for portable archiving.
     pub async fn export_prices_parquet(&self, company_id: i64, path: &Path) -> Result<()> {
         let prices = self.get_prices(company_id).await?;
@@ -1098,6 +1216,40 @@ mod tests {
         assert_eq!(list[0].pct_diff, 0.1);
         assert_eq!(list[0].period, Some("2023-12-31".into()));
         assert!(format!("{:?}", list[0].clone()).contains("Revenue"));
+    }
+
+    #[tokio::test]
+    async fn users_sessions_lifecycle() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "hash").await.unwrap();
+        // duplicate email errors
+        assert!(store.create_user("a@e.com", "h2").await.is_err());
+        assert_eq!(store.user_credentials("a@e.com").await.unwrap(), Some((uid, "hash".into())));
+        assert_eq!(store.user_credentials("none@e.com").await.unwrap(), None);
+        assert_eq!(store.user_email(uid).await.unwrap(), Some("a@e.com".into()));
+
+        let t = |h| Utc.with_ymd_and_hms(2024, 1, 1, h, 0, 0).unwrap();
+        store.create_session("th", uid, t(12)).await.unwrap();
+        // valid before expiry, invalid after
+        assert_eq!(store.session_user("th", t(11)).await.unwrap(), Some(uid));
+        assert_eq!(store.session_user("th", t(13)).await.unwrap(), None);
+        assert_eq!(store.session_user("nope", t(11)).await.unwrap(), None);
+        store.delete_session("th").await.unwrap();
+        assert_eq!(store.session_user("th", t(11)).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn watchlist_add_list_remove() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "h").await.unwrap();
+        let cid = store.insert_company(&sample_company()).await.unwrap();
+        store.add_watch(uid, cid).await.unwrap();
+        store.add_watch(uid, cid).await.unwrap(); // idempotent
+        let list = store.list_watch(uid).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].ticker, "AAPL");
+        store.remove_watch(uid, cid).await.unwrap();
+        assert!(store.list_watch(uid).await.unwrap().is_empty());
     }
 
     #[tokio::test]
