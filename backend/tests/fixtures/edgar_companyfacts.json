@@ -59,6 +59,24 @@
           ]
         }
       },
+      "AssetsCurrent": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 143566000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "LiabilitiesCurrent": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 145308000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "GrossProfit": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 169148000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "EarningsPerShareDiluted": {
+        "units": { "USD/shares": [ { "end": "2023-09-30", "val": 6.13, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "WeightedAverageNumberOfDilutedSharesOutstanding": {
+        "units": { "shares": [ { "end": "2023-09-30", "val": 15812547000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "CommonStockDividendsPerShareDeclared": {
+        "units": { "USD/shares": [ { "end": "2023-09-30", "val": 0.94, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
       "UnmappedConcept": {
         "label": "ignored",
         "units": { "USD": [ { "end": "2023-09-30", "val": 777, "fp": "FY" } ] }

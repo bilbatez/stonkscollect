@@ -46,6 +46,34 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
         StatementKind::CashFlow,
         "FinancingCashFlow",
     ),
+    // --- Graham analysis inputs ---
+    ("AssetsCurrent", StatementKind::Balance, "CurrentAssets"),
+    (
+        "LiabilitiesCurrent",
+        StatementKind::Balance,
+        "CurrentLiabilities",
+    ),
+    ("LongTermDebtNoncurrent", StatementKind::Balance, "LongTermDebt"),
+    ("LongTermDebt", StatementKind::Balance, "LongTermDebt"),
+    ("GrossProfit", StatementKind::Income, "GrossProfit"),
+    ("OperatingIncomeLoss", StatementKind::Income, "OperatingIncome"),
+    ("EarningsPerShareDiluted", StatementKind::Income, "Eps"),
+    ("EarningsPerShareBasic", StatementKind::Income, "Eps"),
+    (
+        "CommonStockDividendsPerShareDeclared",
+        StatementKind::Income,
+        "DividendPerShare",
+    ),
+    (
+        "PaymentsOfDividendsCommonStock",
+        StatementKind::CashFlow,
+        "DividendsPaid",
+    ),
+    (
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+        StatementKind::Income,
+        "SharesOutstanding",
+    ),
 ];
 
 /// A company identity from SEC's ticker directory.
@@ -288,6 +316,18 @@ mod tests {
             NaiveDate::from_ymd_opt(2023, 9, 30).unwrap(),
         );
         assert_eq!(ocf.statement, StatementKind::CashFlow);
+    }
+
+    #[test]
+    fn parse_captures_graham_inputs_including_per_share_units() {
+        let facts = parse_companyfacts(7, FIXTURE, now()).unwrap();
+        let fy23 = NaiveDate::from_ymd_opt(2023, 9, 30).unwrap();
+        // EPS lives under a "USD/shares" unit; the parser falls back past USD.
+        assert_eq!(find(&facts, "Eps", PeriodType::Annual, fy23).value, 6.13);
+        assert_eq!(find(&facts, "SharesOutstanding", PeriodType::Annual, fy23).value, 15812547000.0);
+        assert_eq!(find(&facts, "CurrentAssets", PeriodType::Annual, fy23).value, 143566000000.0);
+        assert_eq!(find(&facts, "CurrentLiabilities", PeriodType::Annual, fy23).value, 145308000000.0);
+        assert_eq!(find(&facts, "DividendPerShare", PeriodType::Annual, fy23).value, 0.94);
     }
 
     #[test]
