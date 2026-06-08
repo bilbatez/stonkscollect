@@ -180,6 +180,17 @@ pub async fn recompute_ratios_all(
     Ok(s)
 }
 
+/// Create a user with `email`/`password` if absent (idempotent). Returns `true`
+/// when a new user was created, `false` if one already existed. Used to seed a
+/// dev login; never call with a weak password outside development.
+pub async fn ensure_user(store: &Store, email: &str, password: &str) -> Result<bool, StoreError> {
+    if store.user_credentials(email).await?.is_some() {
+        return Ok(false);
+    }
+    store.create_user(email, &crate::auth::hash_password(password)).await?;
+    Ok(true)
+}
+
 /// Upsert a batch of company identities (idempotent). Returns the count.
 pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
     let companies: Vec<NewCompany> = refs
@@ -595,6 +606,15 @@ mod tests {
         // rerun is safe and still resolves
         bootstrap_companies(&store, &refs).await.unwrap();
         assert_eq!(store.get_company("MSFT").await.unwrap().unwrap().cik, "0000789019");
+    }
+
+    #[tokio::test]
+    async fn ensure_user_is_idempotent_and_sets_password() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        assert!(ensure_user(&store, "admin", "admin").await.unwrap()); // created
+        assert!(!ensure_user(&store, "admin", "admin").await.unwrap()); // already exists
+        let (_, hash) = store.user_credentials("admin").await.unwrap().unwrap();
+        assert!(crate::auth::verify_password(&hash, "admin"));
     }
 
     #[tokio::test]

@@ -68,6 +68,8 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Dev only: seed an `admin`/`admin` login (idempotent). Never use in prod.
+    SeedAdmin,
 }
 
 #[tokio::main]
@@ -91,6 +93,7 @@ async fn main() {
         Command::Serve => serve(store, &cfg).await,
         Command::Bootstrap => bootstrap(&store, &cfg).await,
         Command::Collect { tickers, all } => collect(&store, &cfg, tickers, all).await,
+        Command::SeedAdmin => seed_admin(&store).await,
     }
 }
 
@@ -278,6 +281,20 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
             s.companies, s.facts_written, s.discrepancies_written, s.source_errors, s.failed
         ),
         Err(e) => tracing::error!("{label} tier failed: {e}"),
+    }
+}
+
+/// Dev convenience: ensure an admin login exists so a developer can sign straight
+/// into the dashboard. The email form field requires a valid address, so the
+/// login is `admin@admin.com` / `admin`. Insecure by design — development only.
+async fn seed_admin(store: &Store) {
+    let created = pipeline::ensure_user(store, "admin@admin.com", "admin")
+        .await
+        .expect("seed admin user");
+    if created {
+        tracing::warn!("seeded DEV login: admin@admin.com / admin (insecure — dev only)");
+    } else {
+        tracing::info!("admin user already exists; left unchanged");
     }
 }
 
