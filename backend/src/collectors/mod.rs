@@ -10,13 +10,36 @@ pub mod scrape;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::domain::{FinancialFact, PeriodType};
+use crate::domain::{FinancialFact, NewsItem, PeriodType, PricePoint};
 
 /// Identifies a company across sources: EDGAR keys on CIK, vendors on ticker.
 #[derive(Debug, Clone)]
 pub struct SourceTarget {
     pub cik: String,
     pub symbol: String,
+}
+
+/// A source of daily prices (Strategy).
+#[async_trait(?Send)]
+pub trait PriceSource {
+    fn name(&self) -> &'static str;
+    async fn fetch_prices(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+    ) -> Result<Vec<PricePoint>, CollectorError>;
+}
+
+/// A source of company news headlines (Strategy).
+#[async_trait(?Send)]
+pub trait NewsSource {
+    fn name(&self) -> &'static str;
+    async fn fetch_news(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<NewsItem>, CollectorError>;
 }
 
 /// A source that yields financial facts for a company (Strategy pattern).

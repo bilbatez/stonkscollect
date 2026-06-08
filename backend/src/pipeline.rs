@@ -4,10 +4,142 @@
 use chrono::{DateTime, Utc};
 
 use crate::collectors::edgar::CompanyRef;
-use crate::collectors::{FactSource, SourceTarget};
-use crate::domain::{FinancialFact, NewCompany};
+use crate::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
+use crate::domain::{Company, FinancialFact, NewCompany};
+use crate::ratios;
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
+
+fn target_of(c: &Company) -> SourceTarget {
+    SourceTarget {
+        cik: c.cik.clone(),
+        symbol: c.ticker.clone(),
+    }
+}
+
+/// Gather prices from all sources for one company (best-effort) and persist.
+pub async fn collect_prices_for(
+    store: &Store,
+    sources: &[&dyn PriceSource],
+    company_id: i64,
+    target: &SourceTarget,
+) -> Result<usize, StoreError> {
+    let mut all = Vec::new();
+    for s in sources {
+        match s.fetch_prices(company_id, target).await {
+            Ok(p) => all.extend(p),
+            Err(e) => tracing::warn!("price source {} failed: {e}", s.name()),
+        }
+    }
+    store.save_prices(&all).await?;
+    Ok(all.len())
+}
+
+/// Gather news from all sources for one company (best-effort) and persist.
+pub async fn collect_news_for(
+    store: &Store,
+    sources: &[&dyn NewsSource],
+    company_id: i64,
+    target: &SourceTarget,
+    now: DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    let mut all = Vec::new();
+    for s in sources {
+        match s.fetch_news(company_id, target, now).await {
+            Ok(n) => all.extend(n),
+            Err(e) => tracing::warn!("news source {} failed: {e}", s.name()),
+        }
+    }
+    store.save_news(&all).await?;
+    Ok(all.len())
+}
+
+/// Recompute and persist ratios for one company from its stored facts.
+pub async fn recompute_ratios(
+    store: &Store,
+    company_id: i64,
+    now: DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    let facts = store.get_facts(company_id).await?;
+    let computed = ratios::compute(company_id, &facts, now);
+    store.save_ratios(&computed).await?;
+    Ok(computed.len())
+}
+
+/// Collect prices for every company (throttled, per-company isolation).
+pub async fn collect_prices_all(
+    store: &Store,
+    sources: &[&dyn PriceSource],
+    delay: std::time::Duration,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let mut s = CollectSummary::default();
+    for (i, c) in companies.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(delay).await;
+        }
+        match collect_prices_for(store, sources, c.id, &target_of(c)).await {
+            Ok(n) => {
+                s.companies += 1;
+                s.facts_written += n;
+            }
+            Err(e) => {
+                tracing::warn!("prices failed for {}: {e}", c.ticker);
+                s.failed += 1;
+            }
+        }
+    }
+    Ok(s)
+}
+
+/// Collect news for every company (throttled, per-company isolation).
+pub async fn collect_news_all(
+    store: &Store,
+    sources: &[&dyn NewsSource],
+    now: DateTime<Utc>,
+    delay: std::time::Duration,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let mut s = CollectSummary::default();
+    for (i, c) in companies.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(delay).await;
+        }
+        match collect_news_for(store, sources, c.id, &target_of(c), now).await {
+            Ok(n) => {
+                s.companies += 1;
+                s.facts_written += n;
+            }
+            Err(e) => {
+                tracing::warn!("news failed for {}: {e}", c.ticker);
+                s.failed += 1;
+            }
+        }
+    }
+    Ok(s)
+}
+
+/// Recompute ratios for every company from stored facts.
+pub async fn recompute_ratios_all(
+    store: &Store,
+    now: DateTime<Utc>,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let mut s = CollectSummary::default();
+    for c in &companies {
+        match recompute_ratios(store, c.id, now).await {
+            Ok(n) => {
+                s.companies += 1;
+                s.facts_written += n;
+            }
+            Err(e) => {
+                tracing::warn!("ratios failed for {}: {e}", c.ticker);
+                s.failed += 1;
+            }
+        }
+    }
+    Ok(s)
+}
 
 /// Upsert a batch of company identities (idempotent). Returns the count.
 pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
@@ -159,14 +291,65 @@ mod tests {
     use crate::collectors::edgar::EdgarCollector;
     use crate::collectors::fmp::FmpCollector;
     use crate::collectors::scrape::ScrapeCollector;
+    use crate::collectors::news::FinnhubCollector;
     use crate::collectors::CollectorError;
-    use crate::domain::{NewCompany, PeriodType, StatementKind};
+    use crate::domain::{NewCompany, NewsItem, PeriodType, PricePoint, StatementKind};
     use crate::testutil::{fixed_now, FakeHttp};
     use async_trait::async_trait;
     use chrono::{NaiveDate, TimeZone};
+    use std::time::Duration;
 
     const EDGAR: &str = include_str!("../tests/fixtures/edgar_companyfacts.json");
     const FMP_INCOME: &str = include_str!("../tests/fixtures/fmp_income.json");
+    const FMP_PRICES: &str = include_str!("../tests/fixtures/fmp_prices.json");
+    const NEWS_FINNHUB: &str = include_str!("../tests/fixtures/news_finnhub.json");
+
+    /// A price source whose row has a bad company id -> FK error on save.
+    struct BadPriceSource;
+    #[async_trait(?Send)]
+    impl PriceSource for BadPriceSource {
+        fn name(&self) -> &'static str {
+            "badp"
+        }
+        async fn fetch_prices(
+            &self,
+            _id: i64,
+            _t: &SourceTarget,
+        ) -> Result<Vec<PricePoint>, CollectorError> {
+            Ok(vec![PricePoint {
+                company_id: 9_999_999,
+                date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                close: 1.0,
+                volume: None,
+                source: "badp".into(),
+            }])
+        }
+    }
+
+    /// A news source whose item has a bad company id -> FK error on save.
+    struct BadNewsSource;
+    #[async_trait(?Send)]
+    impl NewsSource for BadNewsSource {
+        fn name(&self) -> &'static str {
+            "badn"
+        }
+        async fn fetch_news(
+            &self,
+            _id: i64,
+            _t: &SourceTarget,
+            now: DateTime<Utc>,
+        ) -> Result<Vec<NewsItem>, CollectorError> {
+            Ok(vec![NewsItem {
+                company_id: 9_999_999,
+                title: "x".into(),
+                description: None,
+                url: "u".into(),
+                source: "badn".into(),
+                published_at: now,
+                dedup_hash: "h".into(),
+            }])
+        }
+    }
     const SCRAPE_HTML: &str = include_str!("../tests/fixtures/scrape_financials.html");
 
     /// A source returning a fact for a non-existent company id, so persisting it
@@ -274,7 +457,10 @@ mod tests {
     #[test]
     fn fact_sources_expose_stable_names() {
         assert_eq!(EdgarCollector::new(FakeHttp::new("")).name(), "edgar");
-        assert_eq!(FmpCollector::new(FakeHttp::new(""), "K".into()).name(), "fmp");
+        assert_eq!(
+            FactSource::name(&FmpCollector::new(FakeHttp::new(""), "K".into())),
+            "fmp"
+        );
         assert_eq!(ScrapeCollector::new(FakeHttp::new("")).name(), "scrape");
     }
 
@@ -412,5 +598,87 @@ mod tests {
         assert_eq!(report.source_errors[0].0, "boom");
         // the healthy EDGAR source still produced + persisted facts
         assert!(report.facts_written > 0);
+    }
+
+    fn target() -> SourceTarget {
+        SourceTarget { cik: "320193".into(), symbol: "AAPL".into() }
+    }
+
+    #[tokio::test]
+    async fn collect_prices_for_persists_and_skips_bad_source() {
+        let (store, id, _d) = store_with_company().await;
+        let good = FmpCollector::new(FakeHttp::new(FMP_PRICES), "K".into());
+        let bad = FmpCollector::new(FakeHttp::new("nope"), "K".into()); // parse error -> warn
+        assert_eq!(PriceSource::name(&good), "fmp");
+        let sources: [&dyn PriceSource; 2] = [&good, &bad];
+        let n = collect_prices_for(&store, &sources, id, &target()).await.unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(store.get_prices(id).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn collect_news_for_persists_and_skips_bad_source() {
+        let (store, id, _d) = store_with_company().await;
+        let good = FinnhubCollector::new(FakeHttp::new(NEWS_FINNHUB), "K".into());
+        let bad = FinnhubCollector::new(FakeHttp::new("nope"), "K".into());
+        assert_eq!(NewsSource::name(&good), "finnhub");
+        let sources: [&dyn NewsSource; 2] = [&good, &bad];
+        let n = collect_news_for(&store, &sources, id, &target(), fixed_now()).await.unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(store.get_news(id).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn recompute_ratios_persists_from_facts() {
+        let (store, id, _d) = store_with_company().await;
+        store
+            .save_reconciled(&[fact(id, "edgar", "Revenue", 100.0), fact(id, "edgar", "NetIncome", 25.0)], &[])
+            .await
+            .unwrap();
+        let n = recompute_ratios(&store, id, fixed_now()).await.unwrap();
+        assert_eq!(n, 1); // net_margin
+        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn collect_prices_all_iterates_and_records_failure() {
+        let (store, id, _d) = store_with_company().await;
+        let good = FmpCollector::new(FakeHttp::new(FMP_PRICES), "K".into());
+        let ok_sources: [&dyn PriceSource; 1] = [&good];
+        let s = collect_prices_all(&store, &ok_sources, Duration::ZERO).await.unwrap();
+        assert_eq!(s.companies, 1);
+        assert!(!store.get_prices(id).await.unwrap().is_empty());
+
+        assert_eq!(BadPriceSource.name(), "badp");
+        let bad_sources: [&dyn PriceSource; 1] = [&BadPriceSource];
+        let s2 = collect_prices_all(&store, &bad_sources, Duration::ZERO).await.unwrap();
+        assert_eq!(s2.failed, 1);
+    }
+
+    #[tokio::test]
+    async fn collect_news_all_iterates_and_records_failure() {
+        let (store, id, _d) = store_with_company().await;
+        let good = FinnhubCollector::new(FakeHttp::new(NEWS_FINNHUB), "K".into());
+        let ok_sources: [&dyn NewsSource; 1] = [&good];
+        let s = collect_news_all(&store, &ok_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        assert_eq!(s.companies, 1);
+        assert!(!store.get_news(id).await.unwrap().is_empty());
+
+        assert_eq!(BadNewsSource.name(), "badn");
+        let bad_sources: [&dyn NewsSource; 1] = [&BadNewsSource];
+        let s2 = collect_news_all(&store, &bad_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        assert_eq!(s2.failed, 1);
+    }
+
+    #[tokio::test]
+    async fn recompute_ratios_all_iterates() {
+        let (store, id, _d) = store_with_company().await;
+        store
+            .save_reconciled(&[fact(id, "edgar", "Revenue", 100.0), fact(id, "edgar", "NetIncome", 25.0)], &[])
+            .await
+            .unwrap();
+        let s = recompute_ratios_all(&store, fixed_now()).await.unwrap();
+        assert_eq!(s.companies, 1);
+        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
     }
 }

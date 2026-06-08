@@ -53,6 +53,17 @@ const COMPANY_UPSERT_SQL: &str = "INSERT INTO companies (cik,ticker,name,exchang
      cik=excluded.cik, name=excluded.name, exchange=excluded.exchange, \
      sector=excluded.sector, industry=excluded.industry";
 
+const PRICE_UPSERT_SQL: &str = "INSERT INTO prices (company_id,date,close,volume,source) \
+     VALUES (?,?,?,?,?) \
+     ON CONFLICT(company_id,date,source) DO UPDATE SET close=excluded.close, volume=excluded.volume";
+
+const NEWS_INSERT_SQL: &str = "INSERT OR IGNORE INTO news \
+     (company_id,title,description,url,source,published_at,dedup_hash) VALUES (?,?,?,?,?,?,?)";
+
+const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,metric,value,computed_at) \
+     VALUES (?,?,?,?,?) \
+     ON CONFLICT(company_id,period_end,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
+
 /// SQLite-backed data store.
 pub struct Store {
     pool: SqlitePool,
@@ -190,17 +201,14 @@ impl Store {
 
     /// Insert or update a daily price for `(company_id, date, source)`.
     pub async fn upsert_price(&self, p: &PricePoint) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO prices (company_id,date,close,volume,source) VALUES (?,?,?,?,?) \
-             ON CONFLICT(company_id,date,source) DO UPDATE SET close=excluded.close, volume=excluded.volume",
-        )
-        .bind(p.company_id)
-        .bind(p.date)
-        .bind(p.close)
-        .bind(p.volume)
-        .bind(&p.source)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(PRICE_UPSERT_SQL)
+            .bind(p.company_id)
+            .bind(p.date)
+            .bind(p.close)
+            .bind(p.volume)
+            .bind(&p.source)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -223,6 +231,23 @@ impl Store {
                 })
             })
             .collect()
+    }
+
+    /// Upsert many prices in one transaction.
+    pub async fn save_prices(&self, prices: &[PricePoint]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for p in prices {
+            sqlx::query(PRICE_UPSERT_SQL)
+                .bind(p.company_id)
+                .bind(p.date)
+                .bind(p.close)
+                .bind(p.volume)
+                .bind(&p.source)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Insert or update a financial fact (keyed by its natural composite key).
@@ -275,21 +300,36 @@ impl Store {
     /// Insert a news item, ignoring duplicates by `dedup_hash`.
     /// Returns `true` if a new row was inserted.
     pub async fn insert_news(&self, n: &NewsItem) -> Result<bool> {
-        let res = sqlx::query(
-            "INSERT OR IGNORE INTO news \
-             (company_id,title,description,url,source,published_at,dedup_hash) \
-             VALUES (?,?,?,?,?,?,?)",
-        )
-        .bind(n.company_id)
-        .bind(&n.title)
-        .bind(&n.description)
-        .bind(&n.url)
-        .bind(&n.source)
-        .bind(n.published_at)
-        .bind(&n.dedup_hash)
-        .execute(&self.pool)
-        .await?;
+        let res = sqlx::query(NEWS_INSERT_SQL)
+            .bind(n.company_id)
+            .bind(&n.title)
+            .bind(&n.description)
+            .bind(&n.url)
+            .bind(&n.source)
+            .bind(n.published_at)
+            .bind(&n.dedup_hash)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// Insert many news items in one transaction, ignoring duplicates.
+    pub async fn save_news(&self, items: &[NewsItem]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for n in items {
+            sqlx::query(NEWS_INSERT_SQL)
+                .bind(n.company_id)
+                .bind(&n.title)
+                .bind(&n.description)
+                .bind(&n.url)
+                .bind(&n.source)
+                .bind(n.published_at)
+                .bind(&n.dedup_hash)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// List a company's news, newest first.
@@ -318,17 +358,31 @@ impl Store {
 
     /// Insert or update a derived ratio, keyed by (company, period, metric).
     pub async fn upsert_ratio(&self, r: &Ratio) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO ratios (company_id,period_end,metric,value,computed_at) VALUES (?,?,?,?,?) \
-             ON CONFLICT(company_id,period_end,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at",
-        )
-        .bind(r.company_id)
-        .bind(r.period_end)
-        .bind(&r.metric)
-        .bind(r.value)
-        .bind(r.computed_at)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query(RATIO_UPSERT_SQL)
+            .bind(r.company_id)
+            .bind(r.period_end)
+            .bind(&r.metric)
+            .bind(r.value)
+            .bind(r.computed_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Upsert many ratios in one transaction.
+    pub async fn save_ratios(&self, ratios: &[Ratio]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for r in ratios {
+            sqlx::query(RATIO_UPSERT_SQL)
+                .bind(r.company_id)
+                .bind(r.period_end)
+                .bind(&r.metric)
+                .bind(r.value)
+                .bind(r.computed_at)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -589,6 +643,43 @@ mod tests {
         // idempotent
         store.upsert_companies(&[sample_company()]).await.unwrap();
         assert_eq!(store.all_companies().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn save_prices_news_ratios_batch_persist() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let d = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+        store
+            .save_prices(&[PricePoint { company_id: id, date: d, close: 1.0, volume: None, source: "fmp".into() }])
+            .await
+            .unwrap();
+        store
+            .save_news(&[NewsItem {
+                company_id: id,
+                title: "Hi".into(),
+                description: None,
+                url: "u".into(),
+                source: "rss".into(),
+                published_at: now,
+                dedup_hash: "h".into(),
+            }])
+            .await
+            .unwrap();
+        store
+            .save_ratios(&[Ratio {
+                company_id: id,
+                period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                metric: "net_margin".into(),
+                value: 0.25,
+                computed_at: now,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(store.get_prices(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_news(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

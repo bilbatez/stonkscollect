@@ -7,6 +7,7 @@ pub mod domain;
 pub mod http;
 pub mod net;
 pub mod pipeline;
+pub mod ratios;
 pub mod reconcile;
 pub mod scheduler;
 pub mod store;

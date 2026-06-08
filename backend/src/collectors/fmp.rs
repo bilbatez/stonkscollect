@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 
-use crate::collectors::{period_type_from_fp, CollectorError, FactSource, HttpClient, SourceTarget};
+use crate::collectors::{
+    period_type_from_fp, CollectorError, FactSource, HttpClient, PriceSource, SourceTarget,
+};
 use crate::domain::{FinancialFact, PricePoint, Ratio, StatementKind};
 
 const BASE: &str = "https://financialmodelingprep.com/api/v3";
@@ -86,6 +88,21 @@ impl<H: HttpClient> FactSource for FmpCollector<H> {
         now: DateTime<Utc>,
     ) -> Result<Vec<FinancialFact>, CollectorError> {
         self.collect_income(company_id, &target.symbol, now).await
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> PriceSource for FmpCollector<H> {
+    fn name(&self) -> &'static str {
+        "fmp"
+    }
+
+    async fn fetch_prices(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+    ) -> Result<Vec<PricePoint>, CollectorError> {
+        self.collect_prices(company_id, &target.symbol).await
     }
 }
 

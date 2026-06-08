@@ -5,10 +5,11 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use chrono::{DateTime, TimeZone, Utc};
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::Deserialize;
 
-use crate::collectors::{CollectorError, HttpClient};
+use crate::collectors::{CollectorError, HttpClient, NewsSource, SourceTarget};
 use crate::domain::NewsItem;
 
 /// Normalize a headline for dedup: collapse whitespace, lowercase.
@@ -144,6 +145,25 @@ impl<H: HttpClient> FinnhubCollector<H> {
         let url = Self::news_url(symbol, from, to, &self.api_key);
         let body = self.http.get_text(&url).await?;
         parse_finnhub(company_id, &body, now)
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> NewsSource for FinnhubCollector<H> {
+    fn name(&self) -> &'static str {
+        "finnhub"
+    }
+
+    async fn fetch_news(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<NewsItem>, CollectorError> {
+        // Last 30 days of company news.
+        let to = now.format("%Y-%m-%d").to_string();
+        let from = (now - Duration::days(30)).format("%Y-%m-%d").to_string();
+        self.collect(company_id, &target.symbol, &from, &to, now).await
     }
 }
 
