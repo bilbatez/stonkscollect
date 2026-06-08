@@ -8,8 +8,9 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 
 ## Tech stack
 
-- **Backend:** Rust 1.91, `axum` 0.7, `tokio`, `sqlx` (SQLite), `reqwest`, `scraper`,
-  `cron`, `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
+- **Backend:** Rust 1.91, `axum` 0.7, `tower`/`tower-http` (body-limit + timeout +
+  trace middleware), `tokio`, `sqlx` (SQLite), `reqwest`, `scraper`, `cron`,
+  `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
   `clap` (CLI), `dotenvy`, `serde`, `thiserror`, `tracing`.
 - **Frontend:** React 19 + Vite 8 + TypeScript; ECharts (lazy, candlestick/line);
   Vitest + Playwright.
@@ -22,21 +23,22 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 
 ```
 backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage-excluded)
-  src/lib.rs        app(Arc<Store>) router
+  src/lib.rs        app(Arc<Store>) router + body-limit/timeout/trace layers
   src/main.rs       CLI: serve | bootstrap | collect; NO logic (coverage-excluded)
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
   src/store.rs      SQLite (WAL) CRUD, range queries, OHLC, Parquet export
   src/collectors/   edgar, fmp, news (rss+finnhub), scrape — Fact/Price/NewsSource traits
   src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
-  src/net.rs        RetryPolicy + RateLimiter (pure)
+  src/net.rs        RetryPolicy + RateLimiter + LoginThrottle (pure, time-injected)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
   src/ratios.rs     derived ratios incl. P/E, P/B, FCF, payout (pure)
   src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
   src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental), recompute_metrics
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
   src/auth.rs       argon2 password hashing + session tokens (pure)
-  src/api.rs        axum REST handlers + AuthUser extractor
+  src/api.rs        axum REST handlers + AuthUser extractor; login brute-force
+                    throttle (Store-held), sanitized 500s (no store/SQL leak)
   migrations/       SQL (companies, facts, prices(OHLC), ratios, graham_scores, users…)
   tests/            integration tests + fixtures/
 frontend/         React + Vite SPA

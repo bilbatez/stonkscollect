@@ -17,6 +17,7 @@ use crate::domain::{
     CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewCompany, NewsItem,
     PeriodType, PricePoint, Ratio, StatementKind,
 };
+use crate::net::{LoginThrottle, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW};
 
 /// Errors returned by the store.
 #[derive(Debug, thiserror::Error)]
@@ -65,9 +66,11 @@ const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,metric
      VALUES (?,?,?,?,?) \
      ON CONFLICT(company_id,period_end,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
 
-/// SQLite-backed data store.
+/// SQLite-backed data store. Also holds the process-local login throttle, since
+/// the `Arc<Store>` is the shared handle every request sees.
 pub struct Store {
     pool: SqlitePool,
+    login_throttle: LoginThrottle,
 }
 
 impl Store {
@@ -91,7 +94,12 @@ impl Store {
             .connect_with(opts)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
-        Ok(Self { pool })
+        Ok(Self { pool, login_throttle: LoginThrottle::new(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW) })
+    }
+
+    /// The shared login brute-force throttle.
+    pub fn login_throttle(&self) -> &LoginThrottle {
+        &self.login_throttle
     }
 
     /// Close the underlying connection pool. After this, queries error

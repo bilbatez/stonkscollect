@@ -134,8 +134,10 @@ async fn screen(
     Ok(Json(rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect()))
 }
 
+/// Log the real cause server-side; never surface store/SQL detail to the client.
 fn internal(e: StoreError) -> ApiError {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    tracing::error!(error = %e, "store error");
+    (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
 }
 
 #[derive(Deserialize)]
@@ -185,14 +187,22 @@ async fn login(
     State(store): State<Arc<Store>>,
     Json(c): Json<Credentials>,
 ) -> ApiResult<TokenResponse> {
-    let bad = || (StatusCode::UNAUTHORIZED, "invalid credentials".to_string());
-    let (user_id, hash) = store.user_credentials(&c.email).await.map_err(internal)?.ok_or_else(bad)?;
-    if !auth::verify_password(&hash, &c.password) {
-        return Err(bad());
+    let now = Utc::now();
+    let throttle = store.login_throttle();
+    if !throttle.allowed(&c.email, now) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too many login attempts".into()));
     }
-    Ok(Json(TokenResponse {
-        token: issue_session(&store, user_id).await?,
-    }))
+    let bad = || (StatusCode::UNAUTHORIZED, "invalid credentials".to_string());
+    match store.user_credentials(&c.email).await.map_err(internal)? {
+        Some((user_id, hash)) if auth::verify_password(&hash, &c.password) => {
+            throttle.clear(&c.email);
+            Ok(Json(TokenResponse { token: issue_session(&store, user_id).await? }))
+        }
+        _ => {
+            throttle.record_failure(&c.email, now);
+            Err(bad())
+        }
+    }
 }
 
 async fn logout(State(store): State<Arc<Store>>, headers: HeaderMap) -> StatusCode {
@@ -537,6 +547,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn internal_error_body_does_not_leak_details() {
+        let (store, _d, t) = seeded().await;
+        store.close().await;
+        let resp = app(store)
+            .oneshot(req("GET", "/api/companies/AAPL/prices", Some(&t), None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..], b"internal error");
+    }
+
+    #[tokio::test]
+    async fn oversize_request_body_is_rejected() {
+        let (store, _d, _t) = seeded().await;
+        // A body well past the configured limit must be refused before handling.
+        let big = json!({"email": "x".repeat(200_000), "password": "pw"});
+        let (status, _) = send(store, req("POST", "/auth/signup", None, Some(big))).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn signup_login_me_and_logout() {
         let (store, _d, _t) = seeded().await;
         // signup
@@ -577,6 +609,42 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = get(store, &token2, "/auth/me").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_is_throttled_after_repeated_failures() {
+        use crate::net::LOGIN_MAX_ATTEMPTS;
+        let (store, _d, _t) = seeded().await;
+        // Seeded user is u@e.com / "pw". Exhaust the attempt budget with bad ones.
+        let bad = json!({"email": "u@e.com", "password": "wrong"});
+        for _ in 0..LOGIN_MAX_ATTEMPTS {
+            let (s, _) = send(store.clone(), req("POST", "/auth/login", None, Some(bad.clone()))).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED);
+        }
+        // Now even the correct password is throttled.
+        let good = json!({"email": "u@e.com", "password": "pw"});
+        let (s, _) = send(store, req("POST", "/auth/login", None, Some(good))).await;
+        assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn successful_login_clears_throttle_counter() {
+        use crate::net::LOGIN_MAX_ATTEMPTS;
+        let (store, _d, _t) = seeded().await;
+        let bad = json!({"email": "u@e.com", "password": "wrong"});
+        // One short of the limit, then a success resets the counter.
+        for _ in 0..(LOGIN_MAX_ATTEMPTS - 1) {
+            send(store.clone(), req("POST", "/auth/login", None, Some(bad.clone()))).await;
+        }
+        let good = json!({"email": "u@e.com", "password": "pw"});
+        let (s, _) = send(store.clone(), req("POST", "/auth/login", None, Some(good.clone()))).await;
+        assert_eq!(s, StatusCode::OK);
+        // After the reset, another full run of failures is needed to block again.
+        for _ in 0..(LOGIN_MAX_ATTEMPTS - 1) {
+            send(store.clone(), req("POST", "/auth/login", None, Some(bad.clone()))).await;
+        }
+        let (s, _) = send(store, req("POST", "/auth/login", None, Some(good))).await;
+        assert_eq!(s, StatusCode::OK); // still allowed: counter was cleared
     }
 
     #[tokio::test]

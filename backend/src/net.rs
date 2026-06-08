@@ -2,6 +2,7 @@
 //! Pure and deterministic (time injected) so they're fully testable; the real
 //! HTTP loop that uses them lives in `http.rs` (excluded glue).
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -76,6 +77,62 @@ impl RateLimiter {
     }
 }
 
+/// Default brute-force policy for interactive login: this many failures per key
+/// within the window trips the block.
+pub const LOGIN_MAX_ATTEMPTS: u32 = 5;
+pub const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+/// One key's recent failed-login tally and the start of its current window.
+struct Attempt {
+    count: u32,
+    first: DateTime<Utc>,
+}
+
+/// In-memory failed-login throttle keyed by identity (e.g. email). After
+/// `max` failures inside `window` a key is blocked until the window elapses;
+/// a successful login clears it. Transient and per-process (not persisted) —
+/// brute-force mitigation, not durable account lockout. Keyed by email, so a
+/// flood against one account only locks that account, never the whole service.
+pub struct LoginThrottle {
+    max: u32,
+    window: Duration,
+    inner: Mutex<HashMap<String, Attempt>>,
+}
+
+impl LoginThrottle {
+    pub fn new(max: u32, window: Duration) -> Self {
+        Self { max, window, inner: Mutex::new(HashMap::new()) }
+    }
+
+    /// Whether `first` is recent enough that its window still covers `now`.
+    fn within_window(&self, first: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        now.signed_duration_since(first).to_std().is_ok_and(|e| e < self.window)
+    }
+
+    /// Whether a login attempt for `key` is currently permitted.
+    pub fn allowed(&self, key: &str, now: DateTime<Utc>) -> bool {
+        let map = self.inner.lock().unwrap();
+        !matches!(map.get(key), Some(a) if a.count >= self.max && self.within_window(a.first, now))
+    }
+
+    /// Record a failed attempt for `key`, starting a fresh window if the prior
+    /// one has elapsed.
+    pub fn record_failure(&self, key: &str, now: DateTime<Utc>) {
+        let mut map = self.inner.lock().unwrap();
+        let a = map.entry(key.to_string()).or_insert(Attempt { count: 0, first: now });
+        if !self.within_window(a.first, now) {
+            a.count = 0;
+            a.first = now;
+        }
+        a.count += 1;
+    }
+
+    /// Clear a key's failure history (call on a successful login).
+    pub fn clear(&self, key: &str) {
+        self.inner.lock().unwrap().remove(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +170,42 @@ mod tests {
         assert!(p.should_retry(2, Some(503)));
         assert!(!p.should_retry(0, Some(404))); // client error, no retry
         assert!(!p.should_retry(3, None)); // budget exhausted
+    }
+
+    #[test]
+    fn login_throttle_blocks_after_max_failures_within_window() {
+        let th = LoginThrottle::new(3, Duration::from_secs(900));
+        let now = t(0);
+        assert!(th.allowed("a@e.com", now)); // no history
+        th.record_failure("a@e.com", now);
+        th.record_failure("a@e.com", now);
+        assert!(th.allowed("a@e.com", now)); // 2 < 3, still allowed
+        th.record_failure("a@e.com", now);
+        assert!(!th.allowed("a@e.com", now)); // 3 >= 3, blocked
+        // a different key is unaffected
+        assert!(th.allowed("b@e.com", now));
+    }
+
+    #[test]
+    fn login_throttle_resets_after_window_and_on_success() {
+        let th = LoginThrottle::new(2, Duration::from_secs(900));
+        let now = t(0);
+        th.record_failure("a@e.com", now);
+        th.record_failure("a@e.com", now);
+        assert!(!th.allowed("a@e.com", now)); // blocked
+        assert!(th.allowed("a@e.com", t(901))); // window elapsed -> allowed
+        // a failure after the window resets the counter
+        th.record_failure("a@e.com", t(901));
+        assert!(th.allowed("a@e.com", t(901))); // count back to 1 < 2
+        th.record_failure("a@e.com", t(901));
+        assert!(!th.allowed("a@e.com", t(901))); // blocked again
+
+        // success clears the key
+        th.record_failure("b@e.com", now);
+        th.record_failure("b@e.com", now);
+        assert!(!th.allowed("b@e.com", now));
+        th.clear("b@e.com");
+        assert!(th.allowed("b@e.com", now));
     }
 
     #[test]
