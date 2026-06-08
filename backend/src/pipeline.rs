@@ -99,7 +99,8 @@ pub async fn recompute_ratios(
     now: DateTime<Utc>,
 ) -> Result<usize, StoreError> {
     let facts = store.get_facts(company_id).await?;
-    let computed = ratios::compute(company_id, &facts, now);
+    let prices = store.get_prices(company_id).await?;
+    let computed = ratios::compute(company_id, &facts, &prices, now);
     store.save_ratios(&computed).await?;
     Ok(computed.len())
 }

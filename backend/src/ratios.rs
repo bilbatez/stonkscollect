@@ -4,11 +4,21 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::domain::{FinancialFact, Ratio};
+use crate::domain::{FinancialFact, PricePoint, Ratio};
 
-/// Compute per-period ratios from a company's facts. Only ratios whose inputs
-/// are present (and denominators non-zero) for a period are emitted.
-pub fn compute(company_id: i64, facts: &[FinancialFact], now: DateTime<Utc>) -> Vec<Ratio> {
+/// Compute per-period ratios from a company's facts (and `prices`, for the
+/// historical P/E and P/B series). Only ratios whose inputs are present (and
+/// denominators non-zero) for a period are emitted.
+pub fn compute(
+    company_id: i64,
+    facts: &[FinancialFact],
+    prices: &[PricePoint],
+    now: DateTime<Utc>,
+) -> Vec<Ratio> {
+    // Close on/just before a date — the price to value that period at.
+    let price_at = |d: NaiveDate| -> Option<f64> {
+        prices.iter().filter(|p| p.date <= d).max_by_key(|p| p.date).map(|p| p.close)
+    };
     // period_end -> { line_item -> value }
     let mut by_period: BTreeMap<NaiveDate, BTreeMap<&str, f64>> = BTreeMap::new();
     for f in facts {
@@ -53,11 +63,25 @@ pub fn compute(company_id: i64, facts: &[FinancialFact], now: DateTime<Utc>) -> 
             "current_ratio",
             ratio(items.get("CurrentAssets"), items.get("CurrentLiabilities")),
         );
-        add(
-            "book_value_per_share",
-            ratio(items.get("StockholdersEquity"), items.get("SharesOutstanding")),
-        );
+        let bvps = ratio(items.get("StockholdersEquity"), items.get("SharesOutstanding"));
+        add("book_value_per_share", bvps);
         add("payout_ratio", ratio(items.get("DividendPerShare"), items.get("Eps")));
+        // Historical valuation: price at the period end ÷ EPS / BVPS.
+        let price = price_at(period_end);
+        add(
+            "pe",
+            match (price, items.get("Eps")) {
+                (Some(p), Some(&e)) if e > 0.0 => Some(p / e),
+                _ => None,
+            },
+        );
+        add(
+            "pb",
+            match (price, bvps) {
+                (Some(p), Some(b)) if b > 0.0 => Some(p / b),
+                _ => None,
+            },
+        );
         // Working capital is a difference, not a ratio.
         let working_capital = match (items.get("CurrentAssets"), items.get("CurrentLiabilities")) {
             (Some(&ca), Some(&cl)) => Some(ca - cl),
@@ -113,7 +137,7 @@ mod tests {
             fact("TotalLiabilities", p, 60.0),
             fact("StockholdersEquity", p, 40.0),
         ];
-        let r = compute(1, &facts, fixed_now());
+        let r = compute(1, &facts, &[], fixed_now());
         assert_eq!(metric(&r, "net_margin").unwrap().value, 0.25);
         assert_eq!(metric(&r, "roe").unwrap().value, 0.625);
         assert_eq!(metric(&r, "debt_to_equity").unwrap().value, 1.5);
@@ -132,7 +156,7 @@ mod tests {
             fact("StockholdersEquity", p, 80.0),
             fact("SharesOutstanding", p, 8.0),
         ];
-        let r = compute(1, &facts, fixed_now());
+        let r = compute(1, &facts, &[], fixed_now());
         assert_eq!(metric(&r, "gross_margin").unwrap().value, 0.4);
         assert_eq!(metric(&r, "operating_margin").unwrap().value, 0.3);
         assert_eq!(metric(&r, "current_ratio").unwrap().value, 2.5);
@@ -150,10 +174,35 @@ mod tests {
             fact("DividendPerShare", p, 2.0),
             fact("Eps", p, 8.0),
         ];
-        let r = compute(1, &facts, fixed_now());
+        let r = compute(1, &facts, &[], fixed_now());
         assert_eq!(metric(&r, "free_cash_flow").unwrap().value, 18.0); // 30 - 12
         assert_eq!(metric(&r, "fcf_margin").unwrap().value, 0.18);
         assert_eq!(metric(&r, "payout_ratio").unwrap().value, 0.25); // 2 / 8
+    }
+
+    #[test]
+    fn computes_pe_and_pb_from_price_at_period_end() {
+        let p = (2023, 12, 31);
+        let facts = vec![
+            fact("Eps", p, 5.0),
+            fact("StockholdersEquity", p, 100.0),
+            fact("SharesOutstanding", p, 10.0), // BVPS = 10
+        ];
+        let price = |d: &str, c: f64| PricePoint {
+            company_id: 1,
+            date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+            open: None,
+            high: None,
+            low: None,
+            close: c,
+            volume: None,
+            source: "fmp".into(),
+        };
+        // latest close on/before 2023-12-31 is the 12-29 bar (150), not the 2024 one.
+        let prices = vec![price("2023-12-29", 150.0), price("2024-01-05", 999.0)];
+        let r = compute(1, &facts, &prices, fixed_now());
+        assert_eq!(metric(&r, "pe").unwrap().value, 30.0); // 150 / 5
+        assert_eq!(metric(&r, "pb").unwrap().value, 15.0); // 150 / 10
     }
 
     #[test]
@@ -161,7 +210,7 @@ mod tests {
         let p = (2023, 12, 31);
         // Revenue is zero (no net_margin); no equity (no roe / debt_to_equity).
         let facts = vec![fact("Revenue", p, 0.0), fact("NetIncome", p, 10.0)];
-        let r = compute(1, &facts, fixed_now());
+        let r = compute(1, &facts, &[], fixed_now());
         assert!(r.is_empty());
     }
 
@@ -173,7 +222,7 @@ mod tests {
             fact("Revenue", (2022, 12, 31), 80.0),
             fact("NetIncome", (2022, 12, 31), 8.0),
         ];
-        let r = compute(1, &facts, fixed_now());
+        let r = compute(1, &facts, &[], fixed_now());
         let margins: Vec<f64> = r
             .iter()
             .filter(|x| x.metric == "net_margin")
