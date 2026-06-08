@@ -260,14 +260,42 @@ impl Store {
         Ok(())
     }
 
-    /// List a company's prices ordered by date ascending.
+    /// List all of a company's prices, oldest first.
     pub async fn get_prices(&self, company_id: i64) -> Result<Vec<PricePoint>> {
-        let rows = sqlx::query(
-            "SELECT company_id,date,close,volume,source FROM prices WHERE company_id=? ORDER BY date",
-        )
-        .bind(company_id)
-        .fetch_all(&self.pool)
-        .await?;
+        self.get_prices_range(company_id, None, None, None).await
+    }
+
+    /// List a company's prices, optionally bounded by date range and row limit.
+    pub async fn get_prices_range(
+        &self,
+        company_id: i64,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+        limit: Option<i64>,
+    ) -> Result<Vec<PricePoint>> {
+        let mut sql =
+            String::from("SELECT company_id,date,close,volume,source FROM prices WHERE company_id=?");
+        if from.is_some() {
+            sql.push_str(" AND date >= ?");
+        }
+        if to.is_some() {
+            sql.push_str(" AND date <= ?");
+        }
+        sql.push_str(" ORDER BY date");
+        if limit.is_some() {
+            sql.push_str(" LIMIT ?");
+        }
+        let mut q = sqlx::query(&sql).bind(company_id);
+        if let Some(f) = from {
+            q = q.bind(f);
+        }
+        if let Some(t) = to {
+            q = q.bind(t);
+        }
+        if let Some(l) = limit {
+            q = q.bind(l);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|r| {
                 Ok(PricePoint {
@@ -314,15 +342,44 @@ impl Store {
         Ok(())
     }
 
-    /// List a company's financial facts, decoding stored enum tokens.
+    /// List all of a company's financial facts.
     pub async fn get_facts(&self, company_id: i64) -> Result<Vec<FinancialFact>> {
-        let rows = sqlx::query(
+        self.get_facts_range(company_id, None, None, None).await
+    }
+
+    /// List a company's facts, optionally bounded by period-end range and limit.
+    pub async fn get_facts_range(
+        &self,
+        company_id: i64,
+        from: Option<chrono::NaiveDate>,
+        to: Option<chrono::NaiveDate>,
+        limit: Option<i64>,
+    ) -> Result<Vec<FinancialFact>> {
+        let mut sql = String::from(
             "SELECT company_id,statement,line_item,period_type,period_end,value,source,fetched_at \
-             FROM financial_facts WHERE company_id=? ORDER BY period_end",
-        )
-        .bind(company_id)
-        .fetch_all(&self.pool)
-        .await?;
+             FROM financial_facts WHERE company_id=?",
+        );
+        if from.is_some() {
+            sql.push_str(" AND period_end >= ?");
+        }
+        if to.is_some() {
+            sql.push_str(" AND period_end <= ?");
+        }
+        sql.push_str(" ORDER BY period_end");
+        if limit.is_some() {
+            sql.push_str(" LIMIT ?");
+        }
+        let mut q = sqlx::query(&sql).bind(company_id);
+        if let Some(f) = from {
+            q = q.bind(f);
+        }
+        if let Some(t) = to {
+            q = q.bind(t);
+        }
+        if let Some(l) = limit {
+            q = q.bind(l);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|r| {
                 let statement_token: String = r.try_get("statement")?;
@@ -691,6 +748,60 @@ mod tests {
         // idempotent
         store.upsert_companies(&[sample_company()]).await.unwrap();
         assert_eq!(store.all_companies().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_prices_range_filters_by_date_and_limit() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        for d in [
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+        ] {
+            store
+                .upsert_price(&PricePoint { company_id: id, date: d, close: 1.0, volume: None, source: "fmp".into() })
+                .await
+                .unwrap();
+        }
+        let from = NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2024, 2, 28).unwrap();
+        // bounded both sides -> only Feb
+        let r = store.get_prices_range(id, Some(from), Some(to), None).await.unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].date, from);
+        // limit only
+        assert_eq!(store.get_prices_range(id, None, None, Some(2)).await.unwrap().len(), 2);
+        // no bounds == get_prices
+        assert_eq!(store.get_prices(id).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn get_facts_range_filters_by_period_and_limit() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        for y in [2021, 2022, 2023] {
+            store
+                .upsert_fact(&FinancialFact {
+                    company_id: id,
+                    statement: StatementKind::Income,
+                    line_item: "Revenue".into(),
+                    period_type: PeriodType::Annual,
+                    period_end: NaiveDate::from_ymd_opt(y, 12, 31).unwrap(),
+                    value: 1.0,
+                    source: "edgar".into(),
+                    fetched_at: now,
+                })
+                .await
+                .unwrap();
+        }
+        let from = NaiveDate::from_ymd_opt(2022, 1, 1).unwrap();
+        let r = store.get_facts_range(id, Some(from), None, Some(1)).await.unwrap();
+        assert_eq!(r.len(), 1); // 2022 (earliest >= from, limited to 1)
+        assert_eq!(r[0].period_end, NaiveDate::from_ymd_opt(2022, 12, 31).unwrap());
+        let to = NaiveDate::from_ymd_opt(2022, 12, 31).unwrap();
+        assert_eq!(store.get_facts_range(id, None, Some(to), None).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

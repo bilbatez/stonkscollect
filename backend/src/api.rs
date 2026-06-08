@@ -3,10 +3,12 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use chrono::NaiveDate;
+use serde::Deserialize;
 
 use crate::domain::{
     CollectionRun, Company, Discrepancy, FinancialFact, NewsItem, PricePoint, Ratio,
@@ -14,6 +16,14 @@ use crate::domain::{
 use crate::store::{Store, StoreError};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
+
+/// Optional `?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=N` range params.
+#[derive(Debug, Default, Deserialize)]
+struct RangeParams {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    limit: Option<i64>,
+}
 
 /// All API routes, parameterized over a shared [`Store`].
 pub fn routes() -> Router<Arc<Store>> {
@@ -46,17 +56,29 @@ async fn company(State(store): State<Arc<Store>>, Path(ticker): Path<String>) ->
 async fn prices(
     State(store): State<Arc<Store>>,
     Path(ticker): Path<String>,
+    Query(rp): Query<RangeParams>,
 ) -> ApiResult<Vec<PricePoint>> {
     let c = resolve(&store, &ticker).await?;
-    Ok(Json(store.get_prices(c.id).await.map_err(internal)?))
+    Ok(Json(
+        store
+            .get_prices_range(c.id, rp.from, rp.to, rp.limit)
+            .await
+            .map_err(internal)?,
+    ))
 }
 
 async fn facts(
     State(store): State<Arc<Store>>,
     Path(ticker): Path<String>,
+    Query(rp): Query<RangeParams>,
 ) -> ApiResult<Vec<FinancialFact>> {
     let c = resolve(&store, &ticker).await?;
-    Ok(Json(store.get_facts(c.id).await.map_err(internal)?))
+    Ok(Json(
+        store
+            .get_facts_range(c.id, rp.from, rp.to, rp.limit)
+            .await
+            .map_err(internal)?,
+    ))
 }
 
 async fn ratios(
@@ -204,6 +226,18 @@ mod tests {
         let (store, _d) = seeded().await;
         let (status, _) = call(store, "/api/companies/NOPE").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn prices_and_facts_accept_range_params() {
+        let (store, _d) = seeded().await;
+        // limit keeps the (single) seeded price
+        let (status, json) = call(store.clone(), "/api/companies/AAPL/prices?limit=5").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        // from far in the future filters everything out
+        let (_s, json) = call(store, "/api/companies/AAPL/facts?from=2099-01-01").await;
+        assert!(json.as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
