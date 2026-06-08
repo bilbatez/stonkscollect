@@ -7,17 +7,25 @@ COV_IGNORE := (main|http)\.rs
 # Pass tickers to `make collect`, e.g. `make collect ARGS="--ticker AAPL"`.
 ARGS ?= --all
 
-.PHONY: help setup bootstrap collect serve dev-backend dev-frontend \
+.PHONY: help setup demo bootstrap collect serve dev-backend dev-frontend \
         test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
 
 help:
 	@echo "Setup:    make setup        (one-time: .env, data dir, deps, build)"
+	@echo "          make demo         (bootstrap + collect a few tickers + Graham scores)"
 	@echo "Run:      make bootstrap    (load SEC ticker universe)"
 	@echo "          make collect      (collect; ARGS=\"--ticker AAPL\" or default --all)"
 	@echo "          make serve        (API + scheduled collection on :8080)"
 	@echo "          make dev-frontend (dashboard dev server)"
 	@echo "Quality:  make test | cov | lint | e2e"
 	@echo "Docker:   make up | down | build"
+
+# Quick local data: ticker universe + a handful of Graham-friendly names
+# (computes ratios + Graham scores as it goes). Run `make setup` first.
+demo:
+	cd $(BACKEND) && cargo run -- bootstrap
+	cd $(BACKEND) && cargo run -- collect --ticker AAPL --ticker MSFT --ticker KO --ticker JNJ
+	@echo "Demo data ready. Run 'make serve' (and 'make dev-frontend'), then sign up in the UI."
 
 # One-time setup: create .env, data dir, install deps, build backend.
 setup:

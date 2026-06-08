@@ -133,11 +133,33 @@ data/           mounted volume: stonks.db + parquet exports + backups
 Conflicts: every source's value is stored; EDGAR is canonical; mismatches above
 a relative threshold are flagged in the `discrepancies` table and the dashboard.
 
+## Graham fundamental analysis
+
+Implements Benjamin Graham's *Intelligent Investor* defensive-investor framework
+on top of the collected fundamentals. Per company, `GET /api/companies/:t/graham`
+returns a scorecard:
+
+- **Adequate size** — revenue ≥ `GRAHAM_MIN_REVENUE` (default $500M).
+- **Current ratio ≥ 2** and **long-term debt ≤ working capital** (financial strength).
+- **Earnings stability** — positive net income across the available years.
+- **EPS growth ≥ ⅓** over the window (3-yr-average endpoints).
+- **P/E ≤ 15** (price ÷ 3-yr-avg EPS) and **P/B ≤ 1.5 (or P/E·P/B ≤ 22.5)**.
+- **Dividend record** — paid each available year.
+
+Plus the **Graham Number** (√(22.5·EPS·BVPS)), **margin of safety** vs price,
+and a **net-net** flag (price < ⅔ NCAV/share). `GET /api/screen?defensive=true`
+ranks companies that pass. Windows degrade to the ~10–15y EDGAR provides; a
+criterion with missing inputs reports *insufficient data* rather than passing.
+
+Quick start: `make setup` then `make demo` (loads the ticker universe + a few
+names and computes their scores), `make serve`, sign up, open a company.
+
 ## REST API
 
-`GET /health` and, under `/api`:
-`companies/:ticker`, `…/prices`, `…/facts`, `…/ratios`, `…/news`,
-`…/discrepancies`, and `runs` (recent collection runs).
+`GET /health` and, under `/api` (bearer-token auth):
+`companies/:ticker` (+ `/prices`, `/facts`, `/ratios`, `/news`,
+`/discrepancies`, `/graham`, `/summary`), `screen`, `watchlist`, and `runs`.
+`POST /auth/{signup,login,logout}`, `GET /auth/me`.
 
 ## Performance & concurrency
 
