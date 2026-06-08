@@ -7,9 +7,9 @@ and serves a **dashboard with graphs** for fundamental analysis.
 Not real-time — the goal is the *latest* data, stored and queryable, with
 discrepancies between sources surfaced so you can trust the numbers.
 
-> Status: all building blocks implemented and tested. The live collection
-> *driver* (the loop that runs collectors on a schedule) is the one remaining
-> integration step — see [Roadmap](#roadmap).
+Multi-user: accounts (argon2 + bearer-token sessions) with per-user watchlists;
+market data is shared/global. The React dashboard has login/signup, a watchlist,
+multi-ticker compare, dark mode, and charts.
 
 ---
 
@@ -179,8 +179,10 @@ functions — see the `Makefile`.
 
 ## Roadmap
 
-- Persist prices + news (collectors exist; only facts are wired into ingest).
-- Ratios computed from stored facts; segment/ownership/guidance ingestion;
-  per-ticker schedule overrides; scheduled Parquet exports.
+- **Candlestick charts** need OHLC; only daily *close* is stored today, so the
+  price chart is a close line. Capturing OHLC would unlock candlesticks.
+- HTTP conditional GET (ETag/If-Modified-Since) on top of the freshness skip.
+- Segment/ownership/guidance ingestion; per-ticker schedule overrides;
+  scheduled Parquet exports.
 
 See `CLAUDE.md` / `AGENTS.md` for contributor + AI-agent conventions.

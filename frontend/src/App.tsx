@@ -1,89 +1,178 @@
-import { lazy, Suspense, useState, type FormEvent } from 'react'
-import { loadCompanyData } from './api'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import {
+  addWatch,
+  getToken,
+  getWatchlist,
+  loadCompanyData,
+  logout,
+  removeWatch,
+} from './api'
 import { freshness } from './format'
+import { AuthForm } from './components/AuthForm'
+import { Compare, type CompareRow } from './components/Compare'
 import { DiscrepancyPanel } from './components/DiscrepancyPanel'
 import { FreshnessBadge } from './components/FreshnessBadge'
 import { NewsFeed } from './components/NewsFeed'
 import { RatiosPanel } from './components/RatiosPanel'
+import { Skeleton } from './components/Skeleton'
 import { StatementTable } from './components/StatementTable'
-import type { CompanyData } from './types'
+import { ThemeToggle, type Theme } from './components/ThemeToggle'
+import { Watchlist } from './components/Watchlist'
+import type { Company, CompanyData } from './types'
 
-// Code-split the heavy echarts bundle out of the initial page load.
 const PriceChart = lazy(() => import('./charts/PriceChart'))
 
-type Status = 'idle' | 'loading' | 'loaded' | 'error'
+type View =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'error'; ticker: string }
+  | { kind: 'company'; data: CompanyData; loadedAt: number }
+  | { kind: 'compare'; rows: CompareRow[] }
 
-function Dashboard({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
-  const { company } = data
+/** Latest value per ratio metric (later periods overwrite earlier). */
+function latestMetrics(data: CompanyData): Record<string, number> {
+  const m: Record<string, number> = {}
+  for (const r of data.ratios) {
+    m[r.metric] = r.value
+  }
+  return m
+}
+
+function Dashboard({
+  onLogout,
+  theme,
+  onToggleTheme,
+}: {
+  onLogout: () => void
+  theme: Theme
+  onToggleTheme: () => void
+}) {
+  const [items, setItems] = useState<Company[]>([])
+  const [view, setView] = useState<View>({ kind: 'idle' })
+
+  const refreshWatchlist = useCallback(async () => {
+    setItems(await getWatchlist())
+  }, [])
+
+  // Load the watchlist once on mount (async fetch, not a synchronous cascade).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshWatchlist()
+  }, [refreshWatchlist])
+
+  async function select(ticker: string) {
+    setView({ kind: 'loading' })
+    try {
+      const data = await loadCompanyData(ticker)
+      setView({ kind: 'company', data, loadedAt: Date.now() })
+    } catch {
+      setView({ kind: 'error', ticker })
+    }
+  }
+
+  async function add(ticker: string) {
+    await addWatch(ticker)
+    await refreshWatchlist()
+  }
+  async function remove(ticker: string) {
+    await removeWatch(ticker)
+    await refreshWatchlist()
+  }
+
+  async function compare() {
+    setView({ kind: 'loading' })
+    const all = await Promise.all(items.map((c) => loadCompanyData(c.ticker)))
+    const rows = all.map((d) => ({ ticker: d.company.ticker, metrics: latestMetrics(d) }))
+    setView({ kind: 'compare', rows })
+  }
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <h1>StonksCollect</h1>
+        <div>
+          <button type="button" onClick={() => void compare()}>
+            Compare
+          </button>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <button type="button" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
+      </header>
+
+      <div className="layout">
+        <Watchlist
+          items={items}
+          onSelect={(t) => void select(t)}
+          onAdd={(t) => void add(t)}
+          onRemove={(t) => void remove(t)}
+        />
+        <section className="content">
+          {view.kind === 'idle' && <p>Select a ticker to begin.</p>}
+          {view.kind === 'loading' && <Skeleton />}
+          {view.kind === 'error' && (
+            <div role="alert">
+              <p>Failed to load {view.ticker}.</p>
+              <button type="button" onClick={() => void select(view.ticker)}>
+                Retry
+              </button>
+            </div>
+          )}
+          {view.kind === 'compare' && <Compare rows={view.rows} />}
+          {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
   const latestPriceDate = data.prices[0]?.date ?? null
   return (
-    <section>
+    <article>
       <header className="company-header">
         <h2>
-          {company.name} ({company.ticker})
+          {data.company.name} ({data.company.ticker})
         </h2>
         <FreshnessBadge status={freshness(latestPriceDate, loadedAt)} />
       </header>
-
       <h3>Price</h3>
-      <Suspense fallback={<p>Loading chart…</p>}>
+      <Suspense fallback={<Skeleton label="Loading chart…" />}>
         <PriceChart prices={data.prices} />
       </Suspense>
-
       <h3>Statements</h3>
       <StatementTable facts={data.facts} />
-
       <h3>Ratios</h3>
       <RatiosPanel ratios={data.ratios} />
-
       <h3>News</h3>
       <NewsFeed news={data.news} />
-
       <h3>Discrepancies</h3>
       <DiscrepancyPanel discrepancies={data.discrepancies} />
-    </section>
+    </article>
   )
 }
 
 function App() {
-  const [ticker, setTicker] = useState('')
-  const [status, setStatus] = useState<Status>('idle')
-  const [data, setData] = useState<CompanyData | null>(null)
-  const [loadedAt, setLoadedAt] = useState(0)
-  const [error, setError] = useState('')
+  const [token, setTokenState] = useState<string | null>(getToken())
+  const [theme, setTheme] = useState<Theme>('light')
 
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    setStatus('loading')
-    setError('')
-    try {
-      const loaded = await loadCompanyData(ticker.trim())
-      setData(loaded)
-      setLoadedAt(Date.now())
-      setStatus('loaded')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to load')
-      setStatus('error')
-    }
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+  }, [theme])
+
+  if (token === null) {
+    return <AuthForm onAuth={setTokenState} />
   }
-
   return (
-    <main>
-      <h1>StonksCollect</h1>
-      <form onSubmit={submit}>
-        <input
-          aria-label="ticker"
-          placeholder="Ticker (e.g. AAPL)"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-        />
-        <button type="submit">Load</button>
-      </form>
-
-      {status === 'loading' && <p>Loading…</p>}
-      {status === 'error' && <p role="alert">{error}</p>}
-      {status === 'loaded' && data !== null && <Dashboard data={data} loadedAt={loadedAt} />}
-    </main>
+    <Dashboard
+      onLogout={() => {
+        void logout()
+        setTokenState(null)
+      }}
+      theme={theme}
+      onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+    />
   )
 }
 

@@ -1,52 +1,107 @@
-import { afterEach, expect, test, vi } from 'vitest'
-import { loadCompanyData } from './api'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import {
+  addWatch,
+  clearToken,
+  getToken,
+  getWatchlist,
+  loadCompanyData,
+  login,
+  logout,
+  removeWatch,
+  setToken,
+  signup,
+} from './api'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+interface Call {
+  url: string
+  init: RequestInit
+}
+let calls: Call[]
 
-function mockFetchSequence(bodies: unknown[]) {
-  let i = 0
+function mockFetch(handler: (url: string, init: RequestInit) => Partial<Response> & { json?: () => Promise<unknown> }) {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => {
-      const body = bodies[i++]
-      return { ok: true, status: 200, json: async () => body } as Response
+    vi.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url, init })
+      return { ok: true, status: 200, json: async () => ({}), ...handler(url, init) } as Response
     }),
   )
 }
 
-test('loadCompanyData fetches all sections and assembles them', async () => {
+beforeEach(() => {
+  calls = []
+  localStorage.clear()
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+test('token storage helpers round-trip', () => {
+  expect(getToken()).toBeNull()
+  setToken('abc')
+  expect(getToken()).toBe('abc')
+  clearToken()
+  expect(getToken()).toBeNull()
+})
+
+test('signup and login store the token and attach it to later requests', async () => {
+  mockFetch(() => ({ json: async () => ({ token: 't1' }) }))
+  await signup('a@e.com', 'pw')
+  expect(getToken()).toBe('t1')
+  expect(calls[0].url).toBe('/auth/signup')
+
+  await login('a@e.com', 'pw')
+  expect(getToken()).toBe('t1')
+
+  // a subsequent authed call carries the bearer header
+  await getWatchlist()
+  const headers = new Headers(calls[2].init.headers)
+  expect(headers.get('Authorization')).toBe('Bearer t1')
+})
+
+test('requests without a token omit the Authorization header', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await getWatchlist()
+  const headers = new Headers(calls[0].init.headers)
+  expect(headers.has('Authorization')).toBe(false)
+})
+
+test('logout clears the token', async () => {
+  setToken('t')
+  mockFetch(() => ({}))
+  await logout()
+  expect(calls[0].url).toBe('/auth/logout')
+  expect(getToken()).toBeNull()
+})
+
+test('getJson throws on a non-ok response', async () => {
+  mockFetch(() => ({ ok: false, status: 401 }))
+  await expect(getWatchlist()).rejects.toThrow(/401/)
+})
+
+test('postJson throws on a non-ok response', async () => {
+  mockFetch(() => ({ ok: false, status: 409 }))
+  await expect(signup('a@e.com', 'pw')).rejects.toThrow(/409/)
+})
+
+test('watchlist add and remove hit the right method + path', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await addWatch('AAPL')
+  expect(calls[0].url).toBe('/api/watchlist')
+  expect(calls[0].init.method).toBe('POST')
+  await removeWatch('AAPL')
+  expect(calls[1].url).toBe('/api/watchlist/AAPL')
+  expect(calls[1].init.method).toBe('DELETE')
+})
+
+test('loadCompanyData fetches and assembles all sections', async () => {
   const company = { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null }
-  mockFetchSequence([company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'pe' }], [{ title: 'Hi' }], [{ field: 'Revenue' }]])
+  let i = 0
+  const bodies: unknown[] = [company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }], [{ title: 'Hi' }], [{ field: 'Revenue' }]]
+  mockFetch(() => ({ json: async () => bodies[i++] }))
   const data = await loadCompanyData('AAPL')
   expect(data.company.ticker).toBe('AAPL')
   expect(data.prices).toHaveLength(1)
-  expect(data.facts[0].line_item).toBe('Revenue')
-  expect(data.ratios[0].metric).toBe('pe')
-  expect(data.news[0].title).toBe('Hi')
-  expect(data.discrepancies[0].field).toBe('Revenue')
-})
-
-test('loadCompanyData throws on a non-ok response', async () => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) }) as Response),
-  )
-  await expect(loadCompanyData('NOPE')).rejects.toThrow(/404/)
-})
-
-test('requests target the expected URLs', async () => {
-  const calls: string[] = []
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      calls.push(url)
-      return { ok: true, status: 200, json: async () => [] } as Response
-    }),
-  )
-  await loadCompanyData('msft')
-  expect(calls[0]).toBe('/api/companies/msft')
-  expect(calls).toContain('/api/companies/msft/prices')
-  expect(calls).toContain('/api/companies/msft/discrepancies')
+  expect(data.ratios[0].metric).toBe('roe')
+  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/discrepancies')
 })

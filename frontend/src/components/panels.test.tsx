@@ -47,9 +47,11 @@ test('RatiosPanel lists metrics and values', () => {
   const ratios: Ratio[] = [
     { company_id: 1, period_end: '2023-12-31', metric: 'pe', value: 28.5, computed_at: '' },
   ]
-  render(<RatiosPanel ratios={ratios} />)
+  const { rerender } = render(<RatiosPanel ratios={ratios} />)
   expect(screen.getByText('pe')).toBeInTheDocument()
   expect(screen.getByText('28.5')).toBeInTheDocument()
+  rerender(<RatiosPanel ratios={[]} />)
+  expect(screen.getByText(/no ratio data/i)).toBeInTheDocument()
 })
 
 test('NewsFeed renders headlines with optional descriptions', () => {
