@@ -15,8 +15,14 @@ use stonkscollect_backend::collectors::scrape::ScrapeCollector;
 use stonkscollect_backend::collectors::FactSource;
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
+use stonkscollect_backend::net::{RateLimiter, RetryPolicy};
 use stonkscollect_backend::store::Store;
 use stonkscollect_backend::{app, pipeline, scheduler};
+
+/// Build a rate-limited, retrying HTTP client sharing `limiter`.
+fn http_client(user_agent: &str, limiter: &Arc<RateLimiter>) -> ReqwestClient {
+    ReqwestClient::with_limiter(user_agent, RetryPolicy::default(), Some(limiter.clone()))
+}
 
 #[derive(Parser)]
 #[command(name = "stonkscollect", about = "US-equity fundamental data collector")]
@@ -89,16 +95,18 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
 
     // Bulk runs use EDGAR (+FMP if keyed) only — scraping the whole universe
     // would abuse the scrape host. Targeted runs add the scrape fallback.
-    let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
+    // All clients share one rate limiter so total request rate stays polite.
+    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(ReqwestClient::new(&cfg.user_agent), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         sources.push(&fmp);
     }
     let scrape;
     if !cfg.collect_all {
-        scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
         sources.push(&scrape);
     }
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
@@ -141,7 +149,8 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
 }
 
 async fn bootstrap(store: &Store, cfg: &Config) {
-    let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
+    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
     let refs = edgar.collect_company_tickers().await.expect("fetch tickers");
     let n = pipeline::bootstrap_companies(store, &refs)
         .await
@@ -152,16 +161,17 @@ async fn bootstrap(store: &Store, cfg: &Config) {
 async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
 
-    let edgar = EdgarCollector::new(ReqwestClient::new(&cfg.user_agent));
+    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(ReqwestClient::new(&cfg.user_agent), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         sources.push(&fmp);
     }
     let scrape;
     if !bulk {
-        scrape = ScrapeCollector::new(ReqwestClient::new(&cfg.user_agent));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
         sources.push(&scrape);
     }
 

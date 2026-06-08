@@ -2,7 +2,7 @@
 //! a financials table. Includes a politeness rate-limit primitive.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use scraper::{Html, Selector};
 
 use crate::collectors::{CollectorError, FactSource, HttpClient, SourceTarget};
@@ -33,15 +33,6 @@ fn lookup(metric: &str) -> Option<(StatementKind, &'static str)> {
 fn parse_number(text: &str) -> Option<f64> {
     let cleaned: String = text.chars().filter(|c| *c != ',' && *c != ' ').collect();
     cleaned.parse::<f64>().ok()
-}
-
-/// Whether a request is allowed now given the last request time and a minimum
-/// spacing interval (politeness rate limit).
-pub fn allow_request(last: Option<DateTime<Utc>>, now: DateTime<Utc>, min_interval: Duration) -> bool {
-    match last {
-        None => true,
-        Some(prev) => now.signed_duration_since(prev) >= min_interval,
-    }
 }
 
 /// Parse a financials table into facts. Values are in millions. Rows that are
@@ -137,7 +128,7 @@ mod tests {
     use super::*;
     use crate::domain::{PeriodType, StatementKind};
     use crate::testutil::{fixed_now as now, FakeHttp};
-    use chrono::{Duration, NaiveDate};
+    use chrono::NaiveDate;
 
     const HTML: &str = include_str!("../../tests/fixtures/scrape_financials.html");
 
@@ -178,13 +169,5 @@ mod tests {
         let facts = c.collect(7, "AAPL", now()).await.unwrap();
         assert_eq!(facts.len(), 3);
         assert!(c.http.url().unwrap().contains("AAPL"));
-    }
-
-    #[test]
-    fn rate_limit_allows_first_and_spaced_requests() {
-        let min = Duration::seconds(10);
-        assert!(allow_request(None, now(), min));
-        assert!(allow_request(Some(now() - Duration::seconds(20)), now(), min));
-        assert!(!allow_request(Some(now() - Duration::seconds(5)), now(), min));
     }
 }
