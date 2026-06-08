@@ -80,10 +80,34 @@ async fn serve(store: Store, cfg: &Config) {
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
 
-    // Serve the API and run the tiered collection loop on the same task.
+    // Serve the API (with graceful shutdown) and run the tiered collection loop
+    // on the same task. A shutdown signal ends axum's future, which ends the
+    // select and drops the loop.
     tokio::select! {
-        result = axum::serve(listener, app(store.clone())) => result.expect("server error"),
+        result = axum::serve(listener, app(store.clone()))
+            .with_graceful_shutdown(shutdown_signal()) => result.expect("server error"),
         _ = scheduler_loop(&store, cfg) => {}
+    }
+    tracing::info!("shut down");
+}
+
+/// Resolves when the process receives Ctrl-C or (on Unix) SIGTERM.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
     }
 }
 
