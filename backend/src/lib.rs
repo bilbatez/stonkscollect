@@ -5,6 +5,7 @@ pub mod auth;
 pub mod collectors;
 pub mod config;
 pub mod domain;
+pub mod graham;
 pub mod http;
 pub mod net;
 pub mod pipeline;

@@ -20,27 +20,49 @@ pub fn compute(company_id: i64, facts: &[FinancialFact], now: DateTime<Utc>) -> 
 
     let mut ratios = Vec::new();
     for (period_end, items) in by_period {
-        let mut push = |metric: &str, num: Option<&f64>, den: Option<&f64>| {
-            if let (Some(&n), Some(&d)) = (num, den) {
-                if d != 0.0 {
-                    ratios.push(Ratio {
-                        company_id,
-                        period_end,
-                        metric: metric.to_string(),
-                        value: n / d,
-                        computed_at: now,
-                    });
-                }
+        // num/den, guarding a zero denominator.
+        let ratio = |num: Option<&f64>, den: Option<&f64>| -> Option<f64> {
+            match (num, den) {
+                (Some(&n), Some(&d)) if d != 0.0 => Some(n / d),
+                _ => None,
             }
         };
+        let mut add = |metric: &str, value: Option<f64>| {
+            if let Some(v) = value {
+                ratios.push(Ratio {
+                    company_id,
+                    period_end,
+                    metric: metric.to_string(),
+                    value: v,
+                    computed_at: now,
+                });
+            }
+        };
+
         let net_income = items.get("NetIncome");
-        push("net_margin", net_income, items.get("Revenue"));
-        push("roe", net_income, items.get("StockholdersEquity"));
-        push(
+        let revenue = items.get("Revenue");
+        add("net_margin", ratio(net_income, revenue));
+        add("roe", ratio(net_income, items.get("StockholdersEquity")));
+        add(
             "debt_to_equity",
-            items.get("TotalLiabilities"),
-            items.get("StockholdersEquity"),
+            ratio(items.get("TotalLiabilities"), items.get("StockholdersEquity")),
         );
+        add("gross_margin", ratio(items.get("GrossProfit"), revenue));
+        add("operating_margin", ratio(items.get("OperatingIncome"), revenue));
+        add(
+            "current_ratio",
+            ratio(items.get("CurrentAssets"), items.get("CurrentLiabilities")),
+        );
+        add(
+            "book_value_per_share",
+            ratio(items.get("StockholdersEquity"), items.get("SharesOutstanding")),
+        );
+        // Working capital is a difference, not a ratio.
+        let working_capital = match (items.get("CurrentAssets"), items.get("CurrentLiabilities")) {
+            (Some(&ca), Some(&cl)) => Some(ca - cl),
+            _ => None,
+        };
+        add("working_capital", working_capital);
     }
     ratios
 }
@@ -82,6 +104,26 @@ mod tests {
         assert_eq!(metric(&r, "roe").unwrap().value, 0.625);
         assert_eq!(metric(&r, "debt_to_equity").unwrap().value, 1.5);
         assert_eq!(r.len(), 3);
+    }
+
+    #[test]
+    fn computes_graham_inputs() {
+        let p = (2023, 12, 31);
+        let facts = vec![
+            fact("Revenue", p, 100.0),
+            fact("GrossProfit", p, 40.0),
+            fact("OperatingIncome", p, 30.0),
+            fact("CurrentAssets", p, 60.0),
+            fact("CurrentLiabilities", p, 24.0),
+            fact("StockholdersEquity", p, 80.0),
+            fact("SharesOutstanding", p, 8.0),
+        ];
+        let r = compute(1, &facts, fixed_now());
+        assert_eq!(metric(&r, "gross_margin").unwrap().value, 0.4);
+        assert_eq!(metric(&r, "operating_margin").unwrap().value, 0.3);
+        assert_eq!(metric(&r, "current_ratio").unwrap().value, 2.5);
+        assert_eq!(metric(&r, "working_capital").unwrap().value, 36.0);
+        assert_eq!(metric(&r, "book_value_per_share").unwrap().value, 10.0);
     }
 
     #[test]
