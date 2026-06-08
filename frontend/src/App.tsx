@@ -6,19 +6,22 @@ import {
   loadCompanyData,
   logout,
   removeWatch,
+  screen,
 } from './api'
 import { freshness } from './format'
 import { AuthForm } from './components/AuthForm'
 import { Compare, type CompareRow } from './components/Compare'
 import { DiscrepancyPanel } from './components/DiscrepancyPanel'
 import { FreshnessBadge } from './components/FreshnessBadge'
+import { GrahamScorecard } from './components/GrahamScorecard'
 import { NewsFeed } from './components/NewsFeed'
 import { RatiosPanel } from './components/RatiosPanel'
+import { Screener } from './components/Screener'
 import { Skeleton } from './components/Skeleton'
 import { StatementTable } from './components/StatementTable'
 import { ThemeToggle, type Theme } from './components/ThemeToggle'
 import { Watchlist } from './components/Watchlist'
-import type { Company, CompanyData } from './types'
+import type { Company, CompanyData, ScreenRow } from './types'
 
 const PriceChart = lazy(() => import('./charts/PriceChart'))
 
@@ -28,6 +31,7 @@ type View =
   | { kind: 'error'; ticker: string }
   | { kind: 'company'; data: CompanyData; loadedAt: number }
   | { kind: 'compare'; rows: CompareRow[] }
+  | { kind: 'screen'; rows: ScreenRow[]; defensive: boolean }
 
 /** Latest value per ratio metric (later periods overwrite earlier). */
 function latestMetrics(data: CompanyData): Record<string, number> {
@@ -86,6 +90,11 @@ function Dashboard({
     setView({ kind: 'compare', rows })
   }
 
+  async function openScreener(defensive: boolean) {
+    setView({ kind: 'loading' })
+    setView({ kind: 'screen', rows: await screen(defensive), defensive })
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -93,6 +102,9 @@ function Dashboard({
         <div>
           <button type="button" onClick={() => void compare()}>
             Compare
+          </button>
+          <button type="button" onClick={() => void openScreener(true)}>
+            Screener
           </button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <button type="button" onClick={onLogout}>
@@ -120,6 +132,14 @@ function Dashboard({
             </div>
           )}
           {view.kind === 'compare' && <Compare rows={view.rows} />}
+          {view.kind === 'screen' && (
+            <Screener
+              rows={view.rows}
+              defensiveOnly={view.defensive}
+              onToggleDefensive={() => void openScreener(!view.defensive)}
+              onSelect={(t) => void select(t)}
+            />
+          )}
           {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
         </section>
       </div>
@@ -143,6 +163,7 @@ function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }
       </Suspense>
       <h3>Statements</h3>
       <StatementTable facts={data.facts} />
+      <GrahamScorecard assessment={data.graham} />
       <h3>Ratios</h3>
       <RatiosPanel ratios={data.ratios} />
       <h3>News</h3>

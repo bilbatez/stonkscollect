@@ -23,6 +23,19 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await page.route(`${base}/ratios`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/news`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/discrepancies`, (route) => route.fulfill({ json: [] }))
+  await page.route(`${base}/graham`, (route) =>
+    route.fulfill({
+      json: {
+        criteria: [{ name: 'Current ratio >= 2', passed: true, detail: 'current ratio 2.5' }],
+        score: 1,
+        graham_number: 22.4,
+        ncav_per_share: null,
+        margin_of_safety: 0.1,
+        net_net: false,
+        passes_defensive: true,
+      },
+    }),
+  )
 
   await page.goto('/')
   await page.getByLabel('email').fill('a@e.com')
@@ -37,4 +50,5 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /apple inc/i })).toBeVisible()
   await expect(page.getByText('Revenue')).toBeVisible()
   await expect(page.getByText('$383.3B')).toBeVisible()
+  await expect(page.getByText(/graham scorecard/i)).toBeVisible()
 })

@@ -109,3 +109,22 @@ td {
   margin-left: 0.5rem;
   font-size: 0.85rem;
 }
+
+.graham .criteria {
+  list-style: none;
+  padding: 0;
+}
+.graham .criteria .pass {
+  color: #16a34a;
+}
+.graham .criteria .fail {
+  color: #dc2626;
+}
+.graham .criteria .detail {
+  color: var(--muted);
+}
+.graham .valuation {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}

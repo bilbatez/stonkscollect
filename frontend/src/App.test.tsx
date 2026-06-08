@@ -22,6 +22,15 @@ function data(ticker: string): CompanyData {
     ratios: [{ company_id: 1, period_end: '2023-12-31', metric: 'roe', value: 1.5, computed_at: '' }],
     news: [],
     discrepancies: [],
+    graham: {
+      criteria: [{ name: 'Current ratio >= 2', passed: true, detail: 'current ratio 2.5' }],
+      score: 1,
+      graham_number: 22.4,
+      ncav_per_share: null,
+      margin_of_safety: 0.1,
+      net_net: false,
+      passes_defensive: true,
+    },
   }
 }
 
@@ -102,6 +111,30 @@ test('company with no prices shows unknown freshness', async () => {
   render(<App />)
   await userEvent.click(await screen.findByRole('button', { name: 'AAPL' }))
   await waitFor(() => expect(screen.getByText(/unknown/i)).toBeInTheDocument())
+})
+
+test('screener lists passers and a row loads that company', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.getWatchlist.mockResolvedValue([])
+  mocked.screen.mockResolvedValue([
+    {
+      company: company('KO'),
+      score: { company_id: 1, score: 7, passes_defensive: true, graham_number: 60, ncav_per_share: null, margin_of_safety: 0.3, net_net: false, computed_at: '' },
+    },
+  ])
+  mocked.loadCompanyData.mockResolvedValue(data('KO'))
+
+  render(<App />)
+  await screen.findByText(/select a ticker/i)
+  await userEvent.click(screen.getByRole('button', { name: /screener/i }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'KO' })).toBeInTheDocument())
+  expect(mocked.screen).toHaveBeenCalledWith(true)
+  // toggle defensive reloads
+  await userEvent.click(screen.getByLabelText(/defensive only/i))
+  await waitFor(() => expect(mocked.screen).toHaveBeenCalledWith(false))
+  // click a passer -> company view with scorecard
+  await userEvent.click(screen.getByRole('button', { name: 'KO' }))
+  await waitFor(() => expect(screen.getByText(/graham scorecard/i)).toBeInTheDocument())
 })
 
 test('compare builds a matrix across the watchlist', async () => {

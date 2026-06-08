@@ -57,6 +57,38 @@ export interface Discrepancy {
   flagged_at: string
 }
 
+export interface GrahamCriterion {
+  name: string
+  passed: boolean
+  detail: string
+}
+
+export interface GrahamAssessment {
+  criteria: GrahamCriterion[]
+  score: number
+  graham_number: number | null
+  ncav_per_share: number | null
+  margin_of_safety: number | null
+  net_net: boolean
+  passes_defensive: boolean
+}
+
+export interface GrahamScore {
+  company_id: number
+  score: number
+  passes_defensive: boolean
+  graham_number: number | null
+  ncav_per_share: number | null
+  margin_of_safety: number | null
+  net_net: boolean
+  computed_at: string
+}
+
+export interface ScreenRow {
+  company: Company
+  score: GrahamScore
+}
+
 export interface CompanyData {
   company: Company
   prices: PricePoint[]
@@ -64,4 +96,5 @@ export interface CompanyData {
   ratios: Ratio[]
   news: NewsItem[]
   discrepancies: Discrepancy[]
+  graham: GrahamAssessment
 }

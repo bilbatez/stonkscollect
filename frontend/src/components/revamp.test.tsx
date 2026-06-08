@@ -3,11 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuthForm } from './AuthForm'
 import { Compare } from './Compare'
+import { GrahamScorecard } from './GrahamScorecard'
+import { Screener } from './Screener'
 import { Skeleton } from './Skeleton'
 import { ThemeToggle } from './ThemeToggle'
 import { Watchlist } from './Watchlist'
 import * as api from '../api'
-import type { Company } from '../types'
+import type { Company, GrahamAssessment, ScreenRow } from '../types'
 
 vi.mock('../api')
 
@@ -104,6 +106,60 @@ test('Skeleton renders a status label', () => {
   expect(screen.getByRole('status')).toHaveTextContent('Loading prices')
   render(<Skeleton />)
   expect(screen.getAllByRole('status')[1]).toHaveTextContent('Loading…')
+})
+
+test('GrahamScorecard renders criteria, valuation, and net-net badge', () => {
+  const assessment: GrahamAssessment = {
+    criteria: [
+      { name: 'Current ratio >= 2', passed: true, detail: 'current ratio 2.5' },
+      { name: 'P/E <= 15', passed: false, detail: 'P/E 30' },
+    ],
+    score: 1,
+    graham_number: 22.4,
+    ncav_per_share: 5,
+    margin_of_safety: null, // exercises the dash branch
+    net_net: true,
+    passes_defensive: false,
+  }
+  render(<GrahamScorecard assessment={assessment} />)
+  expect(screen.getByText(/Current ratio >= 2/)).toBeInTheDocument()
+  expect(screen.getByText('22.40')).toBeInTheDocument()
+  expect(screen.getByText('net-net')).toBeInTheDocument()
+  expect(screen.getByText('1/2')).toBeInTheDocument()
+  // a null graham number renders a dash
+  render(
+    <GrahamScorecard
+      assessment={{ ...assessment, graham_number: null, margin_of_safety: 0.2 }}
+    />,
+  )
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+})
+
+test('Screener lists rows, selects, toggles, and shows empty state', async () => {
+  const onSelect = vi.fn()
+  const onToggle = vi.fn()
+  const rows: ScreenRow[] = [
+    {
+      company: company('KO'),
+      score: { company_id: 1, score: 7, passes_defensive: true, graham_number: 60, ncav_per_share: null, margin_of_safety: 0.3, net_net: false, computed_at: '' },
+    },
+    {
+      // null graham_number + margin exercise the dash branches
+      company: company('JNJ'),
+      score: { company_id: 2, score: 5, passes_defensive: true, graham_number: null, ncav_per_share: null, margin_of_safety: null, net_net: false, computed_at: '' },
+    },
+  ]
+  const { rerender } = render(
+    <Screener rows={rows} defensiveOnly onToggleDefensive={onToggle} onSelect={onSelect} />,
+  )
+  expect(screen.getByText('60.00')).toBeInTheDocument()
+  expect(screen.getByText('30%')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'KO' }))
+  expect(onSelect).toHaveBeenCalledWith('KO')
+  await userEvent.click(screen.getByLabelText(/defensive only/i))
+  expect(onToggle).toHaveBeenCalled()
+  rerender(<Screener rows={[]} defensiveOnly={false} onToggleDefensive={onToggle} onSelect={onSelect} />)
+  expect(screen.getByText(/no matches/i)).toBeInTheDocument()
 })
 
 test('Compare builds a metric matrix and dashes missing cells', () => {

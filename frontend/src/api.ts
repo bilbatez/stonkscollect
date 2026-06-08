@@ -3,9 +3,11 @@ import type {
   CompanyData,
   Discrepancy,
   FinancialFact,
+  GrahamAssessment,
   NewsItem,
   PricePoint,
   Ratio,
+  ScreenRow,
 } from './types'
 
 const TOKEN_KEY = 'stonks_token'
@@ -96,13 +98,19 @@ export async function removeWatch(ticker: string): Promise<void> {
 /** Fetch a company and all of its records in parallel. */
 export async function loadCompanyData(ticker: string): Promise<CompanyData> {
   const base = `/api/companies/${ticker}`
-  const [company, prices, facts, ratios, news, discrepancies] = await Promise.all([
+  const [company, prices, facts, ratios, news, discrepancies, graham] = await Promise.all([
     getJson<Company>(base),
     getJson<PricePoint[]>(`${base}/prices`),
     getJson<FinancialFact[]>(`${base}/facts`),
     getJson<Ratio[]>(`${base}/ratios`),
     getJson<NewsItem[]>(`${base}/news`),
     getJson<Discrepancy[]>(`${base}/discrepancies`),
+    getJson<GrahamAssessment>(`${base}/graham`),
   ])
-  return { company, prices, facts, ratios, news, discrepancies }
+  return { company, prices, facts, ratios, news, discrepancies, graham }
+}
+
+/** Screen companies by Graham score. */
+export function screen(defensive: boolean, minScore = 0): Promise<ScreenRow[]> {
+  return getJson<ScreenRow[]>(`/api/screen?defensive=${defensive}&min_score=${minScore}`)
 }

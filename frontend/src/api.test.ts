@@ -8,6 +8,7 @@ import {
   login,
   logout,
   removeWatch,
+  screen,
   setToken,
   signup,
 } from './api'
@@ -97,11 +98,18 @@ test('watchlist add and remove hit the right method + path', async () => {
 test('loadCompanyData fetches and assembles all sections', async () => {
   const company = { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null }
   let i = 0
-  const bodies: unknown[] = [company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }], [{ title: 'Hi' }], [{ field: 'Revenue' }]]
+  const bodies: unknown[] = [company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }], [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] }]
   mockFetch(() => ({ json: async () => bodies[i++] }))
   const data = await loadCompanyData('AAPL')
   expect(data.company.ticker).toBe('AAPL')
   expect(data.prices).toHaveLength(1)
   expect(data.ratios[0].metric).toBe('roe')
-  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/discrepancies')
+  expect(data.graham.score).toBe(5)
+  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/graham')
+})
+
+test('screen builds the query string', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await screen(true, 3)
+  expect(calls[0].url).toBe('/api/screen?defensive=true&min_score=3')
 })
