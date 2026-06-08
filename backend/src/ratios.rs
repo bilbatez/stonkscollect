@@ -57,12 +57,26 @@ pub fn compute(company_id: i64, facts: &[FinancialFact], now: DateTime<Utc>) -> 
             "book_value_per_share",
             ratio(items.get("StockholdersEquity"), items.get("SharesOutstanding")),
         );
+        add("payout_ratio", ratio(items.get("DividendPerShare"), items.get("Eps")));
         // Working capital is a difference, not a ratio.
         let working_capital = match (items.get("CurrentAssets"), items.get("CurrentLiabilities")) {
             (Some(&ca), Some(&cl)) => Some(ca - cl),
             _ => None,
         };
         add("working_capital", working_capital);
+        // Free cash flow = operating cash flow − capital expenditure.
+        let fcf = match (items.get("OperatingCashFlow"), items.get("CapEx")) {
+            (Some(&ocf), Some(&capex)) => Some(ocf - capex),
+            _ => None,
+        };
+        add("free_cash_flow", fcf);
+        add(
+            "fcf_margin",
+            match (fcf, revenue) {
+                (Some(f), Some(&r)) if r != 0.0 => Some(f / r),
+                _ => None,
+            },
+        );
     }
     ratios
 }
@@ -124,6 +138,22 @@ mod tests {
         assert_eq!(metric(&r, "current_ratio").unwrap().value, 2.5);
         assert_eq!(metric(&r, "working_capital").unwrap().value, 36.0);
         assert_eq!(metric(&r, "book_value_per_share").unwrap().value, 10.0);
+    }
+
+    #[test]
+    fn computes_cash_flow_and_payout_metrics() {
+        let p = (2023, 12, 31);
+        let facts = vec![
+            fact("Revenue", p, 100.0),
+            fact("OperatingCashFlow", p, 30.0),
+            fact("CapEx", p, 12.0),
+            fact("DividendPerShare", p, 2.0),
+            fact("Eps", p, 8.0),
+        ];
+        let r = compute(1, &facts, fixed_now());
+        assert_eq!(metric(&r, "free_cash_flow").unwrap().value, 18.0); // 30 - 12
+        assert_eq!(metric(&r, "fcf_margin").unwrap().value, 0.18);
+        assert_eq!(metric(&r, "payout_ratio").unwrap().value, 0.25); // 2 / 8
     }
 
     #[test]

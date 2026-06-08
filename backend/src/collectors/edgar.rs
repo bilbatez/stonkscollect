@@ -74,6 +74,11 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
         StatementKind::Income,
         "SharesOutstanding",
     ),
+    (
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        StatementKind::CashFlow,
+        "CapEx",
+    ),
 ];
 
 /// A company identity from SEC's ticker directory.

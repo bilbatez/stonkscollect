@@ -77,6 +77,9 @@
       "CommonStockDividendsPerShareDeclared": {
         "units": { "USD/shares": [ { "end": "2023-09-30", "val": 0.94, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
       },
+      "PaymentsToAcquirePropertyPlantAndEquipment": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 10959000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
       "UnmappedConcept": {
         "label": "ignored",
         "units": { "USD": [ { "end": "2023-09-30", "val": 777, "fp": "FY" } ] }
