@@ -132,7 +132,7 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
 
         let result = scheduler::run_tracked(store, label, None, fired, || async {
             match tier {
-                Tier::Fundamentals => collect_fundamentals(store, cfg, &fact_sources, fired, delay).await,
+                Tier::Fundamentals => collect_fundamentals(store, cfg, &fact_sources, fired).await,
                 Tier::Price => collect_prices(store, cfg, &price_sources, fired, delay).await,
                 Tier::News => collect_news(store, cfg, &news_sources, fired, delay).await,
             }
@@ -148,13 +148,12 @@ async fn collect_fundamentals(
     cfg: &Config,
     sources: &[&dyn FactSource],
     now: chrono::DateTime<chrono::Utc>,
-    delay: std::time::Duration,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
     let mut summary = if cfg.collect_all {
-        pipeline::collect_all(store, sources, cfg.reconcile_threshold, now, delay, cutoff).await?
+        pipeline::collect_all(store, sources, cfg.reconcile_threshold, now, cfg.collect_concurrency, cutoff).await?
     } else {
         let outcomes =
             pipeline::collect_tickers(store, sources, &cfg.tickers, cfg.reconcile_threshold, now).await?;
@@ -250,9 +249,8 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
 
     let now = chrono::Utc::now();
     if bulk {
-        let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
         // One-shot CLI always collects (no freshness cutoff).
-        let s = pipeline::collect_all(store, &sources, cfg.reconcile_threshold, now, delay, None)
+        let s = pipeline::collect_all(store, &sources, cfg.reconcile_threshold, now, cfg.collect_concurrency, None)
             .await
             .expect("collect all");
         report_bulk("collect", Ok(s));

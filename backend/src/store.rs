@@ -81,10 +81,11 @@ impl Store {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(std::time::Duration::from_secs(5))
             .foreign_keys(true);
-        // A small pool: WAL lets the read-only API run concurrently with the
-        // single writer; acquire_timeout bounds waits so we never hang forever.
+        // WAL lets the read-only API run concurrently with writers. The pool is
+        // sized above the default collection concurrency so parallel ingest
+        // never waits on a connection; acquire_timeout still bounds any wait.
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(16)
             .acquire_timeout(std::time::Duration::from_secs(10))
             .connect_with(opts)
             .await?;

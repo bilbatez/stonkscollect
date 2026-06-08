@@ -2,6 +2,7 @@
 //! canonical values plus any flagged discrepancies.
 
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 
 use crate::collectors::edgar::CompanyRef;
 use crate::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
@@ -176,40 +177,51 @@ pub struct CollectSummary {
 ///
 /// When `cutoff` is `Some`, only companies not collected since `cutoff` are
 /// processed (incremental); successful collections are timestamped.
+///
+/// Up to `concurrency` companies are fetched at once; politeness is enforced by
+/// the shared rate limiter in the HTTP client, not a per-company sleep.
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
     threshold: f64,
     now: DateTime<Utc>,
-    delay: std::time::Duration,
+    concurrency: usize,
     cutoff: Option<DateTime<Utc>>,
 ) -> Result<CollectSummary, StoreError> {
     let companies = match cutoff {
         Some(c) => store.companies_due(c).await?,
         None => store.all_companies().await?,
     };
+
+    let outcomes = futures::stream::iter(companies)
+        .map(|company| async move {
+            let target = target_of(&company);
+            match ingest(store, sources, company.id, &target, threshold, now).await {
+                Ok(report) => {
+                    // Best-effort timestamp; a missed mark just recollects later.
+                    let _ = store.mark_collected(company.id, now).await;
+                    Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
+                }
+                Err(e) => {
+                    tracing::warn!("collect failed for {}: {e}", company.ticker);
+                    Err(())
+                }
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+
     let mut summary = CollectSummary::default();
-    for (i, company) in companies.iter().enumerate() {
-        // Throttle between companies (not before the first).
-        if i > 0 {
-            tokio::time::sleep(delay).await;
-        }
-        let target = SourceTarget {
-            cik: company.cik.clone(),
-            symbol: company.ticker.clone(),
-        };
-        match ingest(store, sources, company.id, &target, threshold, now).await {
-            Ok(report) => {
-                store.mark_collected(company.id, now).await?;
+    for outcome in outcomes {
+        match outcome {
+            Ok((facts, disc, errs)) => {
                 summary.companies += 1;
-                summary.facts_written += report.facts_written;
-                summary.discrepancies_written += report.discrepancies_written;
-                summary.source_errors += report.source_errors.len();
+                summary.facts_written += facts;
+                summary.discrepancies_written += disc;
+                summary.source_errors += errs;
             }
-            Err(e) => {
-                tracing::warn!("collect failed for {}: {e}", company.ticker);
-                summary.failed += 1;
-            }
+            Err(()) => summary.failed += 1,
         }
     }
     Ok(summary)
@@ -524,7 +536,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO, None)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None)
             .await
             .unwrap();
 
@@ -548,10 +560,10 @@ mod tests {
         let cutoff = Some(now - ChronoDuration::hours(1));
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, 0.05, now, Duration::ZERO, cutoff).await.unwrap();
+        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff).await.unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, 0.05, now, Duration::ZERO, cutoff).await.unwrap();
+        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff).await.unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -560,7 +572,7 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO, None)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);

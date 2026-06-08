@@ -16,6 +16,8 @@ pub struct Config {
     pub request_delay_ms: u64,
     /// Skip companies collected within this many hours (None = always collect).
     pub collect_max_age_hrs: Option<u64>,
+    /// Max companies fetched concurrently during bulk collection.
+    pub collect_concurrency: usize,
     /// Relative threshold above which cross-source values are flagged.
     pub reconcile_threshold: f64,
 }
@@ -38,6 +40,10 @@ impl Config {
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(150),
             collect_max_age_hrs: get("COLLECT_MAX_AGE_HRS").and_then(|h| h.parse().ok()),
+            collect_concurrency: get("COLLECT_CONCURRENCY")
+                .and_then(|c| c.parse().ok())
+                .filter(|&c| c > 0)
+                .unwrap_or(6),
             reconcile_threshold: get("RECONCILE_THRESHOLD")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0.05),
@@ -81,6 +87,7 @@ mod tests {
             ("COLLECT_ALL", "TRUE"),
             ("REQUEST_DELAY_MS", "200"),
             ("COLLECT_MAX_AGE_HRS", "24"),
+            ("COLLECT_CONCURRENCY", "10"),
             ("RECONCILE_THRESHOLD", "0.1"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
@@ -92,6 +99,7 @@ mod tests {
         assert!(cfg.collect_all);
         assert_eq!(cfg.request_delay_ms, 200);
         assert_eq!(cfg.collect_max_age_hrs, Some(24));
+        assert_eq!(cfg.collect_concurrency, 10);
         assert_eq!(cfg.reconcile_threshold, 0.1);
         assert_eq!(cfg.clone(), cfg);
     }
@@ -108,6 +116,7 @@ mod tests {
         assert!(!cfg.collect_all);
         assert_eq!(cfg.request_delay_ms, 150);
         assert_eq!(cfg.collect_max_age_hrs, None);
+        assert_eq!(cfg.collect_concurrency, 6); // default
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }
 
@@ -117,10 +126,12 @@ mod tests {
             ("PORT", "nope"),
             ("REQUEST_DELAY_MS", "x"),
             ("COLLECT_ALL", "maybe"),
+            ("COLLECT_CONCURRENCY", "0"), // zero is rejected -> default
             ("RECONCILE_THRESHOLD", "x"),
         ]));
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.request_delay_ms, 150);
+        assert_eq!(cfg.collect_concurrency, 6);
         assert!(!cfg.collect_all); // "maybe" is not truthy
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }
