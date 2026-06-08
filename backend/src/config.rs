@@ -20,6 +20,8 @@ pub struct Config {
     pub collect_concurrency: usize,
     /// Relative threshold above which cross-source values are flagged.
     pub reconcile_threshold: f64,
+    /// Graham "adequate size" revenue floor.
+    pub graham_min_revenue: f64,
 }
 
 impl Config {
@@ -47,6 +49,9 @@ impl Config {
             reconcile_threshold: get("RECONCILE_THRESHOLD")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0.05),
+            graham_min_revenue: get("GRAHAM_MIN_REVENUE")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(crate::graham::DEFAULT_MIN_REVENUE),
         }
     }
 }
@@ -89,6 +94,7 @@ mod tests {
             ("COLLECT_MAX_AGE_HRS", "24"),
             ("COLLECT_CONCURRENCY", "10"),
             ("RECONCILE_THRESHOLD", "0.1"),
+            ("GRAHAM_MIN_REVENUE", "1000000000"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
         assert_eq!(cfg.port, 9000);
@@ -101,6 +107,7 @@ mod tests {
         assert_eq!(cfg.collect_max_age_hrs, Some(24));
         assert_eq!(cfg.collect_concurrency, 10);
         assert_eq!(cfg.reconcile_threshold, 0.1);
+        assert_eq!(cfg.graham_min_revenue, 1_000_000_000.0);
         assert_eq!(cfg.clone(), cfg);
     }
 
@@ -118,6 +125,7 @@ mod tests {
         assert_eq!(cfg.collect_max_age_hrs, None);
         assert_eq!(cfg.collect_concurrency, 6); // default
         assert_eq!(cfg.reconcile_threshold, 0.05);
+        assert_eq!(cfg.graham_min_revenue, crate::graham::DEFAULT_MIN_REVENUE);
     }
 
     #[test]

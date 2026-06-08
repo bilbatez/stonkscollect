@@ -176,20 +176,36 @@ async fn collect_fundamentals(
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
-    let mut summary = if cfg.collect_all {
-        pipeline::collect_all(store, sources, cfg.reconcile_threshold, now, cfg.collect_concurrency, cutoff).await?
+    // Ratios + Graham scores are recomputed per company inside collect_* (only
+    // for companies actually collected this pass), not over the whole universe.
+    if cfg.collect_all {
+        pipeline::collect_all(
+            store,
+            sources,
+            cfg.reconcile_threshold,
+            now,
+            cfg.collect_concurrency,
+            cutoff,
+            cfg.graham_min_revenue,
+        )
+        .await
     } else {
-        let outcomes =
-            pipeline::collect_tickers(store, sources, &cfg.tickers, cfg.reconcile_threshold, now).await?;
+        let outcomes = pipeline::collect_tickers(
+            store,
+            sources,
+            &cfg.tickers,
+            cfg.reconcile_threshold,
+            now,
+            cfg.graham_min_revenue,
+        )
+        .await?;
         let mut s = pipeline::CollectSummary::default();
         for (_t, r) in &outcomes {
             s.companies += 1;
             s.facts_written += r.facts_written;
         }
-        s
-    };
-    summary.discrepancies_written += pipeline::recompute_ratios_all(store, now).await?.facts_written;
-    Ok(summary)
+        Ok(s)
+    }
 }
 
 async fn collect_prices(
@@ -272,20 +288,36 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
     }
 
     let now = chrono::Utc::now();
+    // collect_* recompute ratios + Graham scores per collected company.
     if bulk {
         // One-shot CLI always collects (no freshness cutoff).
-        let s = pipeline::collect_all(store, &sources, cfg.reconcile_threshold, now, cfg.collect_concurrency, None)
-            .await
-            .expect("collect all");
+        let s = pipeline::collect_all(
+            store,
+            &sources,
+            cfg.reconcile_threshold,
+            now,
+            cfg.collect_concurrency,
+            None,
+            cfg.graham_min_revenue,
+        )
+        .await
+        .expect("collect all");
         report_bulk("collect", Ok(s));
     } else {
         if tickers.is_empty() {
             tickers = cfg.tickers.clone();
         }
         tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
-        let outcomes = pipeline::collect_tickers(store, &sources, &tickers, cfg.reconcile_threshold, now)
-            .await
-            .expect("collect tickers");
+        let outcomes = pipeline::collect_tickers(
+            store,
+            &sources,
+            &tickers,
+            cfg.reconcile_threshold,
+            now,
+            cfg.graham_min_revenue,
+        )
+        .await
+        .expect("collect tickers");
         for (ticker, report) in outcomes {
             tracing::info!(
                 "{ticker}: {} facts, {} discrepancies, {} source errors",
@@ -295,7 +327,4 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
             );
         }
     }
-    // Derive ratios from whatever facts now exist.
-    let r = pipeline::recompute_ratios_all(store, now).await.expect("recompute ratios");
-    tracing::info!("computed ratios for {} companies", r.companies);
 }

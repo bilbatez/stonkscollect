@@ -11,6 +11,18 @@ use crate::{graham, ratios};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
 
+/// Recompute a company's derived ratios and Graham score (called right after
+/// its facts are collected, so only changed companies are recomputed).
+pub async fn recompute_metrics(
+    store: &Store,
+    company_id: i64,
+    min_revenue: f64,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    recompute_ratios(store, company_id, now).await?;
+    recompute_graham(store, company_id, min_revenue, now).await
+}
+
 /// Recompute and persist a company's Graham defensive-investor score from its
 /// stored facts + latest price.
 pub async fn recompute_graham(
@@ -212,6 +224,7 @@ pub async fn collect_all(
     now: DateTime<Utc>,
     concurrency: usize,
     cutoff: Option<DateTime<Utc>>,
+    min_revenue: f64,
 ) -> Result<CollectSummary, StoreError> {
     let companies = match cutoff {
         Some(c) => store.companies_due(c).await?,
@@ -223,8 +236,9 @@ pub async fn collect_all(
             let target = target_of(&company);
             match ingest(store, sources, company.id, &target, threshold, now).await {
                 Ok(report) => {
-                    // Best-effort timestamp; a missed mark just recollects later.
+                    // Best-effort timestamp + per-company metric recompute.
                     let _ = store.mark_collected(company.id, now).await;
+                    let _ = recompute_metrics(store, company.id, min_revenue, now).await;
                     Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
                 }
                 Err(e) => {
@@ -260,6 +274,7 @@ pub async fn collect_tickers(
     tickers: &[String],
     threshold: f64,
     now: DateTime<Utc>,
+    min_revenue: f64,
 ) -> Result<Vec<(String, IngestReport)>, StoreError> {
     let mut outcomes = Vec::new();
     for ticker in tickers {
@@ -271,7 +286,10 @@ pub async fn collect_tickers(
             symbol: company.ticker.clone(),
         };
         match ingest(store, sources, company.id, &target, threshold, now).await {
-            Ok(report) => outcomes.push((ticker.clone(), report)),
+            Ok(report) => {
+                let _ = recompute_metrics(store, company.id, min_revenue, now).await;
+                outcomes.push((ticker.clone(), report));
+            }
             Err(e) => tracing::warn!("collect failed for {ticker}: {e}"),
         }
     }
@@ -561,7 +579,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
             .await
             .unwrap();
 
@@ -585,10 +603,10 @@ mod tests {
         let cutoff = Some(now - ChronoDuration::hours(1));
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff).await.unwrap();
+        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff).await.unwrap();
+        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -597,7 +615,7 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);
@@ -614,6 +632,7 @@ mod tests {
             &["AAPL".to_string()],
             0.05,
             fixed_now(),
+            500_000_000.0,
         )
         .await
         .unwrap(); // did NOT abort
@@ -638,6 +657,7 @@ mod tests {
             &["AAPL".to_string(), "UNKNOWN".to_string()],
             0.05,
             fixed_now(),
+            500_000_000.0,
         )
         .await
         .unwrap();

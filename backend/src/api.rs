@@ -74,6 +74,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/news", get(news))
         .route("/api/companies/:ticker/discrepancies", get(discrepancies))
         .route("/api/companies/:ticker/graham", get(graham_assessment))
+        .route("/api/companies/:ticker/summary", get(summary))
         .route("/api/screen", get(screen))
         .route("/api/runs", get(runs))
 }
@@ -100,6 +101,25 @@ async fn graham_assessment(
     let facts = store.get_facts(c.id).await.map_err(internal)?;
     let price = store.latest_price(c.id).await.map_err(internal)?;
     Ok(Json(graham::assess(&facts, price, graham::DEFAULT_MIN_REVENUE)))
+}
+
+#[derive(Serialize)]
+struct CompanySummary {
+    company: Company,
+    ratios: Vec<Ratio>,
+    graham: Option<GrahamScore>,
+}
+
+/// One round trip for the dashboard header: company + ratios + Graham score.
+async fn summary(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+) -> ApiResult<CompanySummary> {
+    let company = resolve(&store, &ticker).await?;
+    let ratios = store.get_ratios(company.id).await.map_err(internal)?;
+    let graham = store.get_graham_score(company.id).await.map_err(internal)?;
+    Ok(Json(CompanySummary { company, ratios, graham }))
 }
 
 async fn screen(
@@ -481,11 +501,18 @@ mod tests {
         assert!(json.get("criteria").is_some());
         assert!(json.get("score").is_some());
 
-        let (status, json) = get(store, &t, "/api/screen?defensive=true&min_score=1").await;
+        let (status, json) = get(store.clone(), &t, "/api/screen?defensive=true&min_score=1").await;
         assert_eq!(status, StatusCode::OK);
         let rows = json.as_array().unwrap();
         assert_eq!(rows[0]["company"]["ticker"], "AAPL");
         assert_eq!(rows[0]["score"]["score"], 6);
+
+        // aggregate summary
+        let (status, json) = get(store, &t, "/api/companies/AAPL/summary").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["company"]["ticker"], "AAPL");
+        assert_eq!(json["graham"]["score"], 6);
+        assert!(json["ratios"].is_array());
     }
 
     #[tokio::test]
