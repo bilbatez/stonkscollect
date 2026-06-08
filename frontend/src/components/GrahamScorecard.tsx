@@ -20,6 +20,14 @@ function num(x: number | null): string {
   return x === null ? '—' : x.toFixed(2)
 }
 
+/** Humanize a criterion's detail; price-dependent checks explain the data gap. */
+function detailText(name: string, detail: string): string {
+  if (detail === 'insufficient data' && /P\/E|P\/B/.test(name)) {
+    return 'needs price data'
+  }
+  return detail
+}
+
 /** Graham defensive-investor scorecard for one company. */
 export function GrahamScorecard({ assessment }: { assessment: GrahamAssessment }) {
   const { criteria, score, passes_defensive, graham_number, margin_of_safety, net_net } = assessment
@@ -49,7 +57,7 @@ export function GrahamScorecard({ assessment }: { assessment: GrahamAssessment }
                   <CancelIcon color="error" aria-label="fail" />
                 )}
               </ListItemIcon>
-              <ListItemText primary={c.name} secondary={c.detail} />
+              <ListItemText primary={c.name} secondary={detailText(c.name, c.detail)} />
             </ListItem>
           ))}
         </List>

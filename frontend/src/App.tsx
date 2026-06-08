@@ -9,21 +9,16 @@ import {
   Container,
   CssBaseline,
   Stack,
+  Tab,
+  Tabs,
   ThemeProvider,
   Toolbar,
   Typography,
   createTheme,
 } from '@mui/material'
-import {
-  addWatch,
-  getToken,
-  getWatchlist,
-  loadCompanyData,
-  logout,
-  removeWatch,
-  screen,
-} from './api'
+import { addWatch, getToken, getWatchlist, loadCompanyData, logout, removeWatch } from './api'
 import { freshness } from './format'
+import { AllStocks } from './components/AllStocks'
 import { AuthForm } from './components/AuthForm'
 import { Compare, type CompareRow } from './components/Compare'
 import { DiscrepancyPanel } from './components/DiscrepancyPanel'
@@ -36,23 +31,25 @@ import { Skeleton } from './components/Skeleton'
 import { StatementTable } from './components/StatementTable'
 import { ThemeToggle, type Theme } from './components/ThemeToggle'
 import { Watchlist } from './components/Watchlist'
-import type { Company, CompanyData, ScreenRow } from './types'
+import type { Company, CompanyData } from './types'
 
 const PriceChart = lazy(() => import('./charts/PriceChart'))
 
 type View =
-  | { kind: 'idle' }
+  | { kind: 'home' }
   | { kind: 'loading' }
   | { kind: 'error'; ticker: string }
   | { kind: 'company'; data: CompanyData; loadedAt: number }
   | { kind: 'compare'; rows: CompareRow[] }
-  | { kind: 'screen'; rows: ScreenRow[]; defensive: boolean }
+  | { kind: 'screen' }
 
-/** Latest value per ratio metric (later periods overwrite earlier). */
+/** Latest annual value per ratio metric (later periods overwrite earlier). */
 function latestMetrics(data: CompanyData): Record<string, number> {
   const m: Record<string, number> = {}
   for (const r of data.ratios) {
-    m[r.metric] = r.value
+    if (r.period_type === 'annual') {
+      m[r.metric] = r.value
+    }
   }
   return m
 }
@@ -67,7 +64,8 @@ function Dashboard({
   onToggleTheme: () => void
 }) {
   const [items, setItems] = useState<Company[]>([])
-  const [view, setView] = useState<View>({ kind: 'idle' })
+  const [view, setView] = useState<View>({ kind: 'home' })
+  const [tab, setTab] = useState(0)
 
   const refreshWatchlist = useCallback(async () => {
     setItems(await getWatchlist())
@@ -105,11 +103,6 @@ function Dashboard({
     setView({ kind: 'compare', rows })
   }
 
-  async function openScreener(defensive: boolean) {
-    setView({ kind: 'loading' })
-    setView({ kind: 'screen', rows: await screen(defensive), defensive })
-  }
-
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <AppBar position="static" color="default" enableColorOnDark>
@@ -117,10 +110,13 @@ function Dashboard({
           <Typography variant="h6" component="h1" sx={{ flexGrow: 1, fontWeight: 700 }}>
             StonksCollect
           </Typography>
+          <Button color="inherit" onClick={() => setView({ kind: 'home' })}>
+            Home
+          </Button>
           <Button color="inherit" onClick={() => void compare()}>
             Compare
           </Button>
-          <Button color="inherit" onClick={() => void openScreener(true)}>
+          <Button color="inherit" onClick={() => setView({ kind: 'screen' })}>
             Screener
           </Button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
@@ -131,42 +127,40 @@ function Dashboard({
       </AppBar>
 
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Stack direction="row" spacing={3} sx={{ alignItems: 'flex-start' }}>
-          <Watchlist
-            items={items}
-            onSelect={(t) => void select(t)}
-            onAdd={(t) => void add(t)}
-            onRemove={(t) => void remove(t)}
-          />
-          <Box component="section" sx={{ flexGrow: 1, minWidth: 0 }}>
-            {view.kind === 'idle' && (
-              <Typography color="text.secondary">Select a ticker to begin.</Typography>
-            )}
-            {view.kind === 'loading' && <Skeleton />}
-            {view.kind === 'error' && (
-              <Alert
-                severity="error"
-                action={
-                  <Button color="inherit" size="small" onClick={() => void select(view.ticker)}>
-                    Retry
-                  </Button>
-                }
-              >
-                Failed to load {view.ticker}.
-              </Alert>
-            )}
-            {view.kind === 'compare' && <Compare rows={view.rows} />}
-            {view.kind === 'screen' && (
-              <Screener
-                rows={view.rows}
-                defensiveOnly={view.defensive}
-                onToggleDefensive={() => void openScreener(!view.defensive)}
+        {view.kind === 'home' && (
+          <Box>
+            <Tabs value={tab} onChange={(_e, v: number) => setTab(v)} sx={{ mb: 2 }}>
+              <Tab label="All Stocks" />
+              <Tab label="Watchlist" />
+            </Tabs>
+            {tab === 0 ? (
+              <AllStocks onSelect={(t) => void select(t)} onAdd={(t) => void add(t)} />
+            ) : (
+              <Watchlist
+                items={items}
                 onSelect={(t) => void select(t)}
+                onAdd={(t) => void add(t)}
+                onRemove={(t) => void remove(t)}
               />
             )}
-            {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
           </Box>
-        </Stack>
+        )}
+        {view.kind === 'loading' && <Skeleton />}
+        {view.kind === 'error' && (
+          <Alert
+            severity="error"
+            action={
+              <Button color="inherit" size="small" onClick={() => void select(view.ticker)}>
+                Retry
+              </Button>
+            }
+          >
+            Failed to load {view.ticker}.
+          </Alert>
+        )}
+        {view.kind === 'compare' && <Compare rows={view.rows} />}
+        {view.kind === 'screen' && <Screener onSelect={(t) => void select(t)} />}
+        {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
       </Container>
     </Box>
   )

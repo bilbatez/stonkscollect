@@ -30,9 +30,12 @@ export interface FinancialFact {
   fetched_at: string
 }
 
+export type Period = 'annual' | 'quarterly'
+
 export interface Ratio {
   company_id: number
   period_end: string
+  period_type: Period
   metric: string
   value: number
   computed_at: string
@@ -90,6 +93,26 @@ export interface GrahamScore {
 export interface ScreenRow {
   company: Company
   score: GrahamScore
+}
+
+/** A company in the directory, with its Graham score when computed. */
+export interface CompanyRow {
+  company: Company
+  score: GrahamScore | null
+}
+
+/** A page of results plus the total match count. */
+export interface Page<T> {
+  rows: T[]
+  total: number
+}
+
+export interface ScreenFilters {
+  defensive?: boolean
+  net_net?: boolean
+  min_score?: number
+  limit?: number
+  offset?: number
 }
 
 export interface CompanyData {

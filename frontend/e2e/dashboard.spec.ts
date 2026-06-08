@@ -3,9 +3,19 @@ import { test, expect } from '@playwright/test'
 // Mocks the backend so the full auth -> watchlist -> company flow runs offline.
 test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await page.route('**/auth/login', (route) => route.fulfill({ json: { token: 'test-token' } }))
-  await page.route('**/api/watchlist', (route) =>
+  await page.route('**/api/watchlist', (route) => route.fulfill({ json: [] }))
+  // Paginated All Stocks directory (the default home tab).
+  await page.route(/\/api\/companies\?/, (route) =>
     route.fulfill({
-      json: [{ id: 1, cik: '', ticker: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', sector: null, industry: null }],
+      json: {
+        rows: [
+          {
+            company: { id: 1, cik: '', ticker: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', sector: null, industry: null },
+            score: null,
+          },
+        ],
+        total: 1,
+      },
     }),
   )
   const base = '**/api/companies/AAPL'
@@ -42,7 +52,7 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await page.getByLabel('password').fill('pw')
   await page.getByRole('button', { name: /log in/i }).click()
 
-  // dashboard + watchlist (exact: the "remove AAPL" button also contains AAPL)
+  // All Stocks tab lists AAPL (exact: the "watch AAPL" button also contains AAPL)
   const pick = page.getByRole('button', { name: 'AAPL', exact: true })
   await expect(pick).toBeVisible()
   await pick.click()

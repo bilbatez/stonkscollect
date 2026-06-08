@@ -32,11 +32,11 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
   src/store.rs      SQLite (WAL) CRUD, range queries, OHLC, Parquet export
-  src/collectors/   edgar, fmp, news (rss+finnhub), scrape — Fact/Price/NewsSource traits
+  src/collectors/   edgar, fmp, yahoo (keyless prices), news (rss+finnhub), scrape — Fact/Price/NewsSource traits
   src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
   src/net.rs        RetryPolicy + RateLimiter + LoginThrottle (pure, time-injected)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
-  src/ratios.rs     derived ratios incl. P/E, P/B, FCF, payout (pure)
+  src/ratios.rs     derived ratios (per period_type: annual/quarterly) incl. P/E, P/B, FCF, payout (pure)
   src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
   src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental, CollectProgress sink), recompute_metrics
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
@@ -98,7 +98,7 @@ Direct:
 ## Data sources (US only)
 
 - **SEC EDGAR** `data.sec.gov` companyfacts/companyconcept — canonical fundamentals.
-- **Financial Modeling Prep** (FMP_API_KEY) — prices/OHLC, income facts. **Finnhub** (FINNHUB_API_KEY) — company news. Keyless: EDGAR only.
+- **Financial Modeling Prep** (FMP_API_KEY) — prices/OHLC, income facts. **Finnhub** (FINNHUB_API_KEY) — company news. **Yahoo Finance** chart API — keyless daily prices (no key needed; needs a non-empty User-Agent, our contact UA works). Keyless: EDGAR + Yahoo. (Stooq was tried but now serves a JS anti-bot challenge.)
 - HTML scrape fallback (gap-fill + cross-check; respect robots.txt, rate-limit, cache).
 - News: RSS (Reuters/AP/CNBC/MarketWatch/Yahoo) + Finnhub; title + description only, deduped.
 

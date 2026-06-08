@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
+import { AllStocks } from './AllStocks'
 import { AuthForm } from './AuthForm'
 import { Compare } from './Compare'
 import { GrahamScorecard } from './GrahamScorecard'
@@ -9,7 +10,7 @@ import { Skeleton } from './Skeleton'
 import { ThemeToggle } from './ThemeToggle'
 import { Watchlist } from './Watchlist'
 import * as api from '../api'
-import type { Company, GrahamAssessment, ScreenRow } from '../types'
+import type { Company, GrahamAssessment, GrahamScore } from '../types'
 
 vi.mock('../api')
 
@@ -23,6 +24,18 @@ const company = (ticker: string): Company => ({
   exchange: null,
   sector: null,
   industry: null,
+})
+
+const score = (overrides: Partial<GrahamScore> = {}): GrahamScore => ({
+  company_id: 1,
+  score: 6,
+  passes_defensive: false,
+  graham_number: 60,
+  ncav_per_share: null,
+  margin_of_safety: 0.3,
+  net_net: false,
+  computed_at: '',
+  ...overrides,
 })
 
 test('AuthForm logs in and reports the token', async () => {
@@ -50,7 +63,6 @@ test('AuthForm can switch to signup and back, and surfaces signup errors', async
   await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
   expect(await screen.findByRole('alert')).toHaveTextContent(/signup failed/i)
   expect(onAuth).not.toHaveBeenCalled()
-  // toggle back to login
   await userEvent.click(screen.getByRole('button', { name: /have an account/i }))
   expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
 })
@@ -80,7 +92,6 @@ test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async (
   await userEvent.type(screen.getByLabelText('add ticker'), ' msft ')
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
   expect(onAdd).toHaveBeenCalledWith('MSFT')
-  // blank add is ignored
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
   expect(onAdd).toHaveBeenCalledTimes(1)
 })
@@ -108,16 +119,16 @@ test('Skeleton renders a status label', () => {
   expect(screen.getAllByRole('status')[1]).toHaveTextContent('Loading…')
 })
 
-test('GrahamScorecard renders criteria, valuation, and net-net badge', () => {
+test('GrahamScorecard renders criteria, valuation, net-net, and the price-gap hint', () => {
   const assessment: GrahamAssessment = {
     criteria: [
       { name: 'Current ratio >= 2', passed: true, detail: 'current ratio 2.5' },
-      { name: 'P/E <= 15', passed: false, detail: 'P/E 30' },
+      { name: 'P/E <= 15', passed: false, detail: 'insufficient data' },
     ],
     score: 1,
     graham_number: 22.4,
     ncav_per_share: 5,
-    margin_of_safety: null, // exercises the dash branch
+    margin_of_safety: null,
     net_net: true,
     passes_defensive: false,
   }
@@ -126,40 +137,70 @@ test('GrahamScorecard renders criteria, valuation, and net-net badge', () => {
   expect(screen.getByText('22.40')).toBeInTheDocument()
   expect(screen.getByText('net-net')).toBeInTheDocument()
   expect(screen.getByText('1/2')).toBeInTheDocument()
-  // a null graham number renders a dash
-  render(
-    <GrahamScorecard
-      assessment={{ ...assessment, graham_number: null, margin_of_safety: 0.2 }}
-    />,
-  )
+  expect(screen.getByText('needs price data')).toBeInTheDocument() // price-dependent P/E
+  render(<GrahamScorecard assessment={{ ...assessment, graham_number: null, margin_of_safety: 0.2 }} />)
   expect(screen.getAllByText('—').length).toBeGreaterThan(0)
 })
 
-test('Screener lists rows, selects, toggles, and shows empty state', async () => {
+test('Screener lists ranked rows, filters, paginates, and selects', async () => {
+  vi.mocked(api.screen).mockResolvedValue({
+    rows: [
+      { company: company('KO'), score: score() },
+      // null graham#/margin + net-net to exercise the dash + ✓ branches
+      { company: company('JNJ'), score: score({ score: 5, graham_number: null, margin_of_safety: null, net_net: true }) },
+    ],
+    total: 50,
+  })
   const onSelect = vi.fn()
-  const onToggle = vi.fn()
-  const rows: ScreenRow[] = [
-    {
-      company: company('KO'),
-      score: { company_id: 1, score: 7, passes_defensive: true, graham_number: 60, ncav_per_share: null, margin_of_safety: 0.3, net_net: false, computed_at: '' },
-    },
-    {
-      // null graham_number + margin exercise the dash branches
-      company: company('JNJ'),
-      score: { company_id: 2, score: 5, passes_defensive: true, graham_number: null, ncav_per_share: null, margin_of_safety: null, net_net: false, computed_at: '' },
-    },
-  ]
-  const { rerender } = render(
-    <Screener rows={rows} defensiveOnly onToggleDefensive={onToggle} onSelect={onSelect} />,
-  )
-  expect(screen.getByText('60.00')).toBeInTheDocument()
-  expect(screen.getByText('30%')).toBeInTheDocument()
+  render(<Screener onSelect={onSelect} />)
+  await screen.findByText('60.00') // graham number
+  expect(screen.getByText('30%')).toBeInTheDocument() // margin of safety
+  expect(screen.getByText('6/8')).toBeInTheDocument()
+  expect(screen.getByText('✓')).toBeInTheDocument() // JNJ net-net
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0) // JNJ null graham#/margin
   await userEvent.click(screen.getByRole('button', { name: 'KO' }))
   expect(onSelect).toHaveBeenCalledWith('KO')
-  await userEvent.click(screen.getByLabelText(/defensive only/i))
-  expect(onToggle).toHaveBeenCalled()
-  rerender(<Screener rows={[]} defensiveOnly={false} onToggleDefensive={onToggle} onSelect={onSelect} />)
-  expect(screen.getByText(/no matches/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: /next page/i }))
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ offset: 25 })),
+  )
+  await userEvent.click(screen.getByLabelText('Defensive only'))
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ defensive: true })),
+  )
+  await userEvent.click(screen.getByLabelText('Net-net'))
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ net_net: true })),
+  )
+})
+
+test('Screener shows an empty state when nothing matches', async () => {
+  vi.mocked(api.screen).mockResolvedValue({ rows: [], total: 0 })
+  render(<Screener onSelect={vi.fn()} />)
+  expect(await screen.findByText(/no matches/i)).toBeInTheDocument()
+})
+
+test('AllStocks lists, paginates, searches, selects and watches', async () => {
+  vi.mocked(api.listCompanies).mockResolvedValue({
+    rows: [
+      { company: company('AAPL'), score: score() },
+      { company: company('ZZZ'), score: null },
+    ],
+    total: 50,
+  })
+  const onSelect = vi.fn()
+  const onAdd = vi.fn()
+  render(<AllStocks onSelect={onSelect} onAdd={onAdd} />)
+  await screen.findByText('6/8')
+  expect(screen.getByText('—')).toBeInTheDocument() // ZZZ has no score
+  await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
+  expect(onSelect).toHaveBeenCalledWith('AAPL')
+  await userEvent.click(screen.getByRole('button', { name: 'watch ZZZ' }))
+  expect(onAdd).toHaveBeenCalledWith('ZZZ')
+  await userEvent.click(screen.getByRole('button', { name: /next page/i }))
+  await waitFor(() => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', 25, 25))
+  await userEvent.type(screen.getByLabelText('search stocks'), 'a')
+  await waitFor(() => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 25, 0))
 })
 
 test('Compare builds a metric matrix and dashes missing cells', () => {
@@ -171,8 +212,8 @@ test('Compare builds a metric matrix and dashes missing cells', () => {
       ]}
     />,
   )
-  expect(screen.getByText('1.50')).toBeInTheDocument()
-  expect(screen.getByText('—')).toBeInTheDocument() // MSFT net_margin missing
+  expect(screen.getByText('150.0%')).toBeInTheDocument() // roe formatted as percent
+  expect(screen.getByText('—')).toBeInTheDocument()
   rerender(<Compare rows={[]} />)
   expect(screen.getByText(/nothing to compare/i)).toBeInTheDocument()
 })

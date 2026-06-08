@@ -3,7 +3,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 
 /// Reporting period of a financial fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum PeriodType {
     Quarterly,
     Annual,
@@ -122,6 +122,7 @@ pub struct NewsItem {
 pub struct Ratio {
     pub company_id: i64,
     pub period_end: NaiveDate,
+    pub period_type: PeriodType,
     pub metric: String,
     pub value: f64,
     pub computed_at: DateTime<Utc>,
@@ -203,6 +204,7 @@ mod tests {
         let r = Ratio {
             company_id: 1,
             period_end: chrono::NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+            period_type: PeriodType::Annual,
             metric: "pe".into(),
             value: 28.5,
             computed_at: chrono::Utc::now(),

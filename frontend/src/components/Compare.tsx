@@ -1,4 +1,5 @@
 import { Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material'
+import { formatMetric, metricLabel } from '../format'
 
 export interface CompareRow {
   ticker: string
@@ -20,7 +21,7 @@ export function Compare({ rows }: { rows: CompareRow[] }) {
             <TableCell>Ticker</TableCell>
             {metrics.map((m) => (
               <TableCell key={m} align="right">
-                {m}
+                {metricLabel(m)}
               </TableCell>
             ))}
           </TableRow>
@@ -33,7 +34,7 @@ export function Compare({ rows }: { rows: CompareRow[] }) {
                 const v = r.metrics[m]
                 return (
                   <TableCell key={m} align="right">
-                    {v === undefined ? '—' : v.toFixed(2)}
+                    {v === undefined ? '—' : formatMetric(m, v)}
                   </TableCell>
                 )
               })}

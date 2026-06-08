@@ -37,6 +37,45 @@ fn other<E: std::fmt::Display>(e: E) -> StoreError {
 
 type Result<T> = std::result::Result<T, StoreError>;
 
+type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+
+/// Bind a [`Ratio`]'s columns onto a ratios upsert query (order matches `RATIO_UPSERT_SQL`).
+fn bind_ratio<'q>(q: SqliteQuery<'q>, r: &'q Ratio) -> SqliteQuery<'q> {
+    q.bind(r.company_id)
+        .bind(r.period_end)
+        .bind(r.period_type.as_str())
+        .bind(&r.metric)
+        .bind(r.value)
+        .bind(r.computed_at)
+}
+
+/// Decode the `companies` columns of a row into a [`Company`].
+fn company_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Company> {
+    Ok(Company {
+        id: r.try_get("id")?,
+        cik: r.try_get("cik")?,
+        ticker: r.try_get("ticker")?,
+        name: r.try_get("name")?,
+        exchange: r.try_get("exchange")?,
+        sector: r.try_get("sector")?,
+        industry: r.try_get("industry")?,
+    })
+}
+
+/// Decode a ratios row (incl. its period_type token) into a [`Ratio`].
+fn ratio_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ratio> {
+    let pt: String = r.try_get("period_type")?;
+    Ok(Ratio {
+        company_id: r.try_get("company_id")?,
+        period_end: r.try_get("period_end")?,
+        period_type: PeriodType::parse(&pt)
+            .ok_or_else(|| StoreError::Decode(format!("bad period_type: {pt}")))?,
+        metric: r.try_get("metric")?,
+        value: r.try_get("value")?,
+        computed_at: r.try_get("computed_at")?,
+    })
+}
+
 // Shared write SQL, reused by single-row and batched (transactional) methods.
 const FACT_UPSERT_SQL: &str = "INSERT INTO financial_facts \
      (company_id,statement,line_item,period_type,period_end,value,source,fetched_at) \
@@ -62,9 +101,9 @@ const PRICE_UPSERT_SQL: &str = "INSERT INTO prices (company_id,date,open,high,lo
 const NEWS_INSERT_SQL: &str = "INSERT OR IGNORE INTO news \
      (company_id,title,description,url,source,published_at,dedup_hash) VALUES (?,?,?,?,?,?,?)";
 
-const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,metric,value,computed_at) \
-     VALUES (?,?,?,?,?) \
-     ON CONFLICT(company_id,period_end,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
+const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,period_type,metric,value,computed_at) \
+     VALUES (?,?,?,?,?,?) \
+     ON CONFLICT(company_id,period_end,period_type,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
 
 /// SQLite-backed data store. Also holds the process-local login throttle, since
 /// the `Arc<Store>` is the shared handle every request sees.
@@ -482,14 +521,7 @@ impl Store {
 
     /// Insert or update a derived ratio, keyed by (company, period, metric).
     pub async fn upsert_ratio(&self, r: &Ratio) -> Result<()> {
-        sqlx::query(RATIO_UPSERT_SQL)
-            .bind(r.company_id)
-            .bind(r.period_end)
-            .bind(&r.metric)
-            .bind(r.value)
-            .bind(r.computed_at)
-            .execute(&self.pool)
-            .await?;
+        bind_ratio(sqlx::query(RATIO_UPSERT_SQL), r).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -497,39 +529,33 @@ impl Store {
     pub async fn save_ratios(&self, ratios: &[Ratio]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         for r in ratios {
-            sqlx::query(RATIO_UPSERT_SQL)
-                .bind(r.company_id)
-                .bind(r.period_end)
-                .bind(&r.metric)
-                .bind(r.value)
-                .bind(r.computed_at)
-                .execute(&mut *tx)
-                .await?;
+            bind_ratio(sqlx::query(RATIO_UPSERT_SQL), r).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
     }
 
-    /// List a company's ratios ordered by period then metric.
-    pub async fn get_ratios(&self, company_id: i64) -> Result<Vec<Ratio>> {
-        let rows = sqlx::query(
-            "SELECT company_id,period_end,metric,value,computed_at FROM ratios \
-             WHERE company_id=? ORDER BY period_end, metric",
-        )
-        .bind(company_id)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(Ratio {
-                    company_id: r.try_get("company_id")?,
-                    period_end: r.try_get("period_end")?,
-                    metric: r.try_get("metric")?,
-                    value: r.try_get("value")?,
-                    computed_at: r.try_get("computed_at")?,
-                })
-            })
-            .collect()
+    /// List a company's ratios ordered by period then metric. When `period` is
+    /// given, only that period type (annual/quarterly) is returned.
+    pub async fn get_ratios(
+        &self,
+        company_id: i64,
+        period: Option<PeriodType>,
+    ) -> Result<Vec<Ratio>> {
+        let mut sql = String::from(
+            "SELECT company_id,period_end,period_type,metric,value,computed_at FROM ratios \
+             WHERE company_id=?",
+        );
+        if period.is_some() {
+            sql.push_str(" AND period_type=?");
+        }
+        sql.push_str(" ORDER BY period_end, metric");
+        let mut q = sqlx::query(&sql).bind(company_id);
+        if let Some(p) = period {
+            q = q.bind(p.as_str());
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        rows.into_iter().map(|r| ratio_from_row(&r)).collect()
     }
 
     /// Insert a flagged discrepancy, returning its new id.
@@ -862,39 +888,92 @@ impl Store {
         }
     }
 
-    /// Screen companies by Graham score, highest first.
+    /// Screen companies by Graham score, highest first. Returns the page plus the
+    /// total number of matches (for pagination). `defensive_only`/`net_net_only`
+    /// are optional filters.
     pub async fn screen(
         &self,
         defensive_only: bool,
+        net_net_only: bool,
         min_score: i64,
         limit: i64,
-    ) -> Result<Vec<(Company, GrahamScore)>> {
-        let mut sql = String::from(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
-             g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
-             FROM graham_scores g JOIN companies c ON c.id = g.company_id WHERE g.score >= ?",
+        offset: i64,
+    ) -> Result<(Vec<(Company, GrahamScore)>, i64)> {
+        let mut filter = String::from(
+            " FROM graham_scores g JOIN companies c ON c.id = g.company_id WHERE g.score >= ?",
         );
         if defensive_only {
-            sql.push_str(" AND g.passes_defensive = 1");
+            filter.push_str(" AND g.passes_defensive = 1");
         }
-        sql.push_str(" ORDER BY g.score DESC, c.ticker LIMIT ?");
-        let rows = sqlx::query(&sql).bind(min_score).bind(limit).fetch_all(&self.pool).await?;
-        rows.iter()
+        if net_net_only {
+            filter.push_str(" AND g.net_net = 1");
+        }
+        let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*){filter}"))
+            .bind(min_score)
+            .fetch_one(&self.pool)
+            .await?;
+        let sql = format!(
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
+             g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at\
+             {filter} ORDER BY g.score DESC, c.ticker LIMIT ? OFFSET ?"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(min_score)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+        let page = rows
+            .iter()
+            .map(|r| Ok((company_from_row(r)?, Self::graham_score_from_row(r)?)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok((page, total))
+    }
+
+    /// A page of companies (ordered by ticker) with each one's Graham score when
+    /// computed, plus the total count. `q` filters by ticker/name substring.
+    pub async fn list_companies(
+        &self,
+        q: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<(Company, Option<GrahamScore>)>, i64)> {
+        let like = q.map(|s| format!("%{}%", s.trim()));
+        let where_clause = if like.is_some() {
+            " WHERE c.ticker LIKE ? OR c.name LIKE ?"
+        } else {
+            ""
+        };
+        let count_sql = format!("SELECT COUNT(*) FROM companies c{where_clause}");
+        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+        if let Some(l) = &like {
+            count_q = count_q.bind(l.as_str()).bind(l.as_str());
+        }
+        let total = count_q.fetch_one(&self.pool).await?;
+
+        let sql = format!(
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
+             g.company_id AS company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
+             FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id{where_clause} \
+             ORDER BY c.ticker LIMIT ? OFFSET ?"
+        );
+        let mut query = sqlx::query(&sql);
+        if let Some(l) = &like {
+            query = query.bind(l.as_str()).bind(l.as_str());
+        }
+        let rows = query.bind(limit).bind(offset).fetch_all(&self.pool).await?;
+        let page = rows
+            .iter()
             .map(|r| {
-                Ok((
-                    Company {
-                        id: r.try_get("id")?,
-                        cik: r.try_get("cik")?,
-                        ticker: r.try_get("ticker")?,
-                        name: r.try_get("name")?,
-                        exchange: r.try_get("exchange")?,
-                        sector: r.try_get("sector")?,
-                        industry: r.try_get("industry")?,
-                    },
-                    Self::graham_score_from_row(r)?,
-                ))
+                let score: Option<i64> = r.try_get("score")?;
+                let g = match score {
+                    Some(_) => Some(Self::graham_score_from_row(r)?),
+                    None => None,
+                };
+                Ok((company_from_row(r)?, g))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok((page, total))
     }
 
     /// Export a company's prices to a Parquet file for portable archiving.
@@ -1075,6 +1154,7 @@ mod tests {
             .save_ratios(&[Ratio {
                 company_id: id,
                 period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                period_type: PeriodType::Annual,
                 metric: "net_margin".into(),
                 value: 0.25,
                 computed_at: now,
@@ -1083,7 +1163,7 @@ mod tests {
             .unwrap();
         assert_eq!(store.get_prices(id).await.unwrap().len(), 1);
         assert_eq!(store.get_news(id).await.unwrap().len(), 1);
-        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1257,6 +1337,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_ratios_errors_on_bad_period_type() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        sqlx::query(
+            "INSERT INTO ratios (company_id,period_end,period_type,metric,value,computed_at) VALUES (?,?,?,?,?,?)",
+        )
+        .bind(id).bind("2023-12-31").bind("weekly").bind("pe").bind(1.0).bind("2024-01-01T00:00:00Z")
+        .execute(&store.pool).await.unwrap();
+        let err = store.get_ratios(id, None).await.unwrap_err();
+        assert!(matches!(err, StoreError::Decode(_)));
+    }
+
+    #[tokio::test]
     async fn insert_news_dedups_and_lists_newest_first() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
@@ -1298,27 +1391,44 @@ mod tests {
             .upsert_ratio(&Ratio {
                 company_id: id,
                 period_end: pe,
+                period_type: PeriodType::Annual,
                 metric: "pe".into(),
                 value: 28.5,
                 computed_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             })
             .await
             .unwrap();
-        // same (company, period, metric) updates
+        // same (company, period, period_type, metric) updates
         store
             .upsert_ratio(&Ratio {
                 company_id: id,
                 period_end: pe,
+                period_type: PeriodType::Annual,
                 metric: "pe".into(),
                 value: 30.0,
                 computed_at: Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap(),
             })
             .await
             .unwrap();
-        let ratios = store.get_ratios(id).await.unwrap();
-        assert_eq!(ratios.len(), 1);
-        assert_eq!(ratios[0].value, 30.0);
-        assert_eq!(ratios[0].metric, "pe");
+        // a quarterly row with the same end date coexists (distinct period_type)
+        store
+            .upsert_ratio(&Ratio {
+                company_id: id,
+                period_end: pe,
+                period_type: PeriodType::Quarterly,
+                metric: "pe".into(),
+                value: 7.0,
+                computed_at: Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap(),
+            })
+            .await
+            .unwrap();
+        let ratios = store.get_ratios(id, None).await.unwrap();
+        assert_eq!(ratios.len(), 2); // annual + quarterly, no collision
+        // period filter narrows to one
+        let annual = store.get_ratios(id, Some(PeriodType::Annual)).await.unwrap();
+        assert_eq!(annual.len(), 1);
+        assert_eq!(annual[0].value, 30.0);
+        assert_eq!(annual[0].period_type, PeriodType::Annual);
     }
 
     #[tokio::test]
@@ -1391,16 +1501,63 @@ mod tests {
 
         assert_eq!(store.get_graham_score(aapl).await.unwrap().unwrap().score, 8);
 
-        // screen: all (min 0) -> AAPL(8) before MSFT(4)
-        let all = store.screen(false, 0, 10).await.unwrap();
+        // screen: all (min 0) -> AAPL(8) before MSFT(4); total reflects all matches
+        let (all, total) = store.screen(false, false, 0, 10, 0).await.unwrap();
         assert_eq!(all.len(), 2);
+        assert_eq!(total, 2);
         assert_eq!(all[0].0.ticker, "AAPL");
         // defensive only -> just AAPL
-        let def = store.screen(true, 0, 10).await.unwrap();
+        let (def, def_total) = store.screen(true, false, 0, 10, 0).await.unwrap();
         assert_eq!(def.len(), 1);
+        assert_eq!(def_total, 1);
         assert_eq!(def[0].0.ticker, "AAPL");
         // min_score filter
-        assert_eq!(store.screen(false, 5, 10).await.unwrap().len(), 1);
+        assert_eq!(store.screen(false, false, 5, 10, 0).await.unwrap().0.len(), 1);
+        // net-net filter (none set) -> empty
+        assert_eq!(store.screen(false, true, 0, 10, 0).await.unwrap().1, 0);
+        // offset paginates: skip the first of two
+        let (page2, _) = store.screen(false, false, 0, 10, 1).await.unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].0.ticker, "MSFT");
+    }
+
+    #[tokio::test]
+    async fn list_companies_paginates_searches_and_attaches_scores() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap();
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        msft.name = "Microsoft".into();
+        store.upsert_company(&msft).await.unwrap();
+        store
+            .save_graham_score(&GrahamScore {
+                company_id: aapl,
+                score: 6,
+                passes_defensive: false,
+                graham_number: Some(100.0),
+                ncav_per_share: None,
+                margin_of_safety: Some(0.1),
+                net_net: false,
+                computed_at: now,
+            })
+            .await
+            .unwrap();
+
+        // page of all, ordered by ticker; AAPL has a score, MSFT does not
+        let (rows, total) = store.list_companies(None, 10, 0).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rows[0].0.ticker, "AAPL");
+        assert!(rows[0].1.is_some());
+        assert!(rows[1].1.is_none());
+        // search by name
+        let (msrows, mstotal) = store.list_companies(Some("micro"), 10, 0).await.unwrap();
+        assert_eq!(mstotal, 1);
+        assert_eq!(msrows[0].0.ticker, "MSFT");
+        // limit + offset
+        let (p2, _) = store.list_companies(None, 1, 1).await.unwrap();
+        assert_eq!(p2.len(), 1);
+        assert_eq!(p2[0].0.ticker, "MSFT");
     }
 
     #[tokio::test]

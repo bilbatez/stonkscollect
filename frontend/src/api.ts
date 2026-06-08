@@ -1,12 +1,15 @@
 import type {
   Company,
   CompanyData,
+  CompanyRow,
   Discrepancy,
   FinancialFact,
   GrahamAssessment,
   NewsItem,
+  Page,
   PricePoint,
   Ratio,
+  ScreenFilters,
   ScreenRow,
 } from './types'
 
@@ -110,7 +113,23 @@ export async function loadCompanyData(ticker: string): Promise<CompanyData> {
   return { company, prices, facts, ratios, news, discrepancies, graham }
 }
 
-/** Screen companies by Graham score. */
-export function screen(defensive: boolean, minScore = 0): Promise<ScreenRow[]> {
-  return getJson<ScreenRow[]>(`/api/screen?defensive=${defensive}&min_score=${minScore}`)
+/** Paginated, optionally-searched directory of all companies + their scores. */
+export function listCompanies(q: string, limit: number, offset: number): Promise<Page<CompanyRow>> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (q !== '') {
+    params.set('q', q)
+  }
+  return getJson<Page<CompanyRow>>(`/api/companies?${params.toString()}`)
+}
+
+/** Screen companies by Graham score, ranked, with optional filters + paging. */
+export function screen(f: ScreenFilters): Promise<Page<ScreenRow>> {
+  const params = new URLSearchParams({
+    defensive: String(f.defensive ?? false),
+    net_net: String(f.net_net ?? false),
+    min_score: String(f.min_score ?? 0),
+    limit: String(f.limit ?? 50),
+    offset: String(f.offset ?? 0),
+  })
+  return getJson<Page<ScreenRow>>(`/api/screen?${params.toString()}`)
 }

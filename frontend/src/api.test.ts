@@ -4,6 +4,7 @@ import {
   clearToken,
   getToken,
   getWatchlist,
+  listCompanies,
   loadCompanyData,
   login,
   logout,
@@ -108,8 +109,18 @@ test('loadCompanyData fetches and assembles all sections', async () => {
   expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/graham')
 })
 
-test('screen builds the query string', async () => {
-  mockFetch(() => ({ json: async () => [] }))
-  await screen(true, 3)
-  expect(calls[0].url).toBe('/api/screen?defensive=true&min_score=3')
+test('listCompanies builds query strings with optional search', async () => {
+  mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
+  await listCompanies('app', 25, 50)
+  expect(calls[0].url).toBe('/api/companies?limit=25&offset=50&q=app')
+  await listCompanies('', 25, 0)
+  expect(calls[1].url).toBe('/api/companies?limit=25&offset=0')
+})
+
+test('screen builds the query string from filters and defaults', async () => {
+  mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
+  await screen({ defensive: true, net_net: false, min_score: 3, limit: 10, offset: 0 })
+  expect(calls[0].url).toBe('/api/screen?defensive=true&net_net=false&min_score=3&limit=10&offset=0')
+  await screen({})
+  expect(calls[1].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0')
 })

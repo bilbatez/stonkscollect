@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::domain::{FinancialFact, PricePoint, Ratio};
+use crate::domain::{FinancialFact, PeriodType, PricePoint, Ratio};
 
 /// Compute per-period ratios from a company's facts (and `prices`, for the
 /// historical P/E and P/B series). Only ratios whose inputs are present (and
@@ -19,17 +19,18 @@ pub fn compute(
     let price_at = |d: NaiveDate| -> Option<f64> {
         prices.iter().filter(|p| p.date <= d).max_by_key(|p| p.date).map(|p| p.close)
     };
-    // period_end -> { line_item -> value }
-    let mut by_period: BTreeMap<NaiveDate, BTreeMap<&str, f64>> = BTreeMap::new();
+    // (period_end, period_type) -> { line_item -> value }. Keying on period_type
+    // too keeps annual and Q4 (same end date) from colliding.
+    let mut by_period: BTreeMap<(NaiveDate, PeriodType), BTreeMap<&str, f64>> = BTreeMap::new();
     for f in facts {
         by_period
-            .entry(f.period_end)
+            .entry((f.period_end, f.period_type))
             .or_default()
             .insert(f.line_item.as_str(), f.value);
     }
 
     let mut ratios = Vec::new();
-    for (period_end, items) in by_period {
+    for ((period_end, period_type), items) in by_period {
         // num/den, guarding a zero denominator.
         let ratio = |num: Option<&f64>, den: Option<&f64>| -> Option<f64> {
             match (num, den) {
@@ -42,6 +43,7 @@ pub fn compute(
                 ratios.push(Ratio {
                     company_id,
                     period_end,
+                    period_type,
                     metric: metric.to_string(),
                     value: v,
                     computed_at: now,
@@ -212,6 +214,26 @@ mod tests {
         let facts = vec![fact("Revenue", p, 0.0), fact("NetIncome", p, 10.0)];
         let r = compute(1, &facts, &[], fixed_now());
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn annual_and_quarterly_same_date_do_not_collide() {
+        let p = (2023, 12, 31);
+        let mut annual = vec![fact("Revenue", p, 100.0), fact("NetIncome", p, 25.0)];
+        let mut q4 = vec![fact("Revenue", p, 30.0), fact("NetIncome", p, 3.0)];
+        for f in &mut q4 {
+            f.period_type = PeriodType::Quarterly;
+        }
+        annual.extend(q4);
+        let r = compute(1, &annual, &[], fixed_now());
+        let nm: Vec<(PeriodType, f64)> = r
+            .iter()
+            .filter(|x| x.metric == "net_margin")
+            .map(|x| (x.period_type, x.value))
+            .collect();
+        // both period types present and distinct (annual 0.25, quarterly 0.1)
+        assert!(nm.contains(&(PeriodType::Annual, 0.25)));
+        assert!(nm.contains(&(PeriodType::Quarterly, 0.1)));
     }
 
     #[test]

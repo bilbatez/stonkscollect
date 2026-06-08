@@ -249,6 +249,7 @@ pub struct CollectSummary {
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
     threshold: f64,
     now: DateTime<Utc>,
     concurrency: usize,
@@ -274,7 +275,9 @@ pub async fn collect_all(
                 let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 match result {
                     Ok(report) => {
-                        // Best-effort timestamp + per-company metric recompute.
+                        // Best-effort: prices first (so Graham sees a price), then
+                        // timestamp + per-company metric recompute.
+                        let _ = collect_prices_for(store, price_sources, company.id, &target).await;
                         let _ = store.mark_collected(company.id, now).await;
                         let _ = recompute_metrics(store, company.id, min_revenue, now).await;
                         progress.company_done(done, total, &company.ticker, true);
@@ -309,9 +312,11 @@ pub async fn collect_all(
 
 /// Run [`ingest`] for each known ticker. Unknown tickers (not yet bootstrapped)
 /// are skipped. Returns the per-ticker reports.
+#[allow(clippy::too_many_arguments)]
 pub async fn collect_tickers(
     store: &Store,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
     tickers: &[String],
     threshold: f64,
     now: DateTime<Utc>,
@@ -328,6 +333,7 @@ pub async fn collect_tickers(
         };
         match ingest(store, sources, company.id, &target, threshold, now).await {
             Ok(report) => {
+                let _ = collect_prices_for(store, price_sources, company.id, &target).await;
                 let _ = recompute_metrics(store, company.id, min_revenue, now).await;
                 outcomes.push((ticker.clone(), report));
             }
@@ -632,7 +638,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
+        let summary = collect_all(&store, &sources, &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap();
 
@@ -656,10 +662,10 @@ mod tests {
         let cutoff = Some(now - ChronoDuration::hours(1));
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
+        let s1 = collect_all(&store, &sources, &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
+        let s2 = collect_all(&store, &sources, &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -668,7 +674,7 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
+        let summary = collect_all(&store, &sources, &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);
@@ -710,7 +716,7 @@ mod tests {
         let p = CountProgress::default();
 
         let summary =
-            collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &p)
+            collect_all(&store, &sources, &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &p)
                 .await
                 .unwrap();
 
@@ -720,6 +726,62 @@ mod tests {
         assert_eq!(summary.companies, 2);
     }
 
+    /// A price source returning one valid bar for the requested company.
+    struct GoodPriceSource;
+    #[async_trait(?Send)]
+    impl PriceSource for GoodPriceSource {
+        fn name(&self) -> &'static str {
+            "good"
+        }
+        async fn fetch_prices(
+            &self,
+            id: i64,
+            _t: &SourceTarget,
+        ) -> Result<Vec<PricePoint>, CollectorError> {
+            Ok(vec![PricePoint {
+                company_id: id,
+                date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
+                close: 50.0,
+                volume: None,
+                source: "good".into(),
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_collects_prices_so_graham_gets_valuation() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() }],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        let price_sources: [&dyn PriceSource; 1] = [&GoodPriceSource];
+        assert_eq!(GoodPriceSource.name(), "good");
+
+        collect_tickers(&store, &sources, &price_sources, &["AAPL".to_string()], 0.05, fixed_now(), 500_000_000.0)
+            .await
+            .unwrap();
+
+        let id = store.get_company("AAPL").await.unwrap().unwrap().id;
+        let price = store.latest_price(id).await.unwrap();
+        assert!(price.is_some(), "price persisted by the collect path");
+        // and that price reaches Graham: the P/E criterion is now computed
+        // (price / EPS) instead of being reported as "insufficient data".
+        let facts = store.get_facts(id).await.unwrap();
+        let a = graham::assess(&facts, price, 500_000_000.0);
+        let pe = a.criteria.iter().find(|c| c.name == "P/E <= 15").unwrap();
+        assert_ne!(pe.detail, "insufficient data", "P/E computed from the collected price");
+        // a Graham score row was persisted for the company
+        assert!(store.get_graham_score(id).await.unwrap().is_some());
+    }
+
     #[tokio::test]
     async fn collect_tickers_skips_a_failing_company() {
         let (store, _id, _d) = store_with_company().await; // AAPL exists
@@ -727,6 +789,7 @@ mod tests {
         let outcomes = collect_tickers(
             &store,
             &sources,
+            &[],
             &["AAPL".to_string()],
             0.05,
             fixed_now(),
@@ -752,6 +815,7 @@ mod tests {
         let outcomes = collect_tickers(
             &store,
             &sources,
+            &[],
             &["AAPL".to_string(), "UNKNOWN".to_string()],
             0.05,
             fixed_now(),
@@ -822,7 +886,7 @@ mod tests {
             .unwrap();
         let n = recompute_ratios(&store, id, fixed_now()).await.unwrap();
         assert_eq!(n, 1); // net_margin
-        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -889,6 +953,6 @@ mod tests {
             .unwrap();
         let s = recompute_ratios_all(&store, fixed_now()).await.unwrap();
         assert_eq!(s.companies, 1);
-        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
 }

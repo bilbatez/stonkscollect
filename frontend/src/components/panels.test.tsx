@@ -1,41 +1,76 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { expect, test } from 'vitest'
 import { DiscrepancyPanel } from './DiscrepancyPanel'
 import { FreshnessBadge } from './FreshnessBadge'
 import { NewsFeed } from './NewsFeed'
 import { RatiosPanel } from './RatiosPanel'
 import { StatementTable } from './StatementTable'
-import type { Discrepancy, FinancialFact, NewsItem, Ratio } from '../types'
+import type { Discrepancy, FinancialFact, NewsItem, Period, Ratio } from '../types'
 
-const fact = (item: string, period: string, value: number): FinancialFact => ({
+const fact = (
+  statement: string,
+  item: string,
+  period: string,
+  value: number,
+  period_type: Period = 'annual',
+): FinancialFact => ({
   company_id: 1,
-  statement: 'income',
+  statement,
   line_item: item,
-  period_type: 'annual',
+  period_type,
   period_end: period,
   value,
   source: 'edgar',
   fetched_at: '2024-01-01T00:00:00Z',
 })
 
-test('StatementTable pivots facts and fills missing cells with a dash', () => {
+const ratio = (
+  metric: string,
+  period: string,
+  value: number,
+  period_type: Period = 'annual',
+): Ratio => ({
+  company_id: 1,
+  period_end: period,
+  period_type,
+  metric,
+  value,
+  computed_at: '',
+})
+
+test('StatementTable groups by section, humanizes labels, dashes gaps', () => {
   render(
     <StatementTable
       facts={[
-        fact('Revenue', '2023-12-31', 2_000_000_000),
-        fact('Revenue', '2022-12-31', 1_000_000_000),
-        // NetIncome only in 2023 -> its 2022 cell must render a dash.
-        fact('NetIncome', '2023-12-31', 500_000_000),
+        fact('income', 'Revenue', '2023-12-31', 2_000_000_000),
+        fact('income', 'Revenue', '2022-12-31', 1_000_000_000),
+        fact('income', 'NetIncome', '2023-12-31', 500_000_000), // 2022 cell dashed
+        fact('balance', 'StockholdersEquity', '2023-12-31', 8_000_000_000),
+        fact('segments', 'NorthAmerica', '2023-12-31', 1_000_000), // unknown section
       ]}
     />,
   )
-  expect(screen.getByText('Revenue')).toBeInTheDocument()
-  expect(screen.getByText('NetIncome')).toBeInTheDocument()
+  expect(screen.getByText('Income statement')).toBeInTheDocument()
+  expect(screen.getByText('Balance sheet')).toBeInTheDocument()
+  expect(screen.getByText('Segments')).toBeInTheDocument() // unknown section, titleized
+  expect(screen.getByText('Net income')).toBeInTheDocument() // humanized label
+  expect(screen.getByText("Shareholders' equity")).toBeInTheDocument()
   expect(screen.getByText('$2.0B')).toBeInTheDocument()
-  expect(screen.getByText('2023-12-31')).toBeInTheDocument()
-  expect(screen.getByText('2022-12-31')).toBeInTheDocument()
-  // the missing NetIncome/2022 cell
-  expect(screen.getByText('—')).toBeInTheDocument()
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0) // gaps dashed
+})
+
+test('StatementTable toggles annual/quarterly and shows an empty period', async () => {
+  render(
+    <StatementTable
+      facts={[fact('income', 'Revenue', '2023-09-30', 80_000_000_000, 'quarterly')]}
+    />,
+  )
+  // default is annual; this company only has a quarterly fact
+  expect(screen.getByText(/no annual statement data/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('Revenue')).toBeInTheDocument()
+  expect(screen.getByText('$80.0B')).toBeInTheDocument()
 })
 
 test('StatementTable shows an empty state when there are no facts', () => {
@@ -43,14 +78,42 @@ test('StatementTable shows an empty state when there are no facts', () => {
   expect(screen.getByText(/no statement data/i)).toBeInTheDocument()
 })
 
-test('RatiosPanel lists metrics and values', () => {
-  const ratios: Ratio[] = [
-    { company_id: 1, period_end: '2023-12-31', metric: 'pe', value: 28.5, computed_at: '' },
-  ]
-  const { rerender } = render(<RatiosPanel ratios={ratios} />)
-  expect(screen.getByText('pe')).toBeInTheDocument()
-  expect(screen.getByText('28.5')).toBeInTheDocument()
-  rerender(<RatiosPanel ratios={[]} />)
+test('RatiosPanel groups metrics, formats by kind, dashes gaps', () => {
+  render(
+    <RatiosPanel
+      ratios={[
+        ratio('roe', '2023-12-31', 0.126),
+        ratio('current_ratio', '2023-12-31', 2.6858),
+        ratio('current_ratio', '2022-12-31', 2.0),
+        ratio('book_value_per_share', '2023-12-31', 64.24),
+        ratio('mystery_metric', '2023-12-31', 1.5), // -> "Other" group
+      ]}
+    />,
+  )
+  expect(screen.getByText('Profitability')).toBeInTheDocument()
+  expect(screen.getByText('Liquidity')).toBeInTheDocument()
+  expect(screen.getByText('Other')).toBeInTheDocument()
+  expect(screen.getByText('Return on equity')).toBeInTheDocument()
+  expect(screen.getByText('12.6%')).toBeInTheDocument() // percent
+  expect(screen.getByText('2.69×')).toBeInTheDocument() // ratio
+  expect(screen.getByText('$64.24')).toBeInTheDocument() // currency (per-share)
+  // metrics without a 2022 value -> dash in that column
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+})
+
+test('RatiosPanel shows empty period, toggles, and ignores re-clicking active', async () => {
+  // only quarterly data -> the default annual view is empty
+  render(<RatiosPanel ratios={[ratio('roe', '2023-09-30', 0.05, 'quarterly')]} />)
+  expect(screen.getByText(/no annual ratio data/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('5.0%')).toBeInTheDocument()
+  // clicking the already-selected toggle yields null -> ignored, stays quarterly
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('5.0%')).toBeInTheDocument()
+})
+
+test('RatiosPanel shows an empty state when there are no ratios', () => {
+  render(<RatiosPanel ratios={[]} />)
   expect(screen.getByText(/no ratio data/i)).toBeInTheDocument()
 })
 
@@ -64,12 +127,13 @@ test('NewsFeed renders headlines with optional descriptions', () => {
   expect(screen.getByText('why')).toBeInTheDocument()
   expect(screen.getByText('Flat')).toBeInTheDocument()
   expect(screen.getByText('reuters')).toBeInTheDocument()
+  render(<NewsFeed news={[]} />)
+  expect(screen.getByText(/no news/i)).toBeInTheDocument()
 })
 
 test('DiscrepancyPanel shows a row per flag and an empty state', () => {
   const d: Discrepancy[] = [
     { company_id: 1, field: 'Revenue', period: '2023-12-31', source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.5, flagged_at: '' },
-    // null period must render a dash
     { company_id: 1, field: 'NetIncome', period: null, source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.1, flagged_at: '' },
   ]
   const { rerender } = render(<DiscrepancyPanel discrepancies={d} />)

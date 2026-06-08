@@ -67,6 +67,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/auth/me", get(me))
         .route("/api/watchlist", get(watchlist).post(watch_add))
         .route("/api/watchlist/:ticker", delete(watch_remove))
+        .route("/api/companies", get(companies))
         .route("/api/companies/:ticker", get(company))
         .route("/api/companies/:ticker/prices", get(prices))
         .route("/api/companies/:ticker/facts", get(facts))
@@ -82,14 +83,53 @@ pub fn routes() -> Router<Arc<Store>> {
 #[derive(Deserialize)]
 struct ScreenParams {
     defensive: Option<bool>,
+    net_net: Option<bool>,
     min_score: Option<i64>,
     limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct ScreenRow {
     company: Company,
     score: GrahamScore,
+}
+
+/// A page of results plus the total match count (for client pagination).
+#[derive(Serialize)]
+struct Page<T> {
+    rows: Vec<T>,
+    total: i64,
+}
+
+#[derive(Deserialize)]
+struct CompaniesParams {
+    q: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct CompanyRow {
+    company: Company,
+    score: Option<GrahamScore>,
+}
+
+/// Paginated, optionally-searched directory of all companies, each with its
+/// Graham score when computed.
+async fn companies(
+    State(store): State<Arc<Store>>,
+    Query(p): Query<CompaniesParams>,
+    _user: AuthUser,
+) -> ApiResult<Page<CompanyRow>> {
+    let (rows, total) = store
+        .list_companies(p.q.as_deref(), p.limit.unwrap_or(50), p.offset.unwrap_or(0))
+        .await
+        .map_err(internal)?;
+    Ok(Json(Page {
+        rows: rows.into_iter().map(|(company, score)| CompanyRow { company, score }).collect(),
+        total,
+    }))
 }
 
 async fn graham_assessment(
@@ -117,7 +157,7 @@ async fn summary(
     _user: AuthUser,
 ) -> ApiResult<CompanySummary> {
     let company = resolve(&store, &ticker).await?;
-    let ratios = store.get_ratios(company.id).await.map_err(internal)?;
+    let ratios = store.get_ratios(company.id, None).await.map_err(internal)?;
     let graham = store.get_graham_score(company.id).await.map_err(internal)?;
     Ok(Json(CompanySummary { company, ratios, graham }))
 }
@@ -126,12 +166,21 @@ async fn screen(
     State(store): State<Arc<Store>>,
     Query(p): Query<ScreenParams>,
     _user: AuthUser,
-) -> ApiResult<Vec<ScreenRow>> {
-    let rows = store
-        .screen(p.defensive.unwrap_or(false), p.min_score.unwrap_or(0), p.limit.unwrap_or(100))
+) -> ApiResult<Page<ScreenRow>> {
+    let (rows, total) = store
+        .screen(
+            p.defensive.unwrap_or(false),
+            p.net_net.unwrap_or(false),
+            p.min_score.unwrap_or(0),
+            p.limit.unwrap_or(50),
+            p.offset.unwrap_or(0),
+        )
         .await
         .map_err(internal)?;
-    Ok(Json(rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect()))
+    Ok(Json(Page {
+        rows: rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect(),
+        total,
+    }))
 }
 
 /// Log the real cause server-side; never surface store/SQL detail to the client.
@@ -297,7 +346,7 @@ async fn ratios(
     _user: AuthUser,
 ) -> ApiResult<Vec<Ratio>> {
     let c = resolve(&store, &ticker).await?;
-    Ok(Json(store.get_ratios(c.id).await.map_err(internal)?))
+    Ok(Json(store.get_ratios(c.id, None).await.map_err(internal)?))
 }
 
 async fn news(
@@ -382,6 +431,7 @@ mod tests {
             .upsert_ratio(&Ratio {
                 company_id: id,
                 period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                period_type: PeriodType::Annual,
                 metric: "pe".into(),
                 value: 28.5,
                 computed_at: now,
@@ -516,9 +566,22 @@ mod tests {
 
         let (status, json) = get(store.clone(), &t, "/api/screen?defensive=true&min_score=1").await;
         assert_eq!(status, StatusCode::OK);
-        let rows = json.as_array().unwrap();
+        assert_eq!(json["total"], 1);
+        let rows = json["rows"].as_array().unwrap();
         assert_eq!(rows[0]["company"]["ticker"], "AAPL");
         assert_eq!(rows[0]["score"]["score"], 6);
+
+        // paginated companies directory: AAPL present with its score; search works
+        let (status, json) = get(store.clone(), &t, "/api/companies?limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+        assert_eq!(json["rows"][0]["score"]["score"], 6);
+        let (_s, json) = get(store.clone(), &t, "/api/companies?q=zzz").await;
+        assert_eq!(json["total"], 0);
+        // net-net filter (none qualify) returns an empty page
+        let (_s, json) = get(store.clone(), &t, "/api/screen?net_net=true").await;
+        assert_eq!(json["total"], 0);
 
         // aggregate summary
         let (status, json) = get(store, &t, "/api/companies/AAPL/summary").await;

@@ -6,6 +6,7 @@ pub mod edgar;
 pub mod fmp;
 pub mod news;
 pub mod scrape;
+pub mod yahoo;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

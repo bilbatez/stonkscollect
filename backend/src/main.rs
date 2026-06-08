@@ -13,6 +13,7 @@ use stonkscollect_backend::collectors::edgar::EdgarCollector;
 use stonkscollect_backend::collectors::fmp::FmpCollector;
 use stonkscollect_backend::collectors::news::FinnhubCollector;
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
+use stonkscollect_backend::collectors::yahoo::YahooCollector;
 use stonkscollect_backend::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
@@ -149,9 +150,11 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
 
     let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &limiter));
     let mut fact_sources: Vec<&dyn FactSource> = vec![&edgar];
+    // Yahoo is keyless, so prices work without any API key.
+    let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
     let fmp;
-    let mut price_sources: Vec<&dyn PriceSource> = Vec::new();
     if let Some(key) = &cfg.fmp_api_key {
         fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         fact_sources.push(&fmp);
@@ -179,7 +182,9 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
 
         let result = scheduler::run_tracked(store, label, None, fired, || async {
             match tier {
-                Tier::Fundamentals => collect_fundamentals(store, cfg, &fact_sources, fired).await,
+                Tier::Fundamentals => {
+                    collect_fundamentals(store, cfg, &fact_sources, &price_sources, fired).await
+                }
                 Tier::Price => collect_prices(store, cfg, &price_sources, fired, delay).await,
                 Tier::News => collect_news(store, cfg, &news_sources, fired, delay).await,
             }
@@ -194,17 +199,19 @@ async fn collect_fundamentals(
     store: &Store,
     cfg: &Config,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
-    // Ratios + Graham scores are recomputed per company inside collect_* (only
-    // for companies actually collected this pass), not over the whole universe.
+    // Prices, ratios + Graham scores are recomputed per company inside collect_*
+    // (only for companies actually collected this pass), not the whole universe.
     if cfg.collect_all {
         pipeline::collect_all(
             store,
             sources,
+            price_sources,
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
@@ -217,6 +224,7 @@ async fn collect_fundamentals(
         let outcomes = pipeline::collect_tickers(
             store,
             sources,
+            price_sources,
             &cfg.tickers,
             cfg.reconcile_threshold,
             now,
@@ -313,11 +321,15 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
 
     let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
     let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &limiter));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
+    // Keyless prices via Yahoo so P/E, P/B and the screener populate without keys.
+    let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
         fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         sources.push(&fmp);
+        price_sources.push(&fmp);
     }
     let scrape;
     if !bulk {
@@ -326,12 +338,13 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
     }
 
     let now = chrono::Utc::now();
-    // collect_* recompute ratios + Graham scores per collected company.
+    // collect_* collect prices then recompute ratios + Graham per collected company.
     if bulk {
         // One-shot CLI always collects (no freshness cutoff).
         let s = pipeline::collect_all(
             store,
             &sources,
+            &price_sources,
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
@@ -350,6 +363,7 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
         let outcomes = pipeline::collect_tickers(
             store,
             &sources,
+            &price_sources,
             &tickers,
             cfg.reconcile_threshold,
             now,
