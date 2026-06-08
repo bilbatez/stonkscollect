@@ -196,6 +196,22 @@ pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<u
     store.upsert_companies(&companies).await
 }
 
+/// Progress sink for a bulk collection pass. Implementations must be `Sync`
+/// because `company_done` is called from the concurrent collection stream.
+pub trait CollectProgress: Sync {
+    /// Called once before any company is processed, with the total to process.
+    fn start(&self, total: usize);
+    /// Called as each company finishes (`done` is 1-based, in completion order).
+    fn company_done(&self, done: usize, total: usize, ticker: &str, ok: bool);
+}
+
+/// A [`CollectProgress`] that reports nothing (for callers that don't care).
+pub struct NoProgress;
+impl CollectProgress for NoProgress {
+    fn start(&self, _total: usize) {}
+    fn company_done(&self, _done: usize, _total: usize, _ticker: &str, _ok: bool) {}
+}
+
 /// Aggregate totals from collecting many companies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CollectSummary {
@@ -218,6 +234,7 @@ pub struct CollectSummary {
 ///
 /// Up to `concurrency` companies are fetched at once; politeness is enforced by
 /// the shared rate limiter in the HTTP client, not a per-company sleep.
+#[allow(clippy::too_many_arguments)]
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
@@ -226,25 +243,37 @@ pub async fn collect_all(
     concurrency: usize,
     cutoff: Option<DateTime<Utc>>,
     min_revenue: f64,
+    progress: &dyn CollectProgress,
 ) -> Result<CollectSummary, StoreError> {
     let companies = match cutoff {
         Some(c) => store.companies_due(c).await?,
         None => store.all_companies().await?,
     };
 
+    let total = companies.len();
+    progress.start(total);
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+
     let outcomes = futures::stream::iter(companies)
-        .map(|company| async move {
-            let target = target_of(&company);
-            match ingest(store, sources, company.id, &target, threshold, now).await {
-                Ok(report) => {
-                    // Best-effort timestamp + per-company metric recompute.
-                    let _ = store.mark_collected(company.id, now).await;
-                    let _ = recompute_metrics(store, company.id, min_revenue, now).await;
-                    Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
-                }
-                Err(e) => {
-                    tracing::warn!("collect failed for {}: {e}", company.ticker);
-                    Err(())
+        .map(|company| {
+            let counter = &counter;
+            async move {
+                let target = target_of(&company);
+                let result = ingest(store, sources, company.id, &target, threshold, now).await;
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                match result {
+                    Ok(report) => {
+                        // Best-effort timestamp + per-company metric recompute.
+                        let _ = store.mark_collected(company.id, now).await;
+                        let _ = recompute_metrics(store, company.id, min_revenue, now).await;
+                        progress.company_done(done, total, &company.ticker, true);
+                        Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
+                    }
+                    Err(e) => {
+                        tracing::warn!("collect failed for {}: {e}", company.ticker);
+                        progress.company_done(done, total, &company.ticker, false);
+                        Err(())
+                    }
                 }
             }
         })
@@ -583,7 +612,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap();
 
@@ -607,10 +636,10 @@ mod tests {
         let cutoff = Some(now - ChronoDuration::hours(1));
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
+        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
+        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -619,11 +648,56 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);
         assert_eq!(summary.failed, 1);
+    }
+
+    #[derive(Default)]
+    struct CountProgress {
+        start_calls: std::sync::atomic::AtomicUsize,
+        started_total: std::sync::atomic::AtomicUsize,
+        done: std::sync::atomic::AtomicUsize,
+    }
+    impl CollectProgress for CountProgress {
+        fn start(&self, total: usize) {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.start_calls.fetch_add(1, SeqCst);
+            self.started_total.store(total, SeqCst);
+        }
+        fn company_done(&self, _done: usize, _total: usize, _ticker: &str, _ok: bool) {
+            self.done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_all_reports_progress() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[
+                CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() },
+                CompanyRef { cik: "320193".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+            ],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        let p = CountProgress::default();
+
+        let summary =
+            collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0, &p)
+                .await
+                .unwrap();
+
+        assert_eq!(p.start_calls.load(SeqCst), 1); // start fired once
+        assert_eq!(p.started_total.load(SeqCst), 2); // with the full count
+        assert_eq!(p.done.load(SeqCst), 2); // one per company finished
+        assert_eq!(summary.companies, 2);
     }
 
     #[tokio::test]

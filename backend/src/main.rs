@@ -26,6 +26,26 @@ fn http_client(user_agent: &str, limiter: &Arc<RateLimiter>) -> ReqwestClient {
     ReqwestClient::with_limiter(user_agent, RetryPolicy::default(), Some(limiter.clone()))
 }
 
+/// Live, single-line progress for the `collect --all` CLI run.
+struct CliProgress;
+impl pipeline::CollectProgress for CliProgress {
+    fn start(&self, total: usize) {
+        if total == 0 {
+            eprintln!("No companies in the database. Run `make bootstrap` first.");
+        } else {
+            eprintln!("Collecting {total} companies…");
+        }
+    }
+    fn company_done(&self, done: usize, total: usize, ticker: &str, ok: bool) {
+        let mark = if ok { "ok" } else { "FAIL" };
+        // \r overwrites the line in place; \x1b[K clears any trailing chars.
+        eprint!("\r[{done}/{total}] {ticker} {mark}\x1b[K");
+        if done == total {
+            eprintln!();
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "stonkscollect", about = "US-equity fundamental data collector")]
 struct Cli {
@@ -187,6 +207,7 @@ async fn collect_fundamentals(
             cfg.collect_concurrency,
             cutoff,
             cfg.graham_min_revenue,
+            &pipeline::NoProgress,
         )
         .await
     } else {
@@ -299,6 +320,7 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
             cfg.collect_concurrency,
             None,
             cfg.graham_min_revenue,
+            &CliProgress,
         )
         .await
         .expect("collect all");

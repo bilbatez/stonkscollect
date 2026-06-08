@@ -34,7 +34,7 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
   src/ratios.rs     derived ratios incl. P/E, P/B, FCF, payout (pure)
   src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
-  src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental), recompute_metrics
+  src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental, CollectProgress sink), recompute_metrics
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
   src/auth.rs       argon2 password hashing + session tokens (pure)
   src/api.rs        axum REST handlers + AuthUser extractor; login brute-force
