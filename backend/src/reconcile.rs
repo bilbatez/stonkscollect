@@ -7,9 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 
-use crate::domain::{Discrepancy, FinancialFact};
+use crate::domain::{Discrepancy, FinancialFact, PeriodType};
 
 /// The canonical source whose value wins when present.
 const CANONICAL_SOURCE: &str = "edgar";
@@ -41,11 +41,21 @@ pub fn reconcile(facts: &[FinancialFact], threshold: f64, now: DateTime<Utc>) ->
     let mut groups: BTreeMap<(&str, &str, &str, chrono::NaiveDate), Vec<&FinancialFact>> =
         BTreeMap::new();
     for f in facts {
+        // Annual facts group by fiscal YEAR so sources with different reported
+        // year-ends (e.g. EDGAR 09-30 vs a scrape's 12-31) still cross-check;
+        // quarterly facts need the exact period end. The canonical fact keeps
+        // its own real period_end.
+        let period_key = match f.period_type {
+            PeriodType::Annual => {
+                chrono::NaiveDate::from_ymd_opt(f.period_end.year(), 1, 1).unwrap()
+            }
+            PeriodType::Quarterly => f.period_end,
+        };
         let key = (
             f.statement.as_str(),
             f.period_type.as_str(),
             f.line_item.as_str(),
-            f.period_end,
+            period_key,
         );
         groups.entry(key).or_default().push(f);
     }
@@ -136,6 +146,21 @@ mod tests {
         assert_eq!(result.canonical[0].source, "edgar");
         assert_eq!(result.canonical[0].value, 100.0);
         assert!(result.discrepancies.is_empty());
+    }
+
+    #[test]
+    fn annual_facts_cross_check_across_different_year_ends() {
+        // EDGAR reports FY2023 ending 09-30; a scrape reports 12-31. Same fiscal
+        // year -> they must reconcile, flagging the value divergence.
+        let mut edgar = fact("edgar", "Revenue", 100.0);
+        edgar.period_end = NaiveDate::from_ymd_opt(2023, 9, 30).unwrap();
+        let mut scrape = fact("scrape", "Revenue", 130.0);
+        scrape.period_end = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
+        let result = reconcile(&[edgar, scrape], 0.05, now());
+        assert_eq!(result.canonical.len(), 1);
+        assert_eq!(result.canonical[0].source, "edgar");
+        assert_eq!(result.canonical[0].period_end, NaiveDate::from_ymd_opt(2023, 9, 30).unwrap());
+        assert_eq!(result.discrepancies.len(), 1);
     }
 
     #[test]
