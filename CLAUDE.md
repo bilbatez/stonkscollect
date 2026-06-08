@@ -18,7 +18,10 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 - **Storage:** SQLite single file on mounted volume (`./data/stonks.db`) + scheduled Parquet
   export. Backup = copy the `.db` file.
 - **Containers:** separate Dockerfiles for backend + frontend; `docker-compose.yml` wires them
-  with a shared `./data` volume. Frontend nginx proxies `/api/` → `backend:8080`.
+  with a shared `./data` volume. Frontend nginx + Vite dev proxy both forward
+  `/api/` **and** `/auth/` to the backend **unchanged** (backend serves both
+  prefixes literally — never strip the prefix). Dev proxy target = `VITE_API_TARGET`
+  (`frontend/.env`, see `.env.example`).
 
 ## Directory structure
 

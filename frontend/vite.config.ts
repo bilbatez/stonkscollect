@@ -1,18 +1,22 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Load `.env`* files (see .env.example). `''` prefix = expose all keys here in
+  // the Node config; the app itself still only sees `VITE_`-prefixed vars.
+  const env = loadEnv(mode, process.cwd(), '')
+  const target = env.VITE_API_TARGET || 'http://localhost:8080'
+
+  return {
   plugins: [react()],
   server: {
-    // Dev: forward API calls to the backend container/process.
+    // Dev: forward backend calls untouched. The backend serves both `/api/*`
+    // and `/auth/*`, so proxy both and DON'T rewrite the path.
     proxy: {
-      '/api': {
-        target: process.env.VITE_API_TARGET ?? 'http://localhost:8080',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
+      '/api': { target, changeOrigin: true },
+      '/auth': { target, changeOrigin: true },
     },
   },
   test: {
@@ -46,4 +50,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })
