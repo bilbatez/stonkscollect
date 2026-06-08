@@ -78,11 +78,15 @@ pub struct Company {
     pub industry: Option<String>,
 }
 
-/// A single daily closing price from one source.
+/// A single daily price bar from one source. OHLC is optional (older rows /
+/// sources may only have close).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PricePoint {
     pub company_id: i64,
     pub date: NaiveDate,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
     pub close: f64,
     pub volume: Option<i64>,
     pub source: String,

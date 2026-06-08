@@ -382,6 +382,9 @@ mod tests {
             Ok(vec![PricePoint {
                 company_id: 9_999_999,
                 date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
                 close: 1.0,
                 volume: None,
                 source: "badp".into(),

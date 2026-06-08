@@ -53,9 +53,10 @@ const COMPANY_UPSERT_SQL: &str = "INSERT INTO companies (cik,ticker,name,exchang
      cik=excluded.cik, name=excluded.name, exchange=excluded.exchange, \
      sector=excluded.sector, industry=excluded.industry";
 
-const PRICE_UPSERT_SQL: &str = "INSERT INTO prices (company_id,date,close,volume,source) \
-     VALUES (?,?,?,?,?) \
-     ON CONFLICT(company_id,date,source) DO UPDATE SET close=excluded.close, volume=excluded.volume";
+const PRICE_UPSERT_SQL: &str = "INSERT INTO prices (company_id,date,open,high,low,close,volume,source) \
+     VALUES (?,?,?,?,?,?,?,?) \
+     ON CONFLICT(company_id,date,source) DO UPDATE SET \
+     open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume";
 
 const NEWS_INSERT_SQL: &str = "INSERT OR IGNORE INTO news \
      (company_id,title,description,url,source,published_at,dedup_hash) VALUES (?,?,?,?,?,?,?)";
@@ -252,6 +253,9 @@ impl Store {
         sqlx::query(PRICE_UPSERT_SQL)
             .bind(p.company_id)
             .bind(p.date)
+            .bind(p.open)
+            .bind(p.high)
+            .bind(p.low)
             .bind(p.close)
             .bind(p.volume)
             .bind(&p.source)
@@ -273,8 +277,9 @@ impl Store {
         to: Option<chrono::NaiveDate>,
         limit: Option<i64>,
     ) -> Result<Vec<PricePoint>> {
-        let mut sql =
-            String::from("SELECT company_id,date,close,volume,source FROM prices WHERE company_id=?");
+        let mut sql = String::from(
+            "SELECT company_id,date,open,high,low,close,volume,source FROM prices WHERE company_id=?",
+        );
         if from.is_some() {
             sql.push_str(" AND date >= ?");
         }
@@ -301,6 +306,9 @@ impl Store {
                 Ok(PricePoint {
                     company_id: r.try_get("company_id")?,
                     date: r.try_get("date")?,
+                    open: r.try_get("open")?,
+                    high: r.try_get("high")?,
+                    low: r.try_get("low")?,
                     close: r.try_get("close")?,
                     volume: r.try_get("volume")?,
                     source: r.try_get("source")?,
@@ -316,6 +324,9 @@ impl Store {
             sqlx::query(PRICE_UPSERT_SQL)
                 .bind(p.company_id)
                 .bind(p.date)
+                .bind(p.open)
+                .bind(p.high)
+                .bind(p.low)
                 .bind(p.close)
                 .bind(p.volume)
                 .bind(&p.source)
@@ -882,11 +893,17 @@ impl Store {
     pub async fn export_prices_parquet(&self, company_id: i64, path: &Path) -> Result<()> {
         let prices = self.get_prices(company_id).await?;
         let dates = StringArray::from_iter_values(prices.iter().map(|p| p.date.to_string()));
+        let opens = Float64Array::from(prices.iter().map(|p| p.open).collect::<Vec<_>>());
+        let highs = Float64Array::from(prices.iter().map(|p| p.high).collect::<Vec<_>>());
+        let lows = Float64Array::from(prices.iter().map(|p| p.low).collect::<Vec<_>>());
         let closes = Float64Array::from(prices.iter().map(|p| p.close).collect::<Vec<_>>());
         let volumes = Int64Array::from(prices.iter().map(|p| p.volume).collect::<Vec<_>>());
         let sources = StringArray::from_iter_values(prices.iter().map(|p| p.source.as_str()));
         let schema = Arc::new(Schema::new(vec![
             Field::new("date", DataType::Utf8, false),
+            Field::new("open", DataType::Float64, true),
+            Field::new("high", DataType::Float64, true),
+            Field::new("low", DataType::Float64, true),
             Field::new("close", DataType::Float64, false),
             Field::new("volume", DataType::Int64, true),
             Field::new("source", DataType::Utf8, false),
@@ -895,6 +912,9 @@ impl Store {
             schema.clone(),
             vec![
                 Arc::new(dates) as ArrayRef,
+                Arc::new(opens) as ArrayRef,
+                Arc::new(highs) as ArrayRef,
+                Arc::new(lows) as ArrayRef,
                 Arc::new(closes) as ArrayRef,
                 Arc::new(volumes) as ArrayRef,
                 Arc::new(sources) as ArrayRef,
@@ -977,7 +997,7 @@ mod tests {
             NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
         ] {
             store
-                .upsert_price(&PricePoint { company_id: id, date: d, close: 1.0, volume: None, source: "fmp".into() })
+                .upsert_price(&PricePoint { company_id: id, date: d, open: None, high: None, low: None, close: 1.0, volume: None, source: "fmp".into() })
                 .await
                 .unwrap();
         }
@@ -1028,7 +1048,7 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let d = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
         store
-            .save_prices(&[PricePoint { company_id: id, date: d, close: 1.0, volume: None, source: "fmp".into() }])
+            .save_prices(&[PricePoint { company_id: id, date: d, open: None, high: None, low: None, close: 1.0, volume: None, source: "fmp".into() }])
             .await
             .unwrap();
         store
@@ -1153,16 +1173,16 @@ mod tests {
         let d1 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
         let d2 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
         store
-            .upsert_price(&PricePoint { company_id: id, date: d2, close: 10.0, volume: Some(5), source: "fmp".into() })
+            .upsert_price(&PricePoint { company_id: id, date: d2, open: None, high: None, low: None, close: 10.0, volume: Some(5), source: "fmp".into() })
             .await
             .unwrap();
         store
-            .upsert_price(&PricePoint { company_id: id, date: d1, close: 9.0, volume: None, source: "fmp".into() })
+            .upsert_price(&PricePoint { company_id: id, date: d1, open: None, high: None, low: None, close: 9.0, volume: None, source: "fmp".into() })
             .await
             .unwrap();
         // update existing (d2, fmp)
         store
-            .upsert_price(&PricePoint { company_id: id, date: d2, close: 11.0, volume: Some(7), source: "fmp".into() })
+            .upsert_price(&PricePoint { company_id: id, date: d2, open: None, high: None, low: None, close: 11.0, volume: Some(7), source: "fmp".into() })
             .await
             .unwrap();
         let prices = store.get_prices(id).await.unwrap();
@@ -1385,6 +1405,9 @@ mod tests {
                 .upsert_price(&PricePoint {
                     company_id: id,
                     date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    open: None,
+                    high: None,
+                    low: None,
                     close: c,
                     volume: None,
                     source: "fmp".into(),
@@ -1440,11 +1463,11 @@ mod tests {
         let (store, dir) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
         store
-            .upsert_price(&PricePoint { company_id: id, date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(), close: 9.5, volume: Some(3), source: "fmp".into() })
+            .upsert_price(&PricePoint { company_id: id, date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(), open: None, high: None, low: None, close: 9.5, volume: Some(3), source: "fmp".into() })
             .await
             .unwrap();
         store
-            .upsert_price(&PricePoint { company_id: id, date: NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(), close: 10.5, volume: None, source: "fmp".into() })
+            .upsert_price(&PricePoint { company_id: id, date: NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(), open: None, high: None, low: None, close: 10.5, volume: None, source: "fmp".into() })
             .await
             .unwrap();
         let path = dir.path().join("prices.parquet");
@@ -1457,7 +1480,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 4);
+        assert_eq!(batch.num_columns(), 7); // date, open, high, low, close, volume, source
     }
 
     #[tokio::test]

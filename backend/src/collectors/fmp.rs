@@ -109,6 +109,9 @@ impl<H: HttpClient> PriceSource for FmpCollector<H> {
 #[derive(Deserialize)]
 struct PriceRow {
     date: NaiveDate,
+    open: Option<f64>,
+    high: Option<f64>,
+    low: Option<f64>,
     close: f64,
     volume: Option<i64>,
 }
@@ -127,6 +130,9 @@ fn parse_prices(company_id: i64, json: &str) -> Result<Vec<PricePoint>, Collecto
         .map(|r| PricePoint {
             company_id,
             date: r.date,
+            open: r.open,
+            high: r.high,
+            low: r.low,
             close: r.close,
             volume: r.volume,
             source: SOURCE.to_string(),
@@ -240,7 +246,10 @@ mod tests {
         assert_eq!(prices.len(), 2);
         assert_eq!(prices[0].date, NaiveDate::from_ymd_opt(2024, 1, 3).unwrap());
         assert_eq!(prices[0].volume, Some(58414460));
+        assert_eq!(prices[0].open, Some(184.0));
+        assert_eq!(prices[0].high, Some(185.9));
         assert_eq!(prices[1].volume, None);
+        assert_eq!(prices[1].open, None); // close-only row
         assert_eq!(prices[0].source, "fmp");
         assert_eq!(prices[0].company_id, 7);
     }

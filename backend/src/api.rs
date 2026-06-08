@@ -346,6 +346,9 @@ mod tests {
             .upsert_price(&PricePoint {
                 company_id: id,
                 date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
                 close: 185.0,
                 volume: Some(1),
                 source: "fmp".into(),

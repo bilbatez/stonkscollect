@@ -11,6 +11,9 @@ export interface Company {
 export interface PricePoint {
   company_id: number
   date: string
+  open?: number | null
+  high?: number | null
+  low?: number | null
   close: number
   volume: number | null
   source: string

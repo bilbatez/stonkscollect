@@ -1,7 +1,7 @@
 {
   "symbol": "AAPL",
   "historical": [
-    { "date": "2024-01-03", "close": 184.25, "volume": 58414460 },
+    { "date": "2024-01-03", "open": 184.0, "high": 185.9, "low": 183.4, "close": 184.25, "volume": 58414460 },
     { "date": "2024-01-02", "close": 185.64 }
   ]
 }
