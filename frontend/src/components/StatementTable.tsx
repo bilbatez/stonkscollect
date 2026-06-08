@@ -1,10 +1,11 @@
+import { Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material'
 import { formatCurrency } from '../format'
 import type { FinancialFact } from '../types'
 
 /** Pivot facts into a line-item × period table (periods newest-first). */
 export function StatementTable({ facts }: { facts: FinancialFact[] }) {
   if (facts.length === 0) {
-    return <p>No statement data.</p>
+    return <Typography color="text.secondary">No statement data.</Typography>
   }
 
   const periods = [...new Set(facts.map((f) => f.period_end))].sort().reverse()
@@ -17,26 +18,34 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
   }
 
   return (
-    <table className="statements">
-      <thead>
-        <tr>
-          <th>Line item</th>
-          {periods.map((p) => (
-            <th key={p}>{p}</th>
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Line item</TableCell>
+            {periods.map((p) => (
+              <TableCell key={p} align="right">
+                {p}
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {[...byItem.entries()].map(([item, values]) => (
+            <TableRow key={item} hover>
+              <TableCell>{item}</TableCell>
+              {periods.map((p) => {
+                const v = values.get(p)
+                return (
+                  <TableCell key={p} align="right">
+                    {v === undefined ? '—' : formatCurrency(v)}
+                  </TableCell>
+                )
+              })}
+            </TableRow>
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {[...byItem.entries()].map(([item, values]) => (
-          <tr key={item}>
-            <td>{item}</td>
-            {periods.map((p) => {
-              const v = values.get(p)
-              return <td key={p}>{v === undefined ? '—' : formatCurrency(v)}</td>
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+        </TableBody>
+      </Table>
+    </TableContainer>
   )
 }

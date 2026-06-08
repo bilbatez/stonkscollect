@@ -12,8 +12,9 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
   trace middleware), `tokio`, `sqlx` (SQLite), `reqwest`, `scraper`, `cron`,
   `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
   `clap` (CLI), `dotenvy`, `serde`, `thiserror`, `tracing`.
-- **Frontend:** React 19 + Vite 8 + TypeScript; ECharts (lazy, candlestick/line);
-  Vitest + Playwright.
+- **Frontend:** React 19 + Vite 8 + TypeScript; **MUI v9** (`@mui/material` +
+  `@emotion`, dark-first theme, all components MUI — no bespoke CSS); ECharts
+  (lazy, candlestick/line); Vitest + Playwright.
 - **Storage:** SQLite single file on mounted volume (`./data/stonks.db`) + scheduled Parquet
   export. Backup = copy the `.db` file.
 - **Containers:** separate Dockerfiles for backend + frontend; `docker-compose.yml` wires them
@@ -106,5 +107,11 @@ Conflicts: store every source's value; EDGAR canonical; flag discrepancies above
   need it (`brew install docker-compose`). Backend/frontend dev + tests work without Docker.
 - Frontend `tsconfig.app.json` `types` includes `vitest/globals` + `@testing-library/jest-dom`
   so `tsc -b` type-checks `*.test.tsx`. Don't remove or `npm run build` breaks.
+- **MUI + Vitest:** `vite.config.ts` `test.server.deps.inline` must keep `/@mui/`,
+  `/@emotion/`, `react-transition-group` — MUI's `.mjs` does an extensionless
+  directory import the native ESM resolver rejects; inlining lets Vite transform it.
+- **MUI v9 dropped system shorthand props** (`alignItems`/`justifyContent`/`flexWrap`/
+  `fontWeight`/`textAlign`) from components — pass them via `sx`, not as top-level
+  props (`tsc -b` errors otherwise). `Stack` keeps `direction`/`spacing` only.
 - vitest `include` is `src/**` only; Playwright `testDir` is `e2e/` — kept separate on purpose.
 - DB path uses POSIX `/data/...` inside containers; SQLite file must sit on the `./data` volume.

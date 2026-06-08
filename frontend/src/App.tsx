@@ -1,4 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  AppBar,
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Container,
+  CssBaseline,
+  Stack,
+  ThemeProvider,
+  Toolbar,
+  Typography,
+  createTheme,
+} from '@mui/material'
 import {
   addWatch,
   getToken,
@@ -96,104 +111,154 @@ function Dashboard({
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1>StonksCollect</h1>
-        <div>
-          <button type="button" onClick={() => void compare()}>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      <AppBar position="static" color="default" enableColorOnDark>
+        <Toolbar sx={{ gap: 1 }}>
+          <Typography variant="h6" component="h1" sx={{ flexGrow: 1, fontWeight: 700 }}>
+            StonksCollect
+          </Typography>
+          <Button color="inherit" onClick={() => void compare()}>
             Compare
-          </button>
-          <button type="button" onClick={() => void openScreener(true)}>
+          </Button>
+          <Button color="inherit" onClick={() => void openScreener(true)}>
             Screener
-          </button>
+          </Button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-          <button type="button" onClick={onLogout}>
+          <Button color="inherit" onClick={onLogout}>
             Log out
-          </button>
-        </div>
-      </header>
+          </Button>
+        </Toolbar>
+      </AppBar>
 
-      <div className="layout">
-        <Watchlist
-          items={items}
-          onSelect={(t) => void select(t)}
-          onAdd={(t) => void add(t)}
-          onRemove={(t) => void remove(t)}
-        />
-        <section className="content">
-          {view.kind === 'idle' && <p>Select a ticker to begin.</p>}
-          {view.kind === 'loading' && <Skeleton />}
-          {view.kind === 'error' && (
-            <div role="alert">
-              <p>Failed to load {view.ticker}.</p>
-              <button type="button" onClick={() => void select(view.ticker)}>
-                Retry
-              </button>
-            </div>
-          )}
-          {view.kind === 'compare' && <Compare rows={view.rows} />}
-          {view.kind === 'screen' && (
-            <Screener
-              rows={view.rows}
-              defensiveOnly={view.defensive}
-              onToggleDefensive={() => void openScreener(!view.defensive)}
-              onSelect={(t) => void select(t)}
-            />
-          )}
-          {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
-        </section>
-      </div>
-    </div>
+      <Container maxWidth="xl" sx={{ py: 3 }}>
+        <Stack direction="row" spacing={3} sx={{ alignItems: 'flex-start' }}>
+          <Watchlist
+            items={items}
+            onSelect={(t) => void select(t)}
+            onAdd={(t) => void add(t)}
+            onRemove={(t) => void remove(t)}
+          />
+          <Box component="section" sx={{ flexGrow: 1, minWidth: 0 }}>
+            {view.kind === 'idle' && (
+              <Typography color="text.secondary">Select a ticker to begin.</Typography>
+            )}
+            {view.kind === 'loading' && <Skeleton />}
+            {view.kind === 'error' && (
+              <Alert
+                severity="error"
+                action={
+                  <Button color="inherit" size="small" onClick={() => void select(view.ticker)}>
+                    Retry
+                  </Button>
+                }
+              >
+                Failed to load {view.ticker}.
+              </Alert>
+            )}
+            {view.kind === 'compare' && <Compare rows={view.rows} />}
+            {view.kind === 'screen' && (
+              <Screener
+                rows={view.rows}
+                defensiveOnly={view.defensive}
+                onToggleDefensive={() => void openScreener(!view.defensive)}
+                onSelect={(t) => void select(t)}
+              />
+            )}
+            {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
+          </Box>
+        </Stack>
+      </Container>
+    </Box>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Box sx={{ mt: 3 }}>
+      <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: 600 }}>
+        {title}
+      </Typography>
+      {children}
+    </Box>
   )
 }
 
 function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
   const latestPriceDate = data.prices[0]?.date ?? null
   return (
-    <article>
-      <header className="company-header">
-        <h2>
-          {data.company.name} ({data.company.ticker})
-        </h2>
-        <FreshnessBadge status={freshness(latestPriceDate, loadedAt)} />
-      </header>
-      <h3>Price</h3>
-      <Suspense fallback={<Skeleton label="Loading chart…" />}>
-        <PriceChart prices={data.prices} />
-      </Suspense>
-      <h3>Statements</h3>
-      <StatementTable facts={data.facts} />
-      <GrahamScorecard assessment={data.graham} />
-      <h3>Ratios</h3>
-      <RatiosPanel ratios={data.ratios} />
-      <h3>News</h3>
-      <NewsFeed news={data.news} />
-      <h3>Discrepancies</h3>
-      <DiscrepancyPanel discrepancies={data.discrepancies} />
-    </article>
+    <Card variant="outlined" component="article">
+      <CardContent>
+        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typography variant="h5" component="h2">
+            {data.company.name} ({data.company.ticker})
+          </Typography>
+          <FreshnessBadge status={freshness(latestPriceDate, loadedAt)} />
+        </Stack>
+        <Section title="Price">
+          <Suspense fallback={<Skeleton label="Loading chart…" />}>
+            <PriceChart prices={data.prices} />
+          </Suspense>
+        </Section>
+        <Section title="Statements">
+          <StatementTable facts={data.facts} />
+        </Section>
+        <Box sx={{ mt: 3 }}>
+          <GrahamScorecard assessment={data.graham} />
+        </Box>
+        <Section title="Ratios">
+          <RatiosPanel ratios={data.ratios} />
+        </Section>
+        <Section title="News">
+          <NewsFeed news={data.news} />
+        </Section>
+        <Section title="Discrepancies">
+          <DiscrepancyPanel discrepancies={data.discrepancies} />
+        </Section>
+      </CardContent>
+    </Card>
   )
 }
 
 function App() {
   const [token, setTokenState] = useState<string | null>(getToken())
-  const [theme, setTheme] = useState<Theme>('light')
+  const [theme, setTheme] = useState<Theme>('dark')
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
-  if (token === null) {
-    return <AuthForm onAuth={setTokenState} />
-  }
+  const muiTheme = useMemo(
+    () =>
+      createTheme({
+        palette: {
+          mode: theme,
+          primary: { main: '#14b8a6' },
+          success: { main: '#22c55e' },
+          error: { main: '#ef4444' },
+          ...(theme === 'dark'
+            ? { background: { default: '#0e1116', paper: '#161b22' } }
+            : {}),
+        },
+      }),
+    [theme],
+  )
+
   return (
-    <Dashboard
-      onLogout={() => {
-        void logout()
-        setTokenState(null)
-      }}
-      theme={theme}
-      onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-    />
+    <ThemeProvider theme={muiTheme}>
+      <CssBaseline />
+      {token === null ? (
+        <AuthForm onAuth={setTokenState} />
+      ) : (
+        <Dashboard
+          onLogout={() => {
+            void logout()
+            setTokenState(null)
+          }}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        />
+      )}
+    </ThemeProvider>
   )
 }
 

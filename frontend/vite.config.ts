@@ -20,6 +20,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // MUI's .mjs does an extensionless directory import of react-transition-group
+    // that Vitest's native ESM resolver rejects; inline MUI so Vite transforms
+    // and resolves it.
+    server: { deps: { inline: [/@mui/, /@emotion/, 'react-transition-group'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

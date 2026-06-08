@@ -65,11 +65,13 @@ test('dashboard loads watchlist, selects a company, toggles theme, logs out', as
   await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
   expect(await screen.findByTestId('price-chart')).toBeInTheDocument()
-  // theme toggle flips the document attribute both ways
-  await userEvent.click(screen.getByRole('button', { name: /dark/i }))
+  // theme toggle flips the document attribute both ways (dark is the default,
+  // so the toggle initially offers "Light")
   expect(document.documentElement.dataset.theme).toBe('dark')
   await userEvent.click(screen.getByRole('button', { name: /light/i }))
   expect(document.documentElement.dataset.theme).toBe('light')
+  await userEvent.click(screen.getByRole('button', { name: /dark/i }))
+  expect(document.documentElement.dataset.theme).toBe('dark')
   // logout returns to auth form
   await userEvent.click(screen.getByRole('button', { name: /log out/i }))
   expect(screen.getByLabelText('email')).toBeInTheDocument()

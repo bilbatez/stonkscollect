@@ -1,3 +1,5 @@
+import { Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material'
+
 export interface CompareRow {
   ticker: string
   metrics: Record<string, number>
@@ -6,31 +8,39 @@ export interface CompareRow {
 /** Compare a set of ratio metrics across multiple tickers. */
 export function Compare({ rows }: { rows: CompareRow[] }) {
   if (rows.length === 0) {
-    return <p>Nothing to compare.</p>
+    return <Typography color="text.secondary">Nothing to compare.</Typography>
   }
   // Union of metric names across rows, sorted for stable columns.
   const metrics = [...new Set(rows.flatMap((r) => Object.keys(r.metrics)))].sort()
   return (
-    <table className="compare">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          {metrics.map((m) => (
-            <th key={m}>{m}</th>
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Ticker</TableCell>
+            {metrics.map((m) => (
+              <TableCell key={m} align="right">
+                {m}
+              </TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.ticker} hover>
+              <TableCell>{r.ticker}</TableCell>
+              {metrics.map((m) => {
+                const v = r.metrics[m]
+                return (
+                  <TableCell key={m} align="right">
+                    {v === undefined ? '—' : v.toFixed(2)}
+                  </TableCell>
+                )
+              })}
+            </TableRow>
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.ticker}>
-            <td>{r.ticker}</td>
-            {metrics.map((m) => {
-              const v = r.metrics[m]
-              return <td key={m}>{v === undefined ? '—' : v.toFixed(2)}</td>
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+        </TableBody>
+      </Table>
+    </TableContainer>
   )
 }

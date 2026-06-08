@@ -1,4 +1,18 @@
 import { useState, type FormEvent } from 'react'
+import {
+  Box,
+  Button,
+  IconButton,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material'
+import CloseIcon from '@mui/icons-material/Close'
 import type { Company } from '../types'
 
 interface Props {
@@ -22,37 +36,57 @@ export function Watchlist({ items, onSelect, onAdd, onRemove }: Props) {
   }
 
   return (
-    <aside className="watchlist">
-      <h2>Watchlist</h2>
-      <form onSubmit={add}>
-        <input
-          aria-label="add ticker"
-          placeholder="Add ticker"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value)}
-        />
-        <button type="submit">Add</button>
-      </form>
+    <Paper
+      component="aside"
+      variant="outlined"
+      sx={{ p: 2, width: 240, flexShrink: 0, alignSelf: 'flex-start' }}
+    >
+      <Typography variant="h6" component="h2" gutterBottom>
+        Watchlist
+      </Typography>
+      <Box component="form" onSubmit={add}>
+        <Stack direction="row" spacing={1}>
+          <TextField
+            size="small"
+            placeholder="Add ticker"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+            slotProps={{ htmlInput: { 'aria-label': 'add ticker' } }}
+            fullWidth
+          />
+          <Button type="submit" variant="contained">
+            Add
+          </Button>
+        </Stack>
+      </Box>
       {items.length === 0 ? (
-        <p>No tickers yet.</p>
+        <Typography color="text.secondary" sx={{ mt: 2 }}>
+          No tickers yet.
+        </Typography>
       ) : (
-        <ul>
+        <List dense sx={{ mt: 1 }}>
           {items.map((c) => (
-            <li key={c.ticker}>
-              <button type="button" className="link" onClick={() => onSelect(c.ticker)}>
-                {c.ticker}
-              </button>
-              <button
-                type="button"
-                aria-label={`remove ${c.ticker}`}
-                onClick={() => onRemove(c.ticker)}
-              >
-                ✕
-              </button>
-            </li>
+            <ListItem
+              key={c.ticker}
+              disablePadding
+              secondaryAction={
+                <IconButton
+                  edge="end"
+                  size="small"
+                  aria-label={`remove ${c.ticker}`}
+                  onClick={() => onRemove(c.ticker)}
+                >
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              }
+            >
+              <ListItemButton onClick={() => onSelect(c.ticker)}>
+                <ListItemText primary={c.ticker} />
+              </ListItemButton>
+            </ListItem>
           ))}
-        </ul>
+        </List>
       )}
-    </aside>
+    </Paper>
   )
 }
