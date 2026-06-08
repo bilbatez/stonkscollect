@@ -14,8 +14,8 @@ use sqlx::sqlite::{
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::{
-    CollectionRun, Company, Discrepancy, FinancialFact, NewCompany, NewsItem, PeriodType,
-    PricePoint, Ratio, StatementKind,
+    CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewCompany, NewsItem,
+    PeriodType, PricePoint, Ratio, StatementKind,
 };
 
 /// Errors returned by the store.
@@ -779,6 +779,105 @@ impl Store {
             .collect()
     }
 
+    // --- Graham scores / screener ---
+
+    /// The most recent close price for a company.
+    pub async fn latest_price(&self, company_id: i64) -> Result<Option<f64>> {
+        Ok(
+            sqlx::query_scalar("SELECT close FROM prices WHERE company_id=? ORDER BY date DESC LIMIT 1")
+                .bind(company_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    /// Insert or update a company's Graham score.
+    pub async fn save_graham_score(&self, s: &GrahamScore) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO graham_scores \
+             (company_id,score,passes_defensive,graham_number,ncav_per_share,margin_of_safety,net_net,computed_at) \
+             VALUES (?,?,?,?,?,?,?,?) \
+             ON CONFLICT(company_id) DO UPDATE SET \
+             score=excluded.score, passes_defensive=excluded.passes_defensive, \
+             graham_number=excluded.graham_number, ncav_per_share=excluded.ncav_per_share, \
+             margin_of_safety=excluded.margin_of_safety, net_net=excluded.net_net, computed_at=excluded.computed_at",
+        )
+        .bind(s.company_id)
+        .bind(s.score)
+        .bind(s.passes_defensive)
+        .bind(s.graham_number)
+        .bind(s.ncav_per_share)
+        .bind(s.margin_of_safety)
+        .bind(s.net_net)
+        .bind(s.computed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    fn graham_score_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<GrahamScore> {
+        Ok(GrahamScore {
+            company_id: r.try_get("company_id")?,
+            score: r.try_get("score")?,
+            passes_defensive: r.try_get("passes_defensive")?,
+            graham_number: r.try_get("graham_number")?,
+            ncav_per_share: r.try_get("ncav_per_share")?,
+            margin_of_safety: r.try_get("margin_of_safety")?,
+            net_net: r.try_get("net_net")?,
+            computed_at: r.try_get("computed_at")?,
+        })
+    }
+
+    /// A company's persisted Graham score, if computed.
+    pub async fn get_graham_score(&self, company_id: i64) -> Result<Option<GrahamScore>> {
+        let row = sqlx::query(
+            "SELECT company_id,score,passes_defensive,graham_number,ncav_per_share,margin_of_safety,net_net,computed_at \
+             FROM graham_scores WHERE company_id=?",
+        )
+        .bind(company_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(r) => Ok(Some(Self::graham_score_from_row(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Screen companies by Graham score, highest first.
+    pub async fn screen(
+        &self,
+        defensive_only: bool,
+        min_score: i64,
+        limit: i64,
+    ) -> Result<Vec<(Company, GrahamScore)>> {
+        let mut sql = String::from(
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
+             g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
+             FROM graham_scores g JOIN companies c ON c.id = g.company_id WHERE g.score >= ?",
+        );
+        if defensive_only {
+            sql.push_str(" AND g.passes_defensive = 1");
+        }
+        sql.push_str(" ORDER BY g.score DESC, c.ticker LIMIT ?");
+        let rows = sqlx::query(&sql).bind(min_score).bind(limit).fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    Company {
+                        id: r.try_get("id")?,
+                        cik: r.try_get("cik")?,
+                        ticker: r.try_get("ticker")?,
+                        name: r.try_get("name")?,
+                        exchange: r.try_get("exchange")?,
+                        sector: r.try_get("sector")?,
+                        industry: r.try_get("industry")?,
+                    },
+                    Self::graham_score_from_row(r)?,
+                ))
+            })
+            .collect()
+    }
+
     /// Export a company's prices to a Parquet file for portable archiving.
     pub async fn export_prices_parquet(&self, company_id: i64, path: &Path) -> Result<()> {
         let prices = self.get_prices(company_id).await?;
@@ -1236,6 +1335,64 @@ mod tests {
         assert_eq!(store.session_user("nope", t(11)).await.unwrap(), None);
         store.delete_session("th").await.unwrap();
         assert_eq!(store.session_user("th", t(11)).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn graham_scores_save_get_and_screen() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap();
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        let msft_id = store.upsert_company(&msft).await.unwrap();
+
+        let score = |cid, s, def| GrahamScore {
+            company_id: cid,
+            score: s,
+            passes_defensive: def,
+            graham_number: Some(100.0),
+            ncav_per_share: None,
+            margin_of_safety: Some(0.2),
+            net_net: false,
+            computed_at: now,
+        };
+        store.save_graham_score(&score(aapl, 8, true)).await.unwrap();
+        store.save_graham_score(&score(msft_id, 4, false)).await.unwrap();
+        // upsert is idempotent
+        store.save_graham_score(&score(aapl, 8, true)).await.unwrap();
+
+        assert_eq!(store.get_graham_score(aapl).await.unwrap().unwrap().score, 8);
+
+        // screen: all (min 0) -> AAPL(8) before MSFT(4)
+        let all = store.screen(false, 0, 10).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].0.ticker, "AAPL");
+        // defensive only -> just AAPL
+        let def = store.screen(true, 0, 10).await.unwrap();
+        assert_eq!(def.len(), 1);
+        assert_eq!(def[0].0.ticker, "AAPL");
+        // min_score filter
+        assert_eq!(store.screen(false, 5, 10).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn latest_price_returns_newest() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        assert_eq!(store.latest_price(id).await.unwrap(), None);
+        for (d, c) in [(("2024-01-02"), 10.0), (("2024-03-01"), 20.0)] {
+            store
+                .upsert_price(&PricePoint {
+                    company_id: id,
+                    date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    close: c,
+                    volume: None,
+                    source: "fmp".into(),
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.latest_price(id).await.unwrap(), Some(20.0));
     }
 
     #[tokio::test]

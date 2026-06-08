@@ -123,6 +123,19 @@ pub struct Ratio {
     pub computed_at: DateTime<Utc>,
 }
 
+/// Persisted summary of a company's Graham defensive-investor assessment.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct GrahamScore {
+    pub company_id: i64,
+    pub score: i64,
+    pub passes_defensive: bool,
+    pub graham_number: Option<f64>,
+    pub ncav_per_share: Option<f64>,
+    pub margin_of_safety: Option<f64>,
+    pub net_net: bool,
+    pub computed_at: DateTime<Utc>,
+}
+
 /// A record of one collection attempt, for observability.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CollectionRun {

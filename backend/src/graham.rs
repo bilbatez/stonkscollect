@@ -18,6 +18,8 @@ pub const PE_PB_MAX: f64 = 22.5;
 pub const CURRENT_RATIO_MIN: f64 = 2.0;
 pub const EPS_GROWTH_MIN: f64 = 0.33;
 pub const NET_NET_FRACTION: f64 = 2.0 / 3.0;
+/// Default "adequate size" revenue floor (modernized from Graham's ~$100M).
+pub const DEFAULT_MIN_REVENUE: f64 = 500_000_000.0;
 const MIN_STABILITY_YEARS: usize = 3;
 
 /// Graham Number = √(22.5 · EPS · BVPS), when both are positive.

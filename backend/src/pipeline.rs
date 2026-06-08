@@ -6,10 +6,35 @@ use futures::StreamExt;
 
 use crate::collectors::edgar::CompanyRef;
 use crate::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
-use crate::domain::{Company, FinancialFact, NewCompany};
-use crate::ratios;
+use crate::domain::{Company, FinancialFact, GrahamScore, NewCompany};
+use crate::{graham, ratios};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
+
+/// Recompute and persist a company's Graham defensive-investor score from its
+/// stored facts + latest price.
+pub async fn recompute_graham(
+    store: &Store,
+    company_id: i64,
+    min_revenue: f64,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let facts = store.get_facts(company_id).await?;
+    let price = store.latest_price(company_id).await?;
+    let a = graham::assess(&facts, price, min_revenue);
+    store
+        .save_graham_score(&GrahamScore {
+            company_id,
+            score: a.score as i64,
+            passes_defensive: a.passes_defensive,
+            graham_number: a.graham_number,
+            ncav_per_share: a.ncav_per_share,
+            margin_of_safety: a.margin_of_safety,
+            net_net: a.net_net,
+            computed_at: now,
+        })
+        .await
+}
 
 fn target_of(c: &Company) -> SourceTarget {
     SourceTarget {
@@ -710,6 +735,31 @@ mod tests {
         let bad_sources: [&dyn NewsSource; 1] = [&BadNewsSource];
         let s2 = collect_news_all(&store, &bad_sources, fixed_now(), Duration::ZERO).await.unwrap();
         assert_eq!(s2.failed, 1);
+    }
+
+    #[tokio::test]
+    async fn recompute_graham_persists_a_score() {
+        let (store, id, _d) = store_with_company().await;
+        store
+            .save_reconciled(
+                &[
+                    fact(id, "edgar", "Revenue", 1_000_000_000.0),
+                    fact(id, "edgar", "NetIncome", 100_000_000.0),
+                    fact(id, "edgar", "CurrentAssets", 400.0),
+                    fact(id, "edgar", "CurrentLiabilities", 100.0),
+                    fact(id, "edgar", "TotalLiabilities", 150.0),
+                    fact(id, "edgar", "StockholdersEquity", 1000.0),
+                    fact(id, "edgar", "SharesOutstanding", 100.0),
+                    fact(id, "edgar", "Eps", 2.0),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+        recompute_graham(&store, id, 500_000_000.0, fixed_now()).await.unwrap();
+        let score = store.get_graham_score(id).await.unwrap().unwrap();
+        assert!(score.score >= 1);
+        assert!(score.graham_number.is_some());
     }
 
     #[tokio::test]

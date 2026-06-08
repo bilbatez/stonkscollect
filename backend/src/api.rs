@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth;
 use crate::domain::{
-    CollectionRun, Company, Discrepancy, FinancialFact, NewsItem, PricePoint, Ratio,
+    CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewsItem, PricePoint, Ratio,
 };
+use crate::graham;
 use crate::store::{Store, StoreError};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
@@ -72,7 +73,45 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/ratios", get(ratios))
         .route("/api/companies/:ticker/news", get(news))
         .route("/api/companies/:ticker/discrepancies", get(discrepancies))
+        .route("/api/companies/:ticker/graham", get(graham_assessment))
+        .route("/api/screen", get(screen))
         .route("/api/runs", get(runs))
+}
+
+#[derive(Deserialize)]
+struct ScreenParams {
+    defensive: Option<bool>,
+    min_score: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct ScreenRow {
+    company: Company,
+    score: GrahamScore,
+}
+
+async fn graham_assessment(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+) -> ApiResult<graham::GrahamAssessment> {
+    let c = resolve(&store, &ticker).await?;
+    let facts = store.get_facts(c.id).await.map_err(internal)?;
+    let price = store.latest_price(c.id).await.map_err(internal)?;
+    Ok(Json(graham::assess(&facts, price, graham::DEFAULT_MIN_REVENUE)))
+}
+
+async fn screen(
+    State(store): State<Arc<Store>>,
+    Query(p): Query<ScreenParams>,
+    _user: AuthUser,
+) -> ApiResult<Vec<ScreenRow>> {
+    let rows = store
+        .screen(p.defensive.unwrap_or(false), p.min_score.unwrap_or(0), p.limit.unwrap_or(100))
+        .await
+        .map_err(internal)?;
+    Ok(Json(rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect()))
 }
 
 fn internal(e: StoreError) -> ApiError {
@@ -344,6 +383,19 @@ mod tests {
             .unwrap();
         let rid = store.start_run("edgar", Some("AAPL"), now).await.unwrap();
         store.finish_run(rid, "ok", now, None).await.unwrap();
+        store
+            .save_graham_score(&GrahamScore {
+                company_id: id,
+                score: 6,
+                passes_defensive: true,
+                graham_number: Some(150.0),
+                ncav_per_share: None,
+                margin_of_safety: Some(0.1),
+                net_net: false,
+                computed_at: now,
+            })
+            .await
+            .unwrap();
 
         // A user + valid (far-future, real-time) session token.
         let uid = store
@@ -419,6 +471,21 @@ mod tests {
 
         let (status, _) = get(store, &t, "/api/companies/NOPE").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn graham_and_screen_endpoints() {
+        let (store, _d, t) = seeded().await;
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/graham").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json.get("criteria").is_some());
+        assert!(json.get("score").is_some());
+
+        let (status, json) = get(store, &t, "/api/screen?defensive=true&min_score=1").await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = json.as_array().unwrap();
+        assert_eq!(rows[0]["company"]["ticker"], "AAPL");
+        assert_eq!(rows[0]["score"]["score"], 6);
     }
 
     #[tokio::test]
