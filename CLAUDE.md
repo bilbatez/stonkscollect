@@ -8,10 +8,11 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 
 ## Tech stack
 
-- **Backend:** Rust 1.91, `axum` 0.7, `tokio`, `serde`, `thiserror`, `tracing`.
-  Planned: `sqlx` (SQLite), `reqwest`, `scraper`, `tokio-cron-scheduler`, parquet export.
-- **Frontend:** React 19 + Vite 8 + TypeScript. Planned charts: ECharts + Lightweight-Charts,
-  TanStack/AG Grid for statement tables.
+- **Backend:** Rust 1.91, `axum` 0.7, `tokio`, `sqlx` (SQLite), `reqwest`, `scraper`,
+  `cron`, `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
+  `clap` (CLI), `dotenvy`, `serde`, `thiserror`, `tracing`.
+- **Frontend:** React 19 + Vite 8 + TypeScript; ECharts (lazy, candlestick/line);
+  Vitest + Playwright.
 - **Storage:** SQLite single file on mounted volume (`./data/stonks.db`) + scheduled Parquet
   export. Backup = copy the `.db` file.
 - **Containers:** separate Dockerfiles for backend + frontend; `docker-compose.yml` wires them
@@ -25,13 +26,18 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   src/main.rs       CLI: serve | bootstrap | collect; NO logic (coverage-excluded)
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
-  src/store.rs      SQLite (WAL) CRUD + Parquet export
-  src/collectors/   edgar, fmp, news (rss+finnhub), scrape — behind HttpClient
-  src/http.rs       real reqwest client (coverage-excluded I/O glue)
+  src/store.rs      SQLite (WAL) CRUD, range queries, OHLC, Parquet export
+  src/collectors/   edgar, fmp, news (rss+finnhub), scrape — Fact/Price/NewsSource traits
+  src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
+  src/net.rs        RetryPolicy + RateLimiter (pure)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
-  src/pipeline.rs   ingest: reconcile facts -> persist canonical + discrepancies
+  src/ratios.rs     derived ratios incl. P/E, P/B, FCF, payout (pure)
+  src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
+  src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental), recompute_metrics
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
-  src/api.rs        axum REST handlers
+  src/auth.rs       argon2 password hashing + session tokens (pure)
+  src/api.rs        axum REST handlers + AuthUser extractor
+  migrations/       SQL (companies, facts, prices(OHLC), ratios, graham_scores, users…)
   tests/            integration tests + fixtures/
 frontend/         React + Vite SPA
   src/            api client, format utils, components/ + co-located *.test.tsx
@@ -42,39 +48,41 @@ Makefile          dev tasks
 docker-compose.yml
 ```
 
-**CLI:** `stonkscollect bootstrap` (load SEC ticker/CIK universe), `collect
-[--ticker]` (scrape→reconcile→persist now), `serve` (REST API). Driven by
-`pipeline::{bootstrap_companies, collect_tickers, ingest}`.
+**CLI:** `bootstrap` (SEC ticker/CIK universe), `collect [--ticker | --all]`
+(facts+prices+news → reconcile → persist → recompute ratios+Graham), `serve`
+(REST API + background tiered collection loop via `tokio::select!`; graceful
+shutdown on SIGTERM). Multi-user: signup/login (argon2 + bearer sessions),
+per-user watchlists; `/api/screen` ranks Graham defensive passers.
 
-`serve` also runs a background loop (concurrent via `tokio::select!`) that fires
-`collect_tickers` per `scheduler::next_tier` for the configured `TICKERS` (idle
-if none). `next_tier` is tested; the loop is thin glue in `main.rs`.
-
-**Remaining:** prices/news pipelines aren't yet wired into ingest (only facts);
-ratios computed from facts; segment/ownership/guidance ingestion.
+**Remaining:** segment/ownership/guidance ingestion (not in EDGAR companyfacts —
+needs a paid feed); HTTP conditional GET (ETag) on top of the freshness skip.
 
 ## Run / test / build
 
 From repo root via Makefile:
 
 - `make test` — backend `cargo test` + frontend `vitest run`
-- `make cov` — coverage gates (backend `cargo-llvm-cov`, frontend `vitest --coverage`); **100% required**
+- `make cov` — coverage gates: backend `cargo-llvm-cov` **functions 100% / lines ≥99%** (main/http excluded); frontend `vitest` **100%** (charts excluded)
+- `make demo` — bootstrap + collect a few tickers (quick local data)
 - `make lint` — `cargo clippy -D warnings` + `eslint`
 - `make e2e` — Playwright (frontend)
 - `make up` / `make down` — docker compose
 
 Direct:
 - Backend: `cd backend && cargo test | cargo run | cargo clippy --all-targets -- -D warnings`
-- Backend coverage: `cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 100 --fail-under-functions 100`
+- Backend coverage: `cargo llvm-cov --ignore-filename-regex '(main|http)\.rs' --fail-under-lines 99 --fail-under-functions 100`
 - Frontend: `cd frontend && npm run dev | test:run | coverage | build | e2e`
 
 ## Coding conventions
 
 - **Strict TDD (mandatory):** write failing test → watch it fail (RED) → minimal code (GREEN) →
   refactor. No production code without a failing test first.
-- **100% coverage gate** on logic modules. Pure bootstrap glue (`backend/src/main.rs`,
-  `frontend/src/main.tsx`) is explicitly excluded — never silently skip real logic.
-- **Clean code:** small single-purpose functions; collectors behind a `Collector` trait;
+- **Coverage gate** on logic modules: backend functions 100% / lines ≥99% (the
+  ≥99 floor absorbs a cargo-llvm-cov phantom-line artifact over async generic fns,
+  proven executed by `--text`); frontend 100%. I/O glue (`main.rs`, `http.rs`,
+  `frontend/src/{main.tsx,charts/}`) is explicitly excluded — never silently skip logic.
+- **Clean code:** small single-purpose functions; collectors behind `HttpClient` +
+  `FactSource`/`PriceSource`/`NewsSource` traits;
   reconcile logic pure (no I/O); domain models free of I/O; inject HTTP/DB/clock so they swap
   with fakes in tests; typed errors (`thiserror`), no `unwrap()` in production paths.
 - **Determinism:** inject clock + ids; record real source responses as fixtures. No live-network
@@ -84,7 +92,7 @@ Direct:
 ## Data sources (US only)
 
 - **SEC EDGAR** `data.sec.gov` companyfacts/companyconcept — canonical fundamentals.
-- One financial API (FMP / Finnhub / Alpha Vantage — TBD at Phase 4) — ratios, prices, segments.
+- **Financial Modeling Prep** (FMP_API_KEY) — prices/OHLC, income facts. **Finnhub** (FINNHUB_API_KEY) — company news. Keyless: EDGAR only.
 - HTML scrape fallback (gap-fill + cross-check; respect robots.txt, rate-limit, cache).
 - News: RSS (Reuters/AP/CNBC/MarketWatch/Yahoo) + Finnhub; title + description only, deduped.
 
