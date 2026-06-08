@@ -141,8 +141,8 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
 fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError>) {
     match result {
         Ok(s) => tracing::info!(
-            "{label} tier: {} companies, {} facts, {} discrepancies, {} source errors",
-            s.companies, s.facts_written, s.discrepancies_written, s.source_errors
+            "{label} tier: {} companies, {} facts, {} discrepancies, {} source errors, {} failed",
+            s.companies, s.facts_written, s.discrepancies_written, s.source_errors, s.failed
         ),
         Err(e) => tracing::error!("{label} tier failed: {e}"),
     }

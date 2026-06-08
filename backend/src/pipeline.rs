@@ -32,10 +32,15 @@ pub struct CollectSummary {
     pub facts_written: usize,
     pub discrepancies_written: usize,
     pub source_errors: usize,
+    /// Companies whose ingest failed (logged and skipped, not fatal).
+    pub failed: usize,
 }
 
 /// Collect every company in the store (the full US universe once bootstrapped),
 /// sleeping `delay` between companies to stay polite to upstream APIs.
+///
+/// A failure on one company is recorded in `summary.failed` and skipped — one
+/// bad company never aborts a full pass.
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
@@ -45,20 +50,27 @@ pub async fn collect_all(
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
     let mut summary = CollectSummary::default();
-    for company in &companies {
+    for (i, company) in companies.iter().enumerate() {
         // Throttle between companies (not before the first).
-        if summary.companies > 0 {
+        if i > 0 {
             tokio::time::sleep(delay).await;
         }
         let target = SourceTarget {
             cik: company.cik.clone(),
             symbol: company.ticker.clone(),
         };
-        let report = ingest(store, sources, company.id, &target, threshold, now).await?;
-        summary.companies += 1;
-        summary.facts_written += report.facts_written;
-        summary.discrepancies_written += report.discrepancies_written;
-        summary.source_errors += report.source_errors.len();
+        match ingest(store, sources, company.id, &target, threshold, now).await {
+            Ok(report) => {
+                summary.companies += 1;
+                summary.facts_written += report.facts_written;
+                summary.discrepancies_written += report.discrepancies_written;
+                summary.source_errors += report.source_errors.len();
+            }
+            Err(e) => {
+                tracing::warn!("collect failed for {}: {e}", company.ticker);
+                summary.failed += 1;
+            }
+        }
     }
     Ok(summary)
 }
@@ -81,8 +93,10 @@ pub async fn collect_tickers(
             cik: company.cik.clone(),
             symbol: company.ticker.clone(),
         };
-        let report = ingest(store, sources, company.id, &target, threshold, now).await?;
-        outcomes.push((ticker.clone(), report));
+        match ingest(store, sources, company.id, &target, threshold, now).await {
+            Ok(report) => outcomes.push((ticker.clone(), report)),
+            Err(e) => tracing::warn!("collect failed for {ticker}: {e}"),
+        }
     }
     Ok(outcomes)
 }
@@ -154,6 +168,33 @@ mod tests {
     const EDGAR: &str = include_str!("../tests/fixtures/edgar_companyfacts.json");
     const FMP_INCOME: &str = include_str!("../tests/fixtures/fmp_income.json");
     const SCRAPE_HTML: &str = include_str!("../tests/fixtures/scrape_financials.html");
+
+    /// A source returning a fact for a non-existent company id, so persisting it
+    /// fails the FK constraint -> a per-company StoreError (not a source error).
+    struct BadCompanyIdSource;
+    #[async_trait(?Send)]
+    impl FactSource for BadCompanyIdSource {
+        fn name(&self) -> &'static str {
+            "bad"
+        }
+        async fn fetch_facts(
+            &self,
+            _company_id: i64,
+            _target: &SourceTarget,
+            now: DateTime<Utc>,
+        ) -> Result<Vec<FinancialFact>, CollectorError> {
+            Ok(vec![FinancialFact {
+                company_id: 9_999_999, // no such company -> FK violation on save
+                statement: StatementKind::Income,
+                line_item: "Revenue".into(),
+                period_type: PeriodType::Annual,
+                period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                value: 1.0,
+                source: "bad".into(),
+                fetched_at: now,
+            }])
+        }
+    }
 
     /// A source that always fails, to exercise error capture.
     struct FailingSource;
@@ -296,6 +337,34 @@ mod tests {
         assert_eq!(summary.companies, 2);
         assert!(summary.facts_written > 0);
         assert_eq!(summary.clone(), summary);
+    }
+
+    #[tokio::test]
+    async fn collect_all_continues_past_a_failing_company() {
+        let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
+        assert_eq!(BadCompanyIdSource.name(), "bad");
+        let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO)
+            .await
+            .unwrap(); // pass did NOT abort
+        assert_eq!(summary.companies, 0);
+        assert_eq!(summary.failed, 1);
+    }
+
+    #[tokio::test]
+    async fn collect_tickers_skips_a_failing_company() {
+        let (store, _id, _d) = store_with_company().await; // AAPL exists
+        let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
+        let outcomes = collect_tickers(
+            &store,
+            &sources,
+            &["AAPL".to_string()],
+            0.05,
+            fixed_now(),
+        )
+        .await
+        .unwrap(); // did NOT abort
+        assert!(outcomes.is_empty()); // the failing company was skipped
     }
 
     #[tokio::test]
