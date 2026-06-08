@@ -173,14 +173,21 @@ pub struct CollectSummary {
 ///
 /// A failure on one company is recorded in `summary.failed` and skipped — one
 /// bad company never aborts a full pass.
+///
+/// When `cutoff` is `Some`, only companies not collected since `cutoff` are
+/// processed (incremental); successful collections are timestamped.
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
     threshold: f64,
     now: DateTime<Utc>,
     delay: std::time::Duration,
+    cutoff: Option<DateTime<Utc>>,
 ) -> Result<CollectSummary, StoreError> {
-    let companies = store.all_companies().await?;
+    let companies = match cutoff {
+        Some(c) => store.companies_due(c).await?,
+        None => store.all_companies().await?,
+    };
     let mut summary = CollectSummary::default();
     for (i, company) in companies.iter().enumerate() {
         // Throttle between companies (not before the first).
@@ -193,6 +200,7 @@ pub async fn collect_all(
         };
         match ingest(store, sources, company.id, &target, threshold, now).await {
             Ok(report) => {
+                store.mark_collected(company.id, now).await?;
                 summary.companies += 1;
                 summary.facts_written += report.facts_written;
                 summary.discrepancies_written += report.discrepancies_written;
@@ -296,7 +304,7 @@ mod tests {
     use crate::domain::{NewCompany, NewsItem, PeriodType, PricePoint, StatementKind};
     use crate::testutil::{fixed_now, FakeHttp};
     use async_trait::async_trait;
-    use chrono::{NaiveDate, TimeZone};
+    use chrono::{Duration as ChronoDuration, NaiveDate, TimeZone};
     use std::time::Duration;
 
     const EDGAR: &str = include_str!("../tests/fixtures/edgar_companyfacts.json");
@@ -516,7 +524,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO, None)
             .await
             .unwrap();
 
@@ -526,11 +534,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collect_all_skips_recently_collected() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() }],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        let now = fixed_now();
+        let cutoff = Some(now - ChronoDuration::hours(1));
+
+        // First pass: never collected -> due -> collected (marked at `now`).
+        let s1 = collect_all(&store, &sources, 0.05, now, Duration::ZERO, cutoff).await.unwrap();
+        assert_eq!(s1.companies, 1);
+        // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
+        let s2 = collect_all(&store, &sources, 0.05, now, Duration::ZERO, cutoff).await.unwrap();
+        assert_eq!(s2.companies, 0);
+    }
+
+    #[tokio::test]
     async fn collect_all_continues_past_a_failing_company() {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO)
+        let summary = collect_all(&store, &sources, 0.05, fixed_now(), std::time::Duration::ZERO, None)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);

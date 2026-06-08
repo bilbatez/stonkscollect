@@ -14,6 +14,8 @@ pub struct Config {
     pub collect_all: bool,
     /// Milliseconds to wait between companies in bulk collection (politeness).
     pub request_delay_ms: u64,
+    /// Skip companies collected within this many hours (None = always collect).
+    pub collect_max_age_hrs: Option<u64>,
     /// Relative threshold above which cross-source values are flagged.
     pub reconcile_threshold: f64,
 }
@@ -35,6 +37,7 @@ impl Config {
             request_delay_ms: get("REQUEST_DELAY_MS")
                 .and_then(|d| d.parse().ok())
                 .unwrap_or(150),
+            collect_max_age_hrs: get("COLLECT_MAX_AGE_HRS").and_then(|h| h.parse().ok()),
             reconcile_threshold: get("RECONCILE_THRESHOLD")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0.05),
@@ -77,6 +80,7 @@ mod tests {
             ("TICKERS", "aapl, msft ,"),
             ("COLLECT_ALL", "TRUE"),
             ("REQUEST_DELAY_MS", "200"),
+            ("COLLECT_MAX_AGE_HRS", "24"),
             ("RECONCILE_THRESHOLD", "0.1"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
@@ -87,6 +91,7 @@ mod tests {
         assert_eq!(cfg.tickers, vec!["AAPL", "MSFT"]);
         assert!(cfg.collect_all);
         assert_eq!(cfg.request_delay_ms, 200);
+        assert_eq!(cfg.collect_max_age_hrs, Some(24));
         assert_eq!(cfg.reconcile_threshold, 0.1);
         assert_eq!(cfg.clone(), cfg);
     }
@@ -102,6 +107,7 @@ mod tests {
         assert!(cfg.tickers.is_empty());
         assert!(!cfg.collect_all);
         assert_eq!(cfg.request_delay_ms, 150);
+        assert_eq!(cfg.collect_max_age_hrs, None);
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }
 

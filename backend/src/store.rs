@@ -199,6 +199,53 @@ impl Store {
             .collect()
     }
 
+    /// Companies due for collection: never collected, or whose last collection
+    /// was before `cutoff`. Ordered by ticker.
+    pub async fn companies_due(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Company>> {
+        let rows = sqlx::query(
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry \
+             FROM companies c LEFT JOIN company_state s ON s.company_id = c.id \
+             WHERE s.last_collected_at IS NULL OR s.last_collected_at < ? \
+             ORDER BY c.ticker",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(Company {
+                    id: r.try_get("id")?,
+                    cik: r.try_get("cik")?,
+                    ticker: r.try_get("ticker")?,
+                    name: r.try_get("name")?,
+                    exchange: r.try_get("exchange")?,
+                    sector: r.try_get("sector")?,
+                    industry: r.try_get("industry")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Record that a company was just collected (upsert).
+    pub async fn mark_collected(
+        &self,
+        company_id: i64,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO company_state (company_id,last_collected_at) VALUES (?,?) \
+             ON CONFLICT(company_id) DO UPDATE SET last_collected_at=excluded.last_collected_at",
+        )
+        .bind(company_id)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Insert or update a daily price for `(company_id, date, source)`.
     pub async fn upsert_price(&self, p: &PricePoint) -> Result<()> {
         sqlx::query(PRICE_UPSERT_SQL)
@@ -723,6 +770,24 @@ mod tests {
         assert_eq!(id1, id2); // same row
         let got = store.get_company("AAPL").await.unwrap().unwrap();
         assert_eq!(got.name, "Apple (renamed)");
+    }
+
+    #[tokio::test]
+    async fn companies_due_respects_last_collected() {
+        let (store, _d) = temp_store().await;
+        let id = store.upsert_company(&sample_company()).await.unwrap();
+        let t = |h| Utc.with_ymd_and_hms(2024, 1, 1, h, 0, 0).unwrap();
+
+        // never collected -> due
+        assert_eq!(store.companies_due(t(12)).await.unwrap().len(), 1);
+        // collected at 10:00; cutoff 09:00 -> not due (collected after cutoff)
+        store.mark_collected(id, t(10)).await.unwrap();
+        assert!(store.companies_due(t(9)).await.unwrap().is_empty());
+        // cutoff 11:00 -> due again (collected before cutoff)
+        assert_eq!(store.companies_due(t(11)).await.unwrap().len(), 1);
+        // re-mark updates in place (still one company)
+        store.mark_collected(id, t(20)).await.unwrap();
+        assert!(store.companies_due(t(11)).await.unwrap().is_empty());
     }
 
     #[tokio::test]
