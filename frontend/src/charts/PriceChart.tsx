@@ -30,14 +30,29 @@ export default function PriceChart({ prices }: { prices: PricePoint[] }) {
           data: prices.map((p) => p.close),
         }
 
+    const zoomStart = prices.length > 90
+      ? Math.round((1 - 90 / prices.length) * 100)
+      : 0
+
     chart.setOption({
       tooltip: { trigger: 'axis' },
+      grid: { bottom: 60 },
       xAxis: { type: 'category', data: dates },
       yAxis: { type: 'value', scale: true },
+      dataZoom: [
+        { type: 'inside', xAxisIndex: 0, start: zoomStart, end: 100 },
+        { type: 'slider', xAxisIndex: 0, start: zoomStart, end: 100, height: 20, bottom: 8 },
+      ],
       series: [series],
     })
-    return () => chart.dispose()
+
+    const onResize = () => chart.resize()
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      chart.dispose()
+    }
   }, [prices])
 
-  return <div role="img" aria-label="price chart" ref={ref} style={{ height: 320 }} />
+  return <div role="img" aria-label="price chart" ref={ref} style={{ height: 400 }} />
 }
