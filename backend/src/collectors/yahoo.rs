@@ -6,7 +6,7 @@
 //! captured fixture. (Replaces the earlier Stooq source, which began serving a
 //! JavaScript anti-bot challenge instead of CSV.)
 
-use chrono::DateTime;
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
 use async_trait::async_trait;
@@ -59,10 +59,17 @@ impl<H: HttpClient> YahooCollector<H> {
         Self { http }
     }
 
-    /// Daily-chart URL (5y of history) for an uppercase US `symbol`.
-    pub fn chart_url(symbol: &str) -> String {
+    /// ~20 years of trading days.
+    const HISTORY_DAYS: i64 = 365 * 20;
+
+    /// Daily-chart URL for ~20y up to `now`. Uses explicit period1/period2 epochs
+    /// (with `interval=1d`) rather than `range=max`, which Yahoo downsamples to
+    /// monthly for long spans.
+    pub fn chart_url(symbol: &str, now: DateTime<Utc>) -> String {
+        let period2 = now.timestamp();
+        let period1 = (now - Duration::days(Self::HISTORY_DAYS)).timestamp();
         format!(
-            "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=5y",
+            "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&period1={period1}&period2={period2}",
             symbol.to_uppercase()
         )
     }
@@ -72,7 +79,7 @@ impl<H: HttpClient> YahooCollector<H> {
         company_id: i64,
         symbol: &str,
     ) -> Result<Vec<PricePoint>, CollectorError> {
-        let body = self.http.get_text(&Self::chart_url(symbol)).await?;
+        let body = self.http.get_text(&Self::chart_url(symbol, Utc::now())).await?;
         parse_chart_json(company_id, &body)
     }
 }
@@ -132,16 +139,18 @@ fn parse_chart_json(company_id: i64, json: &str) -> Result<Vec<PricePoint>, Coll
 mod tests {
     use super::*;
     use crate::testutil::FakeHttp;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone};
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/yahoo_vmc.json");
 
     #[test]
-    fn chart_url_uppercases_symbol() {
-        assert_eq!(
-            YahooCollector::<FakeHttp>::chart_url("vmc"),
-            "https://query1.finance.yahoo.com/v8/finance/chart/VMC?interval=1d&range=5y"
-        );
+    fn chart_url_uppercases_symbol_and_spans_20y() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let url = YahooCollector::<FakeHttp>::chart_url("vmc", now);
+        assert!(url.starts_with("https://query1.finance.yahoo.com/v8/finance/chart/VMC?interval=1d&period1="));
+        assert!(url.contains(&format!("period2={}", now.timestamp())));
+        let p1: i64 = url.split("period1=").nth(1).unwrap().split('&').next().unwrap().parse().unwrap();
+        assert!(now.timestamp() - p1 >= 19 * 365 * 86_400); // ~20y back
     }
 
     #[test]
