@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 /// Reporting period of a financial fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PeriodType {
     Quarterly,
     Annual,
@@ -30,6 +31,7 @@ impl PeriodType {
 
 /// Which financial statement a fact belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum StatementKind {
     Income,
     Balance,

@@ -76,6 +76,10 @@ test('home All Stocks tab opens a company; theme toggles; logout returns to auth
   await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
   expect(await screen.findByTestId('price-chart')).toBeInTheDocument()
 
+  // tabs stay visible; "Back to list" returns to All Stocks without clicking Home
+  await userEvent.click(screen.getByRole('button', { name: /back to list/i }))
+  expect(await screen.findByLabelText('search stocks')).toBeInTheDocument()
+
   // dark is the default; toggle offers Light first
   expect(document.documentElement.dataset.theme).toBe('dark')
   await userEvent.click(screen.getByRole('button', { name: /light/i }))
@@ -123,7 +127,13 @@ test('Screener nav lists ranked passers and a row opens the company', async () =
 test('Compare builds a matrix from the watchlist (annual ratios only)', async () => {
   mocked.getToken.mockReturnValue('tok')
   mocked.getWatchlist.mockResolvedValue([company('AAPL'), company('MSFT')])
-  mocked.loadCompanyData.mockImplementation(async (t: string) => data(t))
+  // MSFT load fails -> allSettled keeps AAPL; compare must not hang
+  mocked.loadCompanyData.mockImplementation(async (t: string) => {
+    if (t === 'MSFT') {
+      throw new Error('boom')
+    }
+    return data(t)
+  })
 
   render(<App />)
   await screen.findByLabelText('search stocks') // home loaded

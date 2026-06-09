@@ -100,7 +100,7 @@ Direct:
 - **SEC EDGAR** `data.sec.gov` companyfacts/companyconcept — canonical fundamentals.
 - **Financial Modeling Prep** (FMP_API_KEY) — prices/OHLC, income facts. **Finnhub** (FINNHUB_API_KEY) — company news. **Yahoo Finance** chart API — keyless daily prices (no key needed; needs a non-empty User-Agent, our contact UA works). Keyless: EDGAR + Yahoo. (Stooq was tried but now serves a JS anti-bot challenge.)
 - HTML scrape fallback (gap-fill + cross-check; respect robots.txt, rate-limit, cache).
-- News: RSS (Reuters/AP/CNBC/MarketWatch/Yahoo) + Finnhub; title + description only, deduped.
+- News: keyless per-company **Yahoo headline RSS** (`YahooNewsCollector`) + Finnhub (key); title + description only, deduped. Collected per company inside `collect_*` (like prices), so `make collect` populates news.
 
 Conflicts: store every source's value; EDGAR canonical; flag discrepancies above threshold.
 
@@ -113,6 +113,7 @@ Conflicts: store every source's value; EDGAR canonical; flag discrepancies above
 - **MUI + Vitest:** `vite.config.ts` `test.server.deps.inline` must keep `/@mui/`,
   `/@emotion/`, `react-transition-group` — MUI's `.mjs` does an extensionless
   directory import the native ESM resolver rejects; inlining lets Vite transform it.
+- **Enum JSON is lowercased** (`PeriodType`/`StatementKind` use `#[serde(rename_all="lowercase")]`) so API JSON (`annual`/`income`) matches the DB tokens and the frontend's lowercase filters. Don't remove — the period/statement toggles filter on these exact strings.
 - **MUI v9 dropped system shorthand props** (`alignItems`/`justifyContent`/`flexWrap`/
   `fontWeight`/`textAlign`) from components — pass them via `sx`, not as top-level
   props (`tsc -b` errors otherwise). `Stack` keeps `direction`/`spacing` only.

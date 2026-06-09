@@ -1,0 +1,20 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": { "symbol": "AARD" },
+        "timestamp": [1704182400, 1704268800],
+        "indicators": {
+          "quote": [
+            {
+              "high": [225.5, 226.0],
+              "low": [222.1, 223.4],
+              "close": [224.8, 225.1]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

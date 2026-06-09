@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 
 use stonkscollect_backend::collectors::edgar::EdgarCollector;
 use stonkscollect_backend::collectors::fmp::FmpCollector;
-use stonkscollect_backend::collectors::news::FinnhubCollector;
+use stonkscollect_backend::collectors::news::{FinnhubCollector, YahooNewsCollector};
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
 use stonkscollect_backend::collectors::yahoo::YahooCollector;
 use stonkscollect_backend::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
@@ -165,8 +165,10 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
         scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
         fact_sources.push(&scrape);
     }
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &limiter));
+    // Keyless per-company news; Finnhub adds more when a key is set.
+    let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let finnhub;
-    let mut news_sources: Vec<&dyn NewsSource> = Vec::new();
     if let Some(key) = &cfg.finnhub_api_key {
         finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         news_sources.push(&finnhub);
@@ -212,6 +214,7 @@ async fn collect_fundamentals(
             store,
             sources,
             price_sources,
+            &[], // news handled by the dedicated News tier in serve
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
@@ -225,6 +228,7 @@ async fn collect_fundamentals(
             store,
             sources,
             price_sources,
+            &[],
             &cfg.tickers,
             cfg.reconcile_threshold,
             now,
@@ -325,11 +329,19 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     // Keyless prices via Yahoo so P/E, P/B and the screener populate without keys.
     let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
+    // Keyless per-company news via Yahoo's per-symbol RSS.
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &limiter));
+    let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
         fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
         sources.push(&fmp);
         price_sources.push(&fmp);
+    }
+    let finnhub;
+    if let Some(key) = &cfg.finnhub_api_key {
+        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        news_sources.push(&finnhub);
     }
     let scrape;
     if !bulk {
@@ -345,6 +357,7 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
             store,
             &sources,
             &price_sources,
+            &news_sources,
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
@@ -364,6 +377,7 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
             store,
             &sources,
             &price_sources,
+            &news_sources,
             &tickers,
             cfg.reconcile_threshold,
             now,

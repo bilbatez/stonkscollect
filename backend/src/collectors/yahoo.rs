@@ -38,12 +38,19 @@ struct ChartResult {
 struct Indicators {
     quote: Vec<Quote>,
 }
-#[derive(Deserialize)]
+// Yahoo sometimes omits some OHLCV arrays for a symbol; default each to empty so
+// the response still parses and we keep whatever days have a close.
+#[derive(Deserialize, Default)]
 struct Quote {
+    #[serde(default)]
     open: Vec<Option<f64>>,
+    #[serde(default)]
     high: Vec<Option<f64>>,
+    #[serde(default)]
     low: Vec<Option<f64>>,
+    #[serde(default)]
     close: Vec<Option<f64>>,
+    #[serde(default)]
     volume: Vec<Option<i64>>,
 }
 
@@ -147,6 +154,18 @@ mod tests {
         assert_eq!(p[0].volume, Some(1_200_000));
         assert_eq!(p[0].source, "yahoo");
         assert_eq!(p[0].company_id, 3);
+    }
+
+    #[test]
+    fn parses_when_some_ohlcv_arrays_are_missing() {
+        // Yahoo response whose quote omits `open` and `volume` entirely.
+        const MISSING: &str = include_str!("../../tests/fixtures/yahoo_missing_open.json");
+        let p = parse_chart_json(1, MISSING).unwrap();
+        assert_eq!(p.len(), 2); // rows kept (close present)
+        assert_eq!(p[0].close, 224.8);
+        assert_eq!(p[0].open, None); // missing array -> None
+        assert_eq!(p[0].volume, None);
+        assert_eq!(p[0].high, Some(225.5));
     }
 
     #[test]

@@ -119,6 +119,42 @@ impl<H: HttpClient> RssCollector<H> {
     }
 }
 
+/// Keyless per-company news via Yahoo Finance's per-symbol headline RSS feed.
+pub struct YahooNewsCollector<H: HttpClient> {
+    http: H,
+}
+
+impl<H: HttpClient> YahooNewsCollector<H> {
+    pub fn new(http: H) -> Self {
+        Self { http }
+    }
+
+    /// Per-symbol headline RSS URL (keyless).
+    pub fn feed_url(symbol: &str) -> String {
+        format!(
+            "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US",
+            symbol.to_uppercase()
+        )
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> NewsSource for YahooNewsCollector<H> {
+    fn name(&self) -> &'static str {
+        "yahoo"
+    }
+
+    async fn fetch_news(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<NewsItem>, CollectorError> {
+        let body = self.http.get_text(&Self::feed_url(&target.symbol)).await?;
+        parse_rss(company_id, &body, "yahoo", now)
+    }
+}
+
 /// Collects headlines from the Finnhub company-news API.
 pub struct FinnhubCollector<H: HttpClient> {
     http: H,
@@ -170,7 +206,7 @@ impl<H: HttpClient> NewsSource for FinnhubCollector<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collectors::CollectorError;
+    use crate::collectors::{CollectorError, SourceTarget};
     use crate::testutil::{fixed_now as now, FakeHttp};
     use chrono::{TimeZone, Utc};
 
@@ -241,6 +277,17 @@ mod tests {
         let items = c.collect(7, "https://feed", "reuters", now()).await.unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(c.http.url().as_deref(), Some("https://feed"));
+    }
+
+    #[tokio::test]
+    async fn yahoo_news_collector_fetches_per_symbol_then_parses() {
+        let c = YahooNewsCollector::new(FakeHttp::new(RSS));
+        let target = SourceTarget { cik: "x".into(), symbol: "aapl".into() };
+        let items = c.fetch_news(7, &target, now()).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(c.name(), "yahoo");
+        assert!(c.http.url().unwrap().contains("headline?s=AAPL"));
+        assert_eq!(YahooNewsCollector::<FakeHttp>::feed_url("aapl"), "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL&region=US&lang=en-US");
     }
 
     #[tokio::test]

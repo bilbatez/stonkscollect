@@ -35,13 +35,16 @@ import type { Company, CompanyData } from './types'
 
 const PriceChart = lazy(() => import('./charts/PriceChart'))
 
-type View =
-  | { kind: 'home' }
+/** Which top-level page is showing. The company detail lives *inside* the home
+ *  page (under the tabs) so selecting a stock never hides the tabs. */
+type Page = 'home' | 'compare' | 'screen'
+
+/** State of the in-home company detail panel. */
+type Detail =
+  | { kind: 'none' }
   | { kind: 'loading' }
   | { kind: 'error'; ticker: string }
   | { kind: 'company'; data: CompanyData; loadedAt: number }
-  | { kind: 'compare'; rows: CompareRow[] }
-  | { kind: 'screen' }
 
 /** Latest annual value per ratio metric (later periods overwrite earlier). */
 function latestMetrics(data: CompanyData): Record<string, number> {
@@ -64,8 +67,11 @@ function Dashboard({
   onToggleTheme: () => void
 }) {
   const [items, setItems] = useState<Company[]>([])
-  const [view, setView] = useState<View>({ kind: 'home' })
+  const [page, setPage] = useState<Page>('home')
   const [tab, setTab] = useState(0)
+  const [detail, setDetail] = useState<Detail>({ kind: 'none' })
+  const [compareRows, setCompareRows] = useState<CompareRow[]>([])
+  const [comparing, setComparing] = useState(false)
 
   const refreshWatchlist = useCallback(async () => {
     setItems(await getWatchlist())
@@ -77,14 +83,21 @@ function Dashboard({
     void refreshWatchlist()
   }, [refreshWatchlist])
 
+  // Open a company in the home detail panel (tabs stay visible).
   async function select(ticker: string) {
-    setView({ kind: 'loading' })
+    setPage('home')
+    setDetail({ kind: 'loading' })
     try {
       const data = await loadCompanyData(ticker)
-      setView({ kind: 'company', data, loadedAt: Date.now() })
+      setDetail({ kind: 'company', data, loadedAt: Date.now() })
     } catch {
-      setView({ kind: 'error', ticker })
+      setDetail({ kind: 'error', ticker })
     }
+  }
+
+  function showTab(next: number) {
+    setTab(next)
+    setDetail({ kind: 'none' }) // back to the list when switching tabs
   }
 
   async function add(ticker: string) {
@@ -96,11 +109,19 @@ function Dashboard({
     await refreshWatchlist()
   }
 
+  // Compare the watchlist; tolerate individual load failures (never hang).
   async function compare() {
-    setView({ kind: 'loading' })
-    const all = await Promise.all(items.map((c) => loadCompanyData(c.ticker)))
-    const rows = all.map((d) => ({ ticker: d.company.ticker, metrics: latestMetrics(d) }))
-    setView({ kind: 'compare', rows })
+    setPage('compare')
+    setComparing(true)
+    const settled = await Promise.allSettled(items.map((c) => loadCompanyData(c.ticker)))
+    setCompareRows(
+      settled.flatMap((r) =>
+        r.status === 'fulfilled'
+          ? [{ ticker: r.value.company.ticker, metrics: latestMetrics(r.value) }]
+          : [],
+      ),
+    )
+    setComparing(false)
   }
 
   return (
@@ -110,13 +131,13 @@ function Dashboard({
           <Typography variant="h6" component="h1" sx={{ flexGrow: 1, fontWeight: 700 }}>
             StonksCollect
           </Typography>
-          <Button color="inherit" onClick={() => setView({ kind: 'home' })}>
+          <Button color="inherit" onClick={() => setPage('home')}>
             Home
           </Button>
           <Button color="inherit" onClick={() => void compare()}>
             Compare
           </Button>
-          <Button color="inherit" onClick={() => setView({ kind: 'screen' })}>
+          <Button color="inherit" onClick={() => setPage('screen')}>
             Screener
           </Button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
@@ -127,13 +148,33 @@ function Dashboard({
       </AppBar>
 
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        {view.kind === 'home' && (
+        {page === 'home' && (
           <Box>
-            <Tabs value={tab} onChange={(_e, v: number) => setTab(v)} sx={{ mb: 2 }}>
+            <Tabs value={tab} onChange={(_e, v: number) => showTab(v)} sx={{ mb: 2 }}>
               <Tab label="All Stocks" />
               <Tab label="Watchlist" />
             </Tabs>
-            {tab === 0 ? (
+            {detail.kind === 'company' ? (
+              <Box>
+                <Button size="small" onClick={() => setDetail({ kind: 'none' })} sx={{ mb: 1 }}>
+                  ← Back to list
+                </Button>
+                <CompanyView data={detail.data} loadedAt={detail.loadedAt} />
+              </Box>
+            ) : detail.kind === 'loading' ? (
+              <Skeleton />
+            ) : detail.kind === 'error' ? (
+              <Alert
+                severity="error"
+                action={
+                  <Button color="inherit" size="small" onClick={() => void select(detail.ticker)}>
+                    Retry
+                  </Button>
+                }
+              >
+                Failed to load {detail.ticker}.
+              </Alert>
+            ) : tab === 0 ? (
               <AllStocks onSelect={(t) => void select(t)} onAdd={(t) => void add(t)} />
             ) : (
               <Watchlist
@@ -145,22 +186,8 @@ function Dashboard({
             )}
           </Box>
         )}
-        {view.kind === 'loading' && <Skeleton />}
-        {view.kind === 'error' && (
-          <Alert
-            severity="error"
-            action={
-              <Button color="inherit" size="small" onClick={() => void select(view.ticker)}>
-                Retry
-              </Button>
-            }
-          >
-            Failed to load {view.ticker}.
-          </Alert>
-        )}
-        {view.kind === 'compare' && <Compare rows={view.rows} />}
-        {view.kind === 'screen' && <Screener onSelect={(t) => void select(t)} />}
-        {view.kind === 'company' && <CompanyView data={view.data} loadedAt={view.loadedAt} />}
+        {page === 'compare' && (comparing ? <Skeleton /> : <Compare rows={compareRows} />)}
+        {page === 'screen' && <Screener onSelect={(t) => void select(t)} />}
       </Container>
     </Box>
   )

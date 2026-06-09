@@ -592,6 +592,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enum_fields_serialize_lowercase() {
+        // The frontend filters facts/ratios on lowercase period_type/statement,
+        // so the JSON must be lowercase (not the PascalCase enum variant names).
+        let (store, _d, t) = seeded().await;
+        let (_s, facts) = get(store.clone(), &t, "/api/companies/AAPL/facts").await;
+        assert_eq!(facts[0]["period_type"], "annual");
+        assert_eq!(facts[0]["statement"], "income");
+        let (_s, ratios) = get(store, &t, "/api/companies/AAPL/ratios").await;
+        assert_eq!(ratios[0]["period_type"], "annual");
+    }
+
+    #[tokio::test]
     async fn range_params_filter() {
         let (store, _d, t) = seeded().await;
         let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/prices?limit=5").await;
