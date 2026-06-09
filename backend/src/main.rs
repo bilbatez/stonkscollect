@@ -144,33 +144,34 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
         std::future::pending::<()>().await;
     }
 
-    // One shared rate limiter keeps total request rate polite. One FMP instance
-    // serves both the FactSource and PriceSource roles.
-    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
+    // One rate limiter PER HOST (REQUEST_DELAY_MS spacing each) so EDGAR, Yahoo
+    // and the vendors throttle independently and run in parallel.
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
 
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
-    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &limiter));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut fact_sources: Vec<&dyn FactSource> = vec![&edgar];
     // Yahoo is keyless, so prices work without any API key.
     let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         fact_sources.push(&fmp);
         price_sources.push(&fmp);
     }
     let scrape; // scrape only for targeted runs (not the whole universe)
     if !cfg.collect_all {
-        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &mk()));
         fact_sources.push(&scrape);
     }
-    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &limiter));
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     // Keyless per-company news; Finnhub adds more when a key is set.
     let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let finnhub;
     if let Some(key) = &cfg.finnhub_api_key {
-        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         news_sources.push(&finnhub);
     }
 
@@ -323,29 +324,34 @@ async fn bootstrap(store: &Store, cfg: &Config) {
 async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
 
-    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
-    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &limiter));
+    // One rate limiter PER HOST (each client owns its clone), so EDGAR, Yahoo and
+    // the vendors throttle independently and actually run in parallel under
+    // COLLECT_CONCURRENCY. REQUEST_DELAY_MS is the per-host spacing.
+    let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news (same provider)
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
     // Keyless prices via Yahoo so P/E, P/B and the screener populate without keys.
     let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
     // Keyless per-company news via Yahoo's per-symbol RSS.
-    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &limiter));
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         sources.push(&fmp);
         price_sources.push(&fmp);
     }
     let finnhub;
     if let Some(key) = &cfg.finnhub_api_key {
-        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         news_sources.push(&finnhub);
     }
     let scrape;
     if !bulk {
-        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &mk()));
         sources.push(&scrape);
     }
 
