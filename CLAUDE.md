@@ -13,7 +13,9 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
   `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
   `clap` (CLI), `dotenvy`, `serde`, `thiserror`, `tracing`.
 - **Frontend:** React 19 + Vite 8 + TypeScript; **MUI v9** (`@mui/material` +
-  `@emotion`, dark-first theme, all components MUI — no bespoke CSS); ECharts
+  `@emotion`, dark-first theme, all components MUI — no bespoke CSS); reusable
+  `DataGrid` (`@tanstack/react-table` + `@dnd-kit` — sort, per-column filter,
+  drag column-reorder) for the All Stocks / Screener / Discrepancy grids; ECharts
   (lazy, candlestick/line); Vitest + Playwright.
 - **Storage:** SQLite single file on mounted volume (`./data/stonks.db`) + scheduled Parquet
   export. Backup = copy the `.db` file.

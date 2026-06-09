@@ -1,20 +1,9 @@
 import { useEffect, useState } from 'react'
-import {
-  Box,
-  Button,
-  Chip,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TablePagination,
-  TableRow,
-  TextField,
-} from '@mui/material'
+import { Box, Button, Chip, TablePagination, TextField } from '@mui/material'
 import { listCompanies } from '../api'
 import type { CompanyRow } from '../types'
+import { DataGrid } from './DataGrid'
+import type { GridColumn } from './dataGridUtils'
 
 const PAGE_SIZE = 25
 
@@ -23,7 +12,8 @@ interface Props {
   onAdd: (ticker: string) => void
 }
 
-/** Paginated, searchable directory of every company with its Graham score. */
+/** Paginated directory of every company with its Graham score. The page is a
+ *  sortable / filterable / column-reorderable grid. */
 export function AllStocks({ onSelect, onAdd }: Props) {
   const [rows, setRows] = useState<CompanyRow[]>([])
   const [total, setTotal] = useState(0)
@@ -36,6 +26,36 @@ export function AllStocks({ onSelect, onAdd }: Props) {
       setTotal(p.total)
     })
   }, [q, page])
+
+  const columns: GridColumn<CompanyRow>[] = [
+    {
+      id: 'ticker',
+      header: 'Ticker',
+      sortValue: (r) => r.company.ticker,
+      filter: true,
+      cell: (r) => (
+        <Button size="small" onClick={() => onSelect(r.company.ticker)}>
+          {r.company.ticker}
+        </Button>
+      ),
+    },
+    { id: 'name', header: 'Name', sortValue: (r) => r.company.name, filter: true, cell: (r) => r.company.name },
+    {
+      id: 'score',
+      header: 'Graham score',
+      sortValue: (r) => (r.score ? r.score.score : -1),
+      cell: (r) => (r.score === null ? '—' : <Chip size="small" label={`${r.score.score}/8`} />),
+    },
+    {
+      id: 'watch',
+      header: 'Watchlist',
+      cell: (r) => (
+        <Button size="small" aria-label={`watch ${r.company.ticker}`} onClick={() => onAdd(r.company.ticker)}>
+          Watch
+        </Button>
+      ),
+    },
+  ]
 
   return (
     <Box>
@@ -51,46 +71,7 @@ export function AllStocks({ onSelect, onAdd }: Props) {
         slotProps={{ htmlInput: { 'aria-label': 'search stocks' } }}
         sx={{ mb: 2 }}
       />
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Ticker</TableCell>
-              <TableCell>Name</TableCell>
-              <TableCell align="right">Graham score</TableCell>
-              <TableCell align="right">Watchlist</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.company.ticker} hover>
-                <TableCell>
-                  <Button size="small" onClick={() => onSelect(r.company.ticker)}>
-                    {r.company.ticker}
-                  </Button>
-                </TableCell>
-                <TableCell>{r.company.name}</TableCell>
-                <TableCell align="right">
-                  {r.score === null ? (
-                    '—'
-                  ) : (
-                    <Chip size="small" label={`${r.score.score}/8`} />
-                  )}
-                </TableCell>
-                <TableCell align="right">
-                  <Button
-                    size="small"
-                    aria-label={`watch ${r.company.ticker}`}
-                    onClick={() => onAdd(r.company.ticker)}
-                  >
-                    Watch
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <DataGrid columns={columns} rows={rows} getRowId={(r) => r.company.ticker} empty="No companies." />
       <TablePagination
         component="div"
         count={total}

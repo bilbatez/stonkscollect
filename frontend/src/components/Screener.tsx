@@ -5,26 +5,22 @@ import {
   Checkbox,
   Chip,
   FormControlLabel,
-  Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
   TablePagination,
-  TableRow,
   Typography,
 } from '@mui/material'
 import { screen } from '../api'
 import type { ScreenRow } from '../types'
+import { DataGrid } from './DataGrid'
+import type { GridColumn } from './dataGridUtils'
 
 const PAGE_SIZE = 25
 
 const pct = (x: number | null) => (x === null ? '—' : `${(x * 100).toFixed(0)}%`)
 const num = (x: number | null) => (x === null ? '—' : x.toFixed(2))
 
-/** Graham screener: all companies ranked by score, with optional filters. */
+/** Graham screener: all companies ranked by score, with filters. The result
+ *  page is a sortable / filterable / column-reorderable grid. */
 export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
   const [rows, setRows] = useState<ScreenRow[]>([])
   const [total, setTotal] = useState(0)
@@ -41,6 +37,29 @@ export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
     )
   }, [defensive, netNet, page])
 
+  const columns: GridColumn<ScreenRow>[] = [
+    {
+      id: 'ticker',
+      header: 'Ticker',
+      sortValue: (r) => r.company.ticker,
+      filter: true,
+      cell: (r) => (
+        <Button size="small" onClick={() => onSelect(r.company.ticker)}>
+          {r.company.ticker}
+        </Button>
+      ),
+    },
+    {
+      id: 'score',
+      header: 'Score',
+      sortValue: (r) => r.score.score,
+      cell: (r) => <Chip size="small" label={`${r.score.score}/8`} />,
+    },
+    { id: 'graham', header: 'Graham #', sortValue: (r) => r.score.graham_number ?? -1, cell: (r) => num(r.score.graham_number) },
+    { id: 'margin', header: 'Margin of safety', sortValue: (r) => r.score.margin_of_safety ?? -1e9, cell: (r) => pct(r.score.margin_of_safety) },
+    { id: 'netnet', header: 'Net-net', sortValue: (r) => (r.score.net_net ? 1 : 0), cell: (r) => (r.score.net_net ? '✓' : '—') },
+  ]
+
   return (
     <Box>
       <Typography variant="h5" component="h2" gutterBottom>
@@ -48,7 +67,7 @@ export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
         Companies ranked by Graham defensive score (0–8): how many of Benjamin Graham's
-        criteria each one meets. Filter to the strictest picks.
+        criteria each one meets. Sort, filter, and reorder columns; filter to the strictest picks.
       </Typography>
       <Stack direction="row" spacing={2} sx={{ my: 1 }}>
         <FormControlLabel
@@ -76,50 +95,15 @@ export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
           label="Net-net"
         />
       </Stack>
-      {rows.length === 0 ? (
-        <Typography color="text.secondary">No matches.</Typography>
-      ) : (
-        <>
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Ticker</TableCell>
-                  <TableCell align="right">Score</TableCell>
-                  <TableCell align="right">Graham #</TableCell>
-                  <TableCell align="right">Margin of safety</TableCell>
-                  <TableCell align="right">Net-net</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.company.ticker} hover>
-                    <TableCell>
-                      <Button size="small" onClick={() => onSelect(r.company.ticker)}>
-                        {r.company.ticker}
-                      </Button>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Chip size="small" label={`${r.score.score}/8`} />
-                    </TableCell>
-                    <TableCell align="right">{num(r.score.graham_number)}</TableCell>
-                    <TableCell align="right">{pct(r.score.margin_of_safety)}</TableCell>
-                    <TableCell align="right">{r.score.net_net ? '✓' : '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          <TablePagination
-            component="div"
-            count={total}
-            page={page}
-            rowsPerPage={PAGE_SIZE}
-            rowsPerPageOptions={[PAGE_SIZE]}
-            onPageChange={(_e, p) => setPage(p)}
-          />
-        </>
-      )}
+      <DataGrid columns={columns} rows={rows} getRowId={(r) => r.company.ticker} empty="No matches." />
+      <TablePagination
+        component="div"
+        count={total}
+        page={page}
+        rowsPerPage={PAGE_SIZE}
+        rowsPerPageOptions={[PAGE_SIZE]}
+        onPageChange={(_e, p) => setPage(p)}
+      />
     </Box>
   )
 }

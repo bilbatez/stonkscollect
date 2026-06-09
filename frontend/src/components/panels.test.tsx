@@ -131,7 +131,7 @@ test('NewsFeed renders headlines with optional descriptions', () => {
   expect(screen.getByText(/no news/i)).toBeInTheDocument()
 })
 
-test('DiscrepancyPanel shows a row per flag and an empty state', () => {
+test('DiscrepancyPanel shows a row per flag and an empty state', async () => {
   const d: Discrepancy[] = [
     { company_id: 1, field: 'Revenue', period: '2023-12-31', source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.5, flagged_at: '' },
     { company_id: 1, field: 'NetIncome', period: null, source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.1, flagged_at: '' },
@@ -140,6 +140,10 @@ test('DiscrepancyPanel shows a row per flag and an empty state', () => {
   expect(screen.getByText('Revenue')).toBeInTheDocument()
   expect(screen.getAllByText(/edgar/)[0]).toBeInTheDocument()
   expect(screen.getByText('—')).toBeInTheDocument()
+  // sort each sortable column (exercises the sort accessors, incl. null period)
+  await userEvent.click(screen.getByText('Field'))
+  await userEvent.click(screen.getByText('Period'))
+  await userEvent.click(screen.getByText('Diff'))
   rerender(<DiscrepancyPanel discrepancies={[]} />)
   expect(screen.getByText(/no discrepancies/i)).toBeInTheDocument()
 })

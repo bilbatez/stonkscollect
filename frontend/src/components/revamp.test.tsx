@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AllStocks } from './AllStocks'
@@ -158,6 +158,12 @@ test('Screener lists ranked rows, filters, paginates, and selects', async () => 
   expect(screen.getByText('6/8')).toBeInTheDocument()
   expect(screen.getByText('✓')).toBeInTheDocument() // JNJ net-net
   expect(screen.getAllByText('—').length).toBeGreaterThan(0) // JNJ null graham#/margin
+  // sort each column (exercises the column sort accessors)
+  await userEvent.click(screen.getByText('Ticker'))
+  await userEvent.click(screen.getByText('Score'))
+  await userEvent.click(screen.getByText('Graham #'))
+  await userEvent.click(screen.getByText('Margin of safety'))
+  await userEvent.click(within(screen.getByRole('columnheader', { name: /Net-net/ })).getByText('Net-net'))
   await userEvent.click(screen.getByRole('button', { name: 'KO' }))
   expect(onSelect).toHaveBeenCalledWith('KO')
   await userEvent.click(screen.getByRole('button', { name: /next page/i }))
@@ -193,6 +199,10 @@ test('AllStocks lists, paginates, searches, selects and watches', async () => {
   render(<AllStocks onSelect={onSelect} onAdd={onAdd} />)
   await screen.findByText('6/8')
   expect(screen.getByText('—')).toBeInTheDocument() // ZZZ has no score
+  // sort each sortable column (exercises the sort accessors, incl. null score)
+  await userEvent.click(screen.getByText('Ticker'))
+  await userEvent.click(screen.getByText('Name'))
+  await userEvent.click(screen.getByText('Graham score'))
   await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
   expect(onSelect).toHaveBeenCalledWith('AAPL')
   await userEvent.click(screen.getByRole('button', { name: 'watch ZZZ' }))
