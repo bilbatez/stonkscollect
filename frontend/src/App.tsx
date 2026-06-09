@@ -16,6 +16,12 @@ import {
   Typography,
   createTheme,
 } from '@mui/material'
+import HomeIcon from '@mui/icons-material/Home'
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
+import FilterAltIcon from '@mui/icons-material/FilterAlt'
+import LogoutIcon from '@mui/icons-material/Logout'
+import ViewListIcon from '@mui/icons-material/ViewList'
+import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { addWatch, getToken, getWatchlist, loadCompanyData, logout, removeWatch } from './api'
 import { freshness } from './format'
 import { AllStocks } from './components/AllStocks'
@@ -131,17 +137,17 @@ function Dashboard({
           <Typography variant="h6" component="h1" sx={{ flexGrow: 1, fontWeight: 700 }}>
             StonksCollect
           </Typography>
-          <Button color="inherit" onClick={() => setPage('home')}>
+          <Button color="inherit" startIcon={<HomeIcon />} onClick={() => setPage('home')}>
             Home
           </Button>
-          <Button color="inherit" onClick={() => void compare()}>
+          <Button color="inherit" startIcon={<CompareArrowsIcon />} onClick={() => void compare()}>
             Compare
           </Button>
-          <Button color="inherit" onClick={() => setPage('screen')}>
+          <Button color="inherit" startIcon={<FilterAltIcon />} onClick={() => setPage('screen')}>
             Screener
           </Button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-          <Button color="inherit" onClick={onLogout}>
+          <Button color="inherit" startIcon={<LogoutIcon />} onClick={onLogout}>
             Log out
           </Button>
         </Toolbar>
@@ -151,8 +157,8 @@ function Dashboard({
         {page === 'home' && (
           <Box>
             <Tabs value={tab} onChange={(_e, v: number) => showTab(v)} sx={{ mb: 2 }}>
-              <Tab label="All Stocks" />
-              <Tab label="Watchlist" />
+              <Tab icon={<ViewListIcon />} iconPosition="start" label="All Stocks" />
+              <Tab icon={<StarBorderIcon />} iconPosition="start" label="Watchlist" />
             </Tabs>
             {detail.kind === 'company' ? (
               <Box>
