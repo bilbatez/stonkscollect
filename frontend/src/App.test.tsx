@@ -134,23 +134,13 @@ test('Screener nav lists ranked passers and a row opens the company', async () =
   await waitFor(() => expect(screen.getByText(/graham scorecard/i)).toBeInTheDocument())
 })
 
-test('Compare builds a matrix from the watchlist (annual ratios only)', async () => {
+test('Compare navigates to the empty CompareView', async () => {
   mocked.getToken.mockReturnValue('tok')
-  mocked.getWatchlist.mockResolvedValue([company('AAPL'), company('MSFT')])
-  // MSFT load fails -> allSettled keeps AAPL; compare must not hang
-  mocked.loadCompanyData.mockImplementation(async (t: string) => {
-    if (t === 'MSFT') {
-      throw new Error('boom')
-    }
-    return data(t)
-  })
 
   render(<App />)
   await screen.findByLabelText('search stocks') // home loaded
   await userEvent.click(screen.getByRole('button', { name: /compare/i }))
-  await waitFor(() => expect(screen.getByText('Return on equity')).toBeInTheDocument())
-  // annual roe 1.5 -> 150.0%; quarterly 0.4 filtered out
-  expect(screen.getAllByText('150.0%').length).toBeGreaterThan(0)
+  expect(await screen.findByText(/add tickers above/i)).toBeInTheDocument()
 })
 
 test('select failure shows an error with a working retry', async () => {

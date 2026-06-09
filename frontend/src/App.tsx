@@ -25,10 +25,10 @@ import LogoutIcon from '@mui/icons-material/Logout'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { addWatch, getToken, getWatchlist, loadCompanyData, logout, removeWatch } from './api'
+import { CompareView } from './components/CompareView'
 import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from './format'
 import { AllStocks } from './components/AllStocks'
 import { AuthForm } from './components/AuthForm'
-import { Compare, type CompareRow } from './components/Compare'
 import { DiscrepancyPanel } from './components/DiscrepancyPanel'
 import { FreshnessBadge } from './components/FreshnessBadge'
 import { GrahamScorecard } from './components/GrahamScorecard'
@@ -54,17 +54,6 @@ type Detail =
   | { kind: 'error'; ticker: string }
   | { kind: 'company'; data: CompanyData; loadedAt: number }
 
-/** Latest annual value per ratio metric (later periods overwrite earlier). */
-function latestMetrics(data: CompanyData): Record<string, number> {
-  const m: Record<string, number> = {}
-  for (const r of data.ratios) {
-    if (r.period_type === 'annual') {
-      m[r.metric] = r.value
-    }
-  }
-  return m
-}
-
 function Dashboard({
   onLogout,
   theme,
@@ -78,10 +67,7 @@ function Dashboard({
   const [page, setPage] = useState<Page>('home')
   const [tab, setTab] = useState(0)
   const [detail, setDetail] = useState<Detail>({ kind: 'none' })
-  const [compareRows, setCompareRows] = useState<CompareRow[]>([])
-  const [comparing, setComparing] = useState(false)
-
-  const refreshWatchlist = useCallback(async () => {
+const refreshWatchlist = useCallback(async () => {
     setItems(await getWatchlist())
   }, [])
 
@@ -117,22 +103,7 @@ function Dashboard({
     await refreshWatchlist()
   }
 
-  // Compare the watchlist; tolerate individual load failures (never hang).
-  async function compare() {
-    setPage('compare')
-    setComparing(true)
-    const settled = await Promise.allSettled(items.map((c) => loadCompanyData(c.ticker)))
-    setCompareRows(
-      settled.flatMap((r) =>
-        r.status === 'fulfilled'
-          ? [{ ticker: r.value.company.ticker, metrics: latestMetrics(r.value) }]
-          : [],
-      ),
-    )
-    setComparing(false)
-  }
-
-  return (
+return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <AppBar position="static" color="default" enableColorOnDark>
         <Toolbar sx={{ gap: 1 }}>
@@ -142,7 +113,7 @@ function Dashboard({
           <Button color="inherit" startIcon={<HomeIcon />} onClick={() => setPage('home')}>
             Home
           </Button>
-          <Button color="inherit" startIcon={<CompareArrowsIcon />} onClick={() => void compare()}>
+          <Button color="inherit" startIcon={<CompareArrowsIcon />} onClick={() => setPage('compare')}>
             Compare
           </Button>
           <Button color="inherit" startIcon={<FilterAltIcon />} onClick={() => setPage('screen')}>
@@ -194,7 +165,7 @@ function Dashboard({
             )}
           </Box>
         )}
-        {page === 'compare' && (comparing ? <Skeleton /> : <Compare rows={compareRows} />)}
+        {page === 'compare' && <CompareView />}
         {page === 'screen' && <Screener onSelect={(t) => void select(t)} />}
       </Container>
     </Box>
