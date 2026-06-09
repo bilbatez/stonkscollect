@@ -1,0 +1,14 @@
+{
+  "cik": 109563,
+  "name": "VULCAN MATERIALS CO",
+  "sic": "3270",
+  "sicDescription": "Concrete, Gypsum & Plaster Products",
+  "category": "Large accelerated filer",
+  "description": "",
+  "website": "",
+  "exchanges": ["NYSE"],
+  "tickers": ["VMC"],
+  "fiscalYearEnd": "1231",
+  "stateOfIncorporation": "NJ",
+  "addresses": { "business": { "city": "BIRMINGHAM", "stateOrCountry": "AL" } }
+}

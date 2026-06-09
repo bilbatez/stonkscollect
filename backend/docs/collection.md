@@ -10,6 +10,8 @@
 | **Financial Modeling Prep** | prices + income facts | FMP API | `FMP_API_KEY` |
 | **Finnhub** | company news | Finnhub API | `FINNHUB_API_KEY` |
 | **HTML scrape** | gap-fill / cross-check (targeted runs) | configured pages | none |
+| **SEC EDGAR submissions** | company profile: industry (SIC), exchange, HQ | `data.sec.gov/submissions/CIK….json` | none |
+| **Yahoo assetProfile** | prose business summary, website, sector/industry | `query1.finance.yahoo.com/v10/.../quoteSummary?modules=assetProfile` (cookie+crumb) | none |
 
 EDGAR is canonical for fundamentals; every source's value is stored, conflicts
 above `RECONCILE_THRESHOLD` are flagged (see reconciliation in
@@ -92,6 +94,7 @@ and runs that tier's collection, wrapped in `run_tracked` which records a
 |---------|--------|
 | `bootstrap` | fetch SEC ticker→CIK directory, upsert companies |
 | `collect [--ticker T]… [--all]` | one-shot collect (facts + prices + news + metrics), then exit; prints live progress on `--all` |
+| `enrich [--ticker T]… [--all]` | fill company profiles (description, sector/industry, website) from EDGAR submissions (industry/exchange, canonical) + Yahoo assetProfile (prose/website/sector). Keyless, best-effort, idempotent |
 | `serve` | REST API on `PORT` + background tiered collection; graceful shutdown |
 | `seed-admin` | dev only: ensure `admin@admin.com` / `admin` exists |
 

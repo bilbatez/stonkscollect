@@ -113,6 +113,22 @@ export function statementLabel(kind: string): string {
   }
 }
 
+/** Canonical SEC EDGAR filings ("biography") page for a CIK. */
+export function secFilingsUrl(cik: string): string {
+  const padded = cik.replace(/\D/g, '').padStart(10, '0')
+  return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${padded}&type=10-K&dateb=&owner=include&count=40`
+}
+
+/** Wikipedia search link for a company name (approximate; no fetch). */
+export function wikipediaUrl(name: string): string {
+  return `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(name)}`
+}
+
+/** Yahoo Finance company-profile page for a ticker. */
+export function yahooProfileUrl(ticker: string): string {
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/profile`
+}
+
 export type Freshness = 'fresh' | 'stale' | 'unknown'
 
 /** Classify how fresh a timestamp is relative to `nowMs` (ms since epoch). */

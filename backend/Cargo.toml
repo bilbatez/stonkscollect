@@ -33,7 +33,7 @@ sha2 = "0.10"
 dotenvy = "0.15"
 futures = "0.3"
 parquet = { version = "53", features = ["arrow"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies"] }
 rss = "2"
 scraper = "0.20"
 

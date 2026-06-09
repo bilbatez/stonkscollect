@@ -14,12 +14,16 @@ sequential migrations in `backend/migrations/`, applied automatically on
 | `0004_graham.sql` | `graham_scores` (+ score index) |
 | `0005_ohlc.sql` | `open/high/low` columns on `prices` |
 | `0006_ratios_period.sql` | rebuild `ratios` with `period_type` in the unique key (annual vs Q4 no longer collide) |
+| `0007_company_profile.sql` | `companies.description` + `companies.website` (profile enrichment) |
 
 ## Key tables
 
 ### companies
-`id, cik, ticker (unique), name, exchange, sector, industry`. Populated by
-`bootstrap` from SEC's ticker directory.
+`id, cik, ticker (unique), name, exchange, sector, industry, description, website`.
+Identity (`cik/ticker/name`) is populated by `bootstrap`; the profile fields
+(`sector/industry/exchange/description/website`) are filled by the `enrich` pass
+(EDGAR submissions + Yahoo assetProfile). `description`/`website` added in
+`0007_company_profile.sql`.
 
 ### financial_facts
 One reported line-item value per `(company_id, statement, line_item, period_type,

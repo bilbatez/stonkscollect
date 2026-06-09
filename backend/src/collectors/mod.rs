@@ -11,7 +11,7 @@ pub mod yahoo;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::domain::{FinancialFact, NewsItem, PeriodType, PricePoint};
+use crate::domain::{CompanyProfile, FinancialFact, NewsItem, PeriodType, PricePoint};
 
 /// Identifies a company across sources: EDGAR keys on CIK, vendors on ticker.
 #[derive(Debug, Clone)]
@@ -29,6 +29,13 @@ pub trait PriceSource {
         company_id: i64,
         target: &SourceTarget,
     ) -> Result<Vec<PricePoint>, CollectorError>;
+}
+
+/// A source of company-profile metadata (description, sector/industry, website).
+#[async_trait(?Send)]
+pub trait ProfileSource {
+    fn name(&self) -> &'static str;
+    async fn fetch_profile(&self, target: &SourceTarget) -> Result<CompanyProfile, CollectorError>;
 }
 
 /// A source of company news headlines (Strategy).

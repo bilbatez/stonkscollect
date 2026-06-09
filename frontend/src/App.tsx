@@ -6,8 +6,10 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   Container,
   CssBaseline,
+  Link,
   Stack,
   Tab,
   Tabs,
@@ -23,7 +25,7 @@ import LogoutIcon from '@mui/icons-material/Logout'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { addWatch, getToken, getWatchlist, loadCompanyData, logout, removeWatch } from './api'
-import { freshness } from './format'
+import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from './format'
 import { AllStocks } from './components/AllStocks'
 import { AuthForm } from './components/AuthForm'
 import { Compare, type CompareRow } from './components/Compare'
@@ -212,15 +214,44 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
   const latestPriceDate = data.prices[0]?.date ?? null
+  const c = data.company
   return (
     <Card variant="outlined" component="article">
       <CardContent>
         <Stack direction="row" spacing={2} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
           <Typography variant="h5" component="h2">
-            {data.company.name} ({data.company.ticker})
+            {c.name} ({c.ticker})
           </Typography>
           <FreshnessBadge status={freshness(latestPriceDate, loadedAt)} />
         </Stack>
+
+        <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
+          {c.sector && <Chip size="small" label={c.sector} />}
+          {c.industry && <Chip size="small" variant="outlined" label={c.industry} />}
+          {c.exchange && <Chip size="small" variant="outlined" label={c.exchange} />}
+        </Stack>
+        {c.description && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+            {c.description}
+          </Typography>
+        )}
+        <Stack direction="row" spacing={2} sx={{ mt: 1.5, flexWrap: 'wrap' }}>
+          <Link href={secFilingsUrl(c.cik)} target="_blank" rel="noreferrer">
+            SEC filings
+          </Link>
+          {c.website && (
+            <Link href={c.website} target="_blank" rel="noreferrer">
+              Website
+            </Link>
+          )}
+          <Link href={wikipediaUrl(c.name)} target="_blank" rel="noreferrer">
+            Wikipedia
+          </Link>
+          <Link href={yahooProfileUrl(c.ticker)} target="_blank" rel="noreferrer">
+            Yahoo Finance
+          </Link>
+        </Stack>
+
         <Section title="Price">
           <Suspense fallback={<Skeleton label="Loading chart…" />}>
             <PriceChart prices={data.prices} />

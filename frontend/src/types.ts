@@ -6,6 +6,8 @@ export interface Company {
   exchange: string | null
   sector: string | null
   industry: string | null
+  description: string | null
+  website: string | null
 }
 
 export interface PricePoint {

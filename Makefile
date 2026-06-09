@@ -47,6 +47,10 @@ dev-admin:
 collect:
 	cd $(BACKEND) && cargo run -- collect $(ARGS)
 
+# Enrich company profiles (description, sector/industry, website) from EDGAR + Yahoo.
+enrich:
+	cd $(BACKEND) && cargo run -- enrich $(ARGS)
+
 serve dev-backend:
 	cd $(BACKEND) && cargo run -- serve
 

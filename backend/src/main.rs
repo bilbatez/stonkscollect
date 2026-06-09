@@ -13,8 +13,10 @@ use stonkscollect_backend::collectors::edgar::EdgarCollector;
 use stonkscollect_backend::collectors::fmp::FmpCollector;
 use stonkscollect_backend::collectors::news::{FinnhubCollector, YahooNewsCollector};
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
-use stonkscollect_backend::collectors::yahoo::YahooCollector;
-use stonkscollect_backend::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
+use stonkscollect_backend::collectors::yahoo::{YahooCollector, YahooProfileCollector};
+use stonkscollect_backend::collectors::{
+    FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
+};
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
 use stonkscollect_backend::net::{RateLimiter, RetryPolicy};
@@ -69,6 +71,14 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Enrich company profiles (description, sector/industry, website) from
+    /// EDGAR + Yahoo. Keyless; idempotent.
+    Enrich {
+        #[arg(long = "ticker")]
+        tickers: Vec<String>,
+        #[arg(long)]
+        all: bool,
+    },
     /// Dev only: seed an `admin`/`admin` login (idempotent). Never use in prod.
     SeedAdmin,
 }
@@ -94,6 +104,7 @@ async fn main() {
         Command::Serve => serve(store, &cfg).await,
         Command::Bootstrap => bootstrap(&store, &cfg).await,
         Command::Collect { tickers, all } => collect(&store, &cfg, tickers, all).await,
+        Command::Enrich { tickers, all } => enrich(&store, &cfg, tickers, all).await,
         Command::SeedAdmin => seed_admin(&store).await,
     }
 }
@@ -294,6 +305,34 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
             s.companies, s.facts_written, s.discrepancies_written, s.source_errors, s.failed
         ),
         Err(e) => tracing::error!("{label} tier failed: {e}"),
+    }
+}
+
+/// Enrich company profiles from EDGAR (industry/exchange) + Yahoo (description/
+/// website/sector). Keyless; idempotent (COALESCE update).
+async fn enrich(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
+    let bulk = all || cfg.collect_all;
+    let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo = YahooProfileCollector::new(http_client(&cfg.user_agent, &mk()));
+    // EDGAR first (canonical industry/exchange), Yahoo overlays prose/website/sector.
+    let profile_sources: Vec<&dyn ProfileSource> = vec![&edgar, &yahoo];
+
+    if bulk {
+        let s = pipeline::enrich_all(store, &profile_sources, cfg.collect_concurrency, &CliProgress)
+            .await
+            .expect("enrich all");
+        report_bulk("enrich", Ok(s));
+    } else {
+        if tickers.is_empty() {
+            tickers = cfg.tickers.clone();
+        }
+        tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
+        let n = pipeline::enrich_tickers(store, &profile_sources, &tickers)
+            .await
+            .expect("enrich tickers");
+        tracing::info!("enriched {n} companies");
     }
 }
 

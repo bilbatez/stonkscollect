@@ -16,14 +16,16 @@ vi.mock('../api')
 
 afterEach(() => vi.clearAllMocks())
 
-const company = (ticker: string): Company => ({
+const company = (ticker: string, industry: string | null = null): Company => ({
   id: 1,
   cik: '',
   ticker,
   name: ticker,
   exchange: null,
   sector: null,
-  industry: null,
+  industry,
+  description: null,
+  website: null,
 })
 
 const score = (overrides: Partial<GrahamScore> = {}): GrahamScore => ({
@@ -189,8 +191,8 @@ test('Screener shows an empty state when nothing matches', async () => {
 test('AllStocks lists, paginates, searches, selects and watches', async () => {
   vi.mocked(api.listCompanies).mockResolvedValue({
     rows: [
-      { company: company('AAPL'), score: score() },
-      { company: company('ZZZ'), score: null },
+      { company: company('AAPL', 'Software'), score: score() },
+      { company: company('ZZZ'), score: null }, // null industry + null score
     ],
     total: 50,
   })
@@ -198,10 +200,12 @@ test('AllStocks lists, paginates, searches, selects and watches', async () => {
   const onAdd = vi.fn()
   render(<AllStocks onSelect={onSelect} onAdd={onAdd} />)
   await screen.findByText('6/8')
-  expect(screen.getByText('—')).toBeInTheDocument() // ZZZ has no score
-  // sort each sortable column (exercises the sort accessors, incl. null score)
+  expect(screen.getByText('Software')).toBeInTheDocument() // industry column
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0) // ZZZ null score + null industry
+  // sort each sortable column (exercises the sort accessors, incl. nulls)
   await userEvent.click(screen.getByText('Ticker'))
   await userEvent.click(screen.getByText('Name'))
+  await userEvent.click(screen.getByText('Industry'))
   await userEvent.click(screen.getByText('Graham score'))
   await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
   expect(onSelect).toHaveBeenCalledWith('AAPL')

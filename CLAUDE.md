@@ -30,11 +30,11 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 ```
 backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage-excluded)
   src/lib.rs        app(Arc<Store>) router + body-limit/timeout/trace layers
-  src/main.rs       CLI: serve | bootstrap | collect; NO logic (coverage-excluded)
+  src/main.rs       CLI: serve | bootstrap | collect | enrich | seed-admin; NO logic (coverage-excluded)
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
   src/store.rs      SQLite (WAL) CRUD, range queries, OHLC, Parquet export
-  src/collectors/   edgar, fmp, yahoo (keyless prices), news (rss+finnhub), scrape — Fact/Price/NewsSource traits
+  src/collectors/   edgar (facts+ProfileSource), fmp, yahoo (keyless prices + ProfileSource via assetProfile), news (rss+finnhub), scrape — Fact/Price/News/ProfileSource traits
   src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
   src/net.rs        RetryPolicy + RateLimiter + LoginThrottle (pure, time-injected)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)

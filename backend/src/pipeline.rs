@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
 use crate::collectors::edgar::CompanyRef;
-use crate::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
-use crate::domain::{Company, FinancialFact, GrahamScore, NewCompany};
+use crate::collectors::{FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget};
+use crate::domain::{Company, CompanyProfile, FinancialFact, GrahamScore, NewCompany};
 use crate::{graham, ratios};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
@@ -191,6 +191,74 @@ pub async fn ensure_user(store: &Store, email: &str, password: &str) -> Result<b
     }
     store.create_user(email, &crate::auth::hash_password(password)).await?;
     Ok(true)
+}
+
+/// Enrich one company's profile from all profile sources (best-effort), merging
+/// in source order (later non-`None` fields win) and persisting via COALESCE.
+pub async fn enrich_company(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    company: &Company,
+) -> Result<(), StoreError> {
+    let target = target_of(company);
+    let mut profile = CompanyProfile::default();
+    for src in profile_sources {
+        match src.fetch_profile(&target).await {
+            Ok(p) => profile = profile.overlay(p),
+            Err(e) => tracing::debug!("profile source {} failed for {}: {e}", src.name(), company.ticker),
+        }
+    }
+    store.update_company_profile(company.id, &profile).await
+}
+
+/// Enrich every company's profile (parallel, best-effort).
+pub async fn enrich_all(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    concurrency: usize,
+    progress: &dyn CollectProgress,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let total = companies.len();
+    progress.start(total);
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+
+    let outcomes = futures::stream::iter(companies)
+        .map(|company| {
+            let counter = &counter;
+            async move {
+                let ok = enrich_company(store, profile_sources, &company).await.is_ok();
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                progress.company_done(done, total, &company.ticker, ok);
+                ok
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut s = CollectSummary::default();
+    for ok in outcomes {
+        s.companies += usize::from(ok);
+        s.failed += usize::from(!ok);
+    }
+    Ok(s)
+}
+
+/// Enrich an explicit ticker list (unknown tickers skipped). Returns the count enriched.
+pub async fn enrich_tickers(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    tickers: &[String],
+) -> Result<usize, StoreError> {
+    let mut n = 0;
+    for ticker in tickers {
+        if let Some(c) = store.get_company(ticker).await? {
+            let _ = enrich_company(store, profile_sources, &c).await;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// Upsert a batch of company identities (idempotent). Returns the count.
@@ -575,7 +643,7 @@ mod tests {
 
     #[test]
     fn fact_sources_expose_stable_names() {
-        assert_eq!(EdgarCollector::new(FakeHttp::new("")).name(), "edgar");
+        assert_eq!(FactSource::name(&EdgarCollector::new(FakeHttp::new(""))), "edgar");
         assert_eq!(
             FactSource::name(&FmpCollector::new(FakeHttp::new(""), "K".into())),
             "fmp"
@@ -780,6 +848,76 @@ mod tests {
                 dedup_hash: "gn1".into(),
             }])
         }
+    }
+
+    /// A profile source returning fixed metadata.
+    struct FakeProfile;
+    #[async_trait(?Send)]
+    impl ProfileSource for FakeProfile {
+        fn name(&self) -> &'static str {
+            "fakeprofile"
+        }
+        async fn fetch_profile(&self, _t: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+            Ok(CompanyProfile {
+                sector: Some("Tech".into()),
+                industry: Some("Software".into()),
+                website: Some("https://x.com".into()),
+                description: Some("makes software".into()),
+                exchange: None,
+            })
+        }
+    }
+
+    /// A profile source that always errors (exercises the best-effort skip).
+    struct FailingProfile;
+    #[async_trait(?Send)]
+    impl ProfileSource for FailingProfile {
+        fn name(&self) -> &'static str {
+            "failprofile"
+        }
+        async fn fetch_profile(&self, _t: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+            Err(CollectorError::Http("boom".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_company_merges_sources_and_persists() {
+        let (store, id, _d) = store_with_company().await;
+        let company = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(ProfileSource::name(&FakeProfile), "fakeprofile");
+        assert_eq!(ProfileSource::name(&FailingProfile), "failprofile");
+        // a failing source is skipped; the good one fills the profile
+        let sources: [&dyn ProfileSource; 2] = [&FailingProfile, &FakeProfile];
+        enrich_company(&store, &sources, &company).await.unwrap();
+        let c = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(c.id, id);
+        assert_eq!(c.sector.as_deref(), Some("Tech"));
+        assert_eq!(c.industry.as_deref(), Some("Software"));
+        assert_eq!(c.website.as_deref(), Some("https://x.com"));
+        assert!(c.description.as_deref().unwrap().contains("software"));
+    }
+
+    #[tokio::test]
+    async fn enrich_all_and_tickers_cover_every_company() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[
+                CompanyRef { cik: "1".into(), ticker: "AAPL".into(), name: "Apple".into() },
+                CompanyRef { cik: "2".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+            ],
+        )
+        .await
+        .unwrap();
+        let sources: [&dyn ProfileSource; 1] = [&FakeProfile];
+        let s = enrich_all(&store, &sources, 2, &NoProgress).await.unwrap();
+        assert_eq!(s.companies, 2);
+        assert_eq!(s.failed, 0);
+        assert_eq!(store.get_company("MSFT").await.unwrap().unwrap().sector.as_deref(), Some("Tech"));
+
+        // ticker-list variant: known enriched, unknown skipped
+        let n = enrich_tickers(&store, &sources, &["AAPL".to_string(), "NOPE".to_string()]).await.unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test]

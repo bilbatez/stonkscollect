@@ -14,8 +14,8 @@ use sqlx::sqlite::{
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::{
-    CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewCompany, NewsItem,
-    PeriodType, PricePoint, Ratio, StatementKind,
+    CollectionRun, Company, CompanyProfile, Discrepancy, FinancialFact, GrahamScore, NewCompany,
+    NewsItem, PeriodType, PricePoint, Ratio, StatementKind,
 };
 use crate::net::{LoginThrottle, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW};
 
@@ -59,6 +59,8 @@ fn company_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Company> {
         exchange: r.try_get("exchange")?,
         sector: r.try_get("sector")?,
         industry: r.try_get("industry")?,
+        description: r.try_get("description")?,
+        website: r.try_get("website")?,
     })
 }
 
@@ -204,10 +206,29 @@ impl Store {
         Ok(companies.len())
     }
 
+    /// Apply a profile enrichment to a company. Only the `Some` fields overwrite
+    /// (COALESCE keeps the existing value where the update is `None`).
+    pub async fn update_company_profile(&self, company_id: i64, p: &CompanyProfile) -> Result<()> {
+        sqlx::query(
+            "UPDATE companies SET \
+             sector=COALESCE(?,sector), industry=COALESCE(?,industry), exchange=COALESCE(?,exchange), \
+             website=COALESCE(?,website), description=COALESCE(?,description) WHERE id=?",
+        )
+        .bind(&p.sector)
+        .bind(&p.industry)
+        .bind(&p.exchange)
+        .bind(&p.website)
+        .bind(&p.description)
+        .bind(company_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Fetch a company by ticker.
     pub async fn get_company(&self, ticker: &str) -> Result<Option<Company>> {
         let row = sqlx::query(
-            "SELECT id,cik,ticker,name,exchange,sector,industry FROM companies WHERE ticker=?",
+            "SELECT id,cik,ticker,name,exchange,sector,industry,description,website FROM companies WHERE ticker=?",
         )
         .bind(ticker)
         .fetch_optional(&self.pool)
@@ -221,6 +242,8 @@ impl Store {
                 exchange: r.try_get("exchange")?,
                 sector: r.try_get("sector")?,
                 industry: r.try_get("industry")?,
+                description: r.try_get("description")?,
+                website: r.try_get("website")?,
             })),
             None => Ok(None),
         }
@@ -229,7 +252,7 @@ impl Store {
     /// List every company, ordered by ticker (for bulk collection).
     pub async fn all_companies(&self) -> Result<Vec<Company>> {
         let rows = sqlx::query(
-            "SELECT id,cik,ticker,name,exchange,sector,industry FROM companies ORDER BY ticker",
+            "SELECT id,cik,ticker,name,exchange,sector,industry,description,website FROM companies ORDER BY ticker",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -243,6 +266,8 @@ impl Store {
                     exchange: r.try_get("exchange")?,
                     sector: r.try_get("sector")?,
                     industry: r.try_get("industry")?,
+                    description: r.try_get("description")?,
+                    website: r.try_get("website")?,
                 })
             })
             .collect()
@@ -255,7 +280,7 @@ impl Store {
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Company>> {
         let rows = sqlx::query(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry \
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website \
              FROM companies c LEFT JOIN company_state s ON s.company_id = c.id \
              WHERE s.last_collected_at IS NULL OR s.last_collected_at < ? \
              ORDER BY c.ticker",
@@ -273,6 +298,8 @@ impl Store {
                     exchange: r.try_get("exchange")?,
                     sector: r.try_get("sector")?,
                     industry: r.try_get("industry")?,
+                    description: r.try_get("description")?,
+                    website: r.try_get("website")?,
                 })
             })
             .collect()
@@ -802,7 +829,7 @@ impl Store {
     /// The companies on a user's watchlist, ordered by ticker.
     pub async fn list_watch(&self, user_id: i64) -> Result<Vec<Company>> {
         let rows = sqlx::query(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry \
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website \
              FROM watchlists w JOIN companies c ON c.id = w.company_id \
              WHERE w.user_id=? ORDER BY c.ticker",
         )
@@ -819,6 +846,8 @@ impl Store {
                     exchange: r.try_get("exchange")?,
                     sector: r.try_get("sector")?,
                     industry: r.try_get("industry")?,
+                    description: r.try_get("description")?,
+                    website: r.try_get("website")?,
                 })
             })
             .collect()
@@ -913,7 +942,7 @@ impl Store {
             .fetch_one(&self.pool)
             .await?;
         let sql = format!(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
              g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at\
              {filter} ORDER BY g.score DESC, c.ticker LIMIT ? OFFSET ?"
         );
@@ -952,7 +981,7 @@ impl Store {
         let total = count_q.fetch_one(&self.pool).await?;
 
         let sql = format!(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry, \
+            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
              g.company_id AS company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
              FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id{where_clause} \
              ORDER BY c.ticker LIMIT ? OFFSET ?"
@@ -1207,6 +1236,40 @@ mod tests {
         assert_eq!(id1, id2); // same row
         let got = store.get_company("AAPL").await.unwrap().unwrap();
         assert_eq!(got.name, "Apple (renamed)");
+    }
+
+    #[tokio::test]
+    async fn update_company_profile_overwrites_present_fields_only() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap(); // exchange NASDAQ, sector Technology
+        store
+            .update_company_profile(
+                id,
+                &CompanyProfile {
+                    sector: Some("Basic Materials".into()),
+                    industry: Some("Building Materials".into()),
+                    exchange: None, // keep existing NASDAQ
+                    website: Some("https://x.com".into()),
+                    description: Some("makes things".into()),
+                },
+            )
+            .await
+            .unwrap();
+        let c = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(c.sector.as_deref(), Some("Basic Materials")); // overwritten
+        assert_eq!(c.industry.as_deref(), Some("Building Materials"));
+        assert_eq!(c.exchange.as_deref(), Some("NASDAQ")); // kept (update was None)
+        assert_eq!(c.website.as_deref(), Some("https://x.com"));
+        assert_eq!(c.description.as_deref(), Some("makes things"));
+
+        // a partial second update only touches description
+        store
+            .update_company_profile(id, &CompanyProfile { description: Some("v2".into()), ..Default::default() })
+            .await
+            .unwrap();
+        let c = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(c.description.as_deref(), Some("v2"));
+        assert_eq!(c.website.as_deref(), Some("https://x.com")); // unchanged
     }
 
     #[tokio::test]

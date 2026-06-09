@@ -5,8 +5,11 @@ import {
   freshness,
   metricGroup,
   metricLabel,
+  secFilingsUrl,
   statementItemLabel,
   statementLabel,
+  wikipediaUrl,
+  yahooProfileUrl,
 } from './format'
 
 test('formatCurrency scales to B/M and handles small + negative values', () => {
@@ -35,6 +38,15 @@ test('metric labels and groups fall back gracefully', () => {
   expect(metricGroup('roe')).toBe('Profitability')
   expect(metricLabel('some_new_metric')).toBe('Some New Metric')
   expect(metricGroup('some_new_metric')).toBe('Other')
+})
+
+test('reference link builders', () => {
+  expect(secFilingsUrl('320193')).toContain('CIK=0000320193')
+  expect(secFilingsUrl('0000320193')).toContain('CIK=0000320193')
+  expect(wikipediaUrl('Vulcan Materials Co')).toBe(
+    'https://en.wikipedia.org/wiki/Special:Search?search=Vulcan%20Materials%20Co',
+  )
+  expect(yahooProfileUrl('VMC')).toBe('https://finance.yahoo.com/quote/VMC/profile')
 })
 
 test('statement labels resolve sections and line items with fallbacks', () => {

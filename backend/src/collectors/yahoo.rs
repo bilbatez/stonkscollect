@@ -6,13 +6,16 @@
 //! captured fixture. (Replaces the earlier Stooq source, which began serving a
 //! JavaScript anti-bot challenge instead of CSV.)
 
+use std::sync::Mutex;
+
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use async_trait::async_trait;
 
-use crate::collectors::{CollectorError, HttpClient, PriceSource, SourceTarget};
-use crate::domain::PricePoint;
+use crate::collectors::{CollectorError, HttpClient, PriceSource, ProfileSource, SourceTarget};
+use crate::domain::{CompanyProfile, PricePoint};
 
 const SOURCE: &str = "yahoo";
 
@@ -135,11 +138,133 @@ fn parse_chart_json(company_id: i64, json: &str) -> Result<Vec<PricePoint>, Coll
     Ok(points)
 }
 
+/// Collects company-profile metadata from Yahoo's `quoteSummary?modules=assetProfile`,
+/// which requires a cookie + crumb handshake. Keyless. (The cookie is held by the
+/// underlying reqwest client's cookie store; the crumb is cached here per run.)
+pub struct YahooProfileCollector<H: HttpClient> {
+    http: H,
+    crumb: Mutex<Option<String>>,
+}
+
+impl<H: HttpClient> YahooProfileCollector<H> {
+    pub fn new(http: H) -> Self {
+        Self { http, crumb: Mutex::new(None) }
+    }
+
+    pub fn profile_url(symbol: &str, crumb: &str) -> String {
+        format!(
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=assetProfile&crumb={}",
+            symbol.to_uppercase(),
+            crumb
+        )
+    }
+
+    /// Fetch (and cache) the Yahoo crumb, seeding the session cookie first.
+    async fn crumb(&self) -> Result<String, CollectorError> {
+        if let Some(c) = self.crumb.lock().unwrap().clone() {
+            return Ok(c);
+        }
+        // Best-effort cookie seed; the reqwest cookie store keeps it for the crumb call.
+        let _ = self.http.get_text("https://fc.yahoo.com").await;
+        let c = self.http.get_text("https://query1.finance.yahoo.com/v1/test/getcrumb").await?;
+        // A real crumb is a single whitespace-free token; reject error bodies like
+        // "Too Many Requests" so we don't cache and reuse garbage.
+        if c.split_whitespace().count() != 1 {
+            return Err(CollectorError::Http(format!("bad crumb: {c}")));
+        }
+        *self.crumb.lock().unwrap() = Some(c.clone());
+        Ok(c)
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> ProfileSource for YahooProfileCollector<H> {
+    fn name(&self) -> &'static str {
+        SOURCE
+    }
+
+    async fn fetch_profile(&self, target: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+        let crumb = self.crumb().await?;
+        let body = self.http.get_text(&Self::profile_url(&target.symbol, &crumb)).await?;
+        parse_asset_profile(&body)
+    }
+}
+
+/// Parse a Yahoo `assetProfile` response into a [`CompanyProfile`]. Missing/empty
+/// fields become `None`; a result-less response yields an empty profile.
+fn parse_asset_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
+    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let p = &doc["quoteSummary"]["result"][0]["assetProfile"];
+    let nonempty = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    Ok(CompanyProfile {
+        sector: nonempty(&p["sector"]),
+        industry: nonempty(&p["industry"]),
+        exchange: None,
+        website: nonempty(&p["website"]),
+        description: nonempty(&p["longBusinessSummary"]),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::FakeHttp;
     use chrono::{NaiveDate, TimeZone};
+
+    const PROFILE: &str = include_str!("../../tests/fixtures/yahoo_assetprofile.json");
+
+    #[test]
+    fn parse_asset_profile_maps_fields() {
+        let p = parse_asset_profile(PROFILE).unwrap();
+        assert_eq!(p.sector.as_deref(), Some("Basic Materials"));
+        assert_eq!(p.industry.as_deref(), Some("Building Materials"));
+        assert_eq!(p.website.as_deref(), Some("https://www.vulcanmaterials.com"));
+        assert!(p.description.unwrap().starts_with("Vulcan Materials Company produces"));
+        assert_eq!(p.exchange, None);
+    }
+
+    #[test]
+    fn parse_asset_profile_empty_result_is_blank() {
+        let p = parse_asset_profile(r#"{"quoteSummary":{"result":[],"error":"x"}}"#).unwrap();
+        assert_eq!(p, CompanyProfile::default());
+    }
+
+    #[test]
+    fn parse_asset_profile_invalid_json_errors() {
+        assert!(matches!(parse_asset_profile("nope").unwrap_err(), CollectorError::Parse(_)));
+    }
+
+    #[test]
+    fn profile_url_uppercases_and_carries_crumb() {
+        assert_eq!(
+            YahooProfileCollector::<FakeHttp>::profile_url("vmc", "CR1"),
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/VMC?modules=assetProfile&crumb=CR1"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_profile_rejects_a_garbage_crumb() {
+        // Yahoo rate-limits with a "Too Many Requests" body instead of a crumb.
+        let c = YahooProfileCollector::new(FakeHttp::routed(&[("getcrumb", "Too Many Requests")]));
+        let target = SourceTarget { cik: "x".into(), symbol: "VMC".into() };
+        assert!(matches!(c.fetch_profile(&target).await.unwrap_err(), CollectorError::Http(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_profile_does_crumb_handshake_then_parses_and_caches() {
+        let c = YahooProfileCollector::new(FakeHttp::routed(&[
+            ("getcrumb", "CRUMB123"),
+            ("quoteSummary", PROFILE),
+        ]));
+        let target = SourceTarget { cik: "x".into(), symbol: "VMC".into() };
+        let p = c.fetch_profile(&target).await.unwrap();
+        assert_eq!(p.sector.as_deref(), Some("Basic Materials"));
+        assert_eq!(ProfileSource::name(&c), "yahoo");
+        assert!(c.http.url().unwrap().contains("crumb=CRUMB123"));
+        // second call reuses the cached crumb (no re-fetch); still resolves
+        let p2 = c.fetch_profile(&target).await.unwrap();
+        assert_eq!(p2.industry.as_deref(), Some("Building Materials"));
+    }
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/yahoo_vmc.json");
 

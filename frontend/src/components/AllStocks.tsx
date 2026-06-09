@@ -41,6 +41,13 @@ export function AllStocks({ onSelect, onAdd }: Props) {
     },
     { id: 'name', header: 'Name', sortValue: (r) => r.company.name, filter: true, cell: (r) => r.company.name },
     {
+      id: 'industry',
+      header: 'Industry',
+      sortValue: (r) => r.company.industry ?? '',
+      filter: true,
+      cell: (r) => r.company.industry ?? '—',
+    },
+    {
       id: 'score',
       header: 'Graham score',
       sortValue: (r) => (r.score ? r.score.score : -1),

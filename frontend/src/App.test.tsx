@@ -11,7 +11,9 @@ vi.mock('./api')
 const mocked = vi.mocked(api)
 
 const company = (ticker: string): Company => ({
-  id: 1, cik: '', ticker, name: `${ticker} Inc.`, exchange: 'NASDAQ', sector: null, industry: null,
+  id: 1, cik: '0000320193', ticker, name: `${ticker} Inc.`, exchange: 'NASDAQ',
+  sector: 'Basic Materials', industry: 'Building Materials',
+  description: `${ticker} makes things.`, website: 'https://example.com',
 })
 
 const grahamScore = (): GrahamScore => ({
@@ -75,6 +77,14 @@ test('home All Stocks tab opens a company; theme toggles; logout returns to auth
   await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
   expect(await screen.findByTestId('price-chart')).toBeInTheDocument()
+
+  // profile: sector/industry, description, and reference links
+  expect(screen.getByText('Basic Materials')).toBeInTheDocument()
+  expect(screen.getByText(/aapl makes things/i)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /sec filings/i })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /website/i })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /wikipedia/i })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /yahoo finance/i })).toBeInTheDocument()
 
   // tabs stay visible; "Back to list" returns to All Stocks without clicking Home
   await userEvent.click(screen.getByRole('button', { name: /back to list/i }))

@@ -7,8 +7,10 @@ use serde_json::Value;
 
 use async_trait::async_trait;
 
-use crate::collectors::{period_type_from_fp, CollectorError, FactSource, HttpClient, SourceTarget};
-use crate::domain::{FinancialFact, StatementKind};
+use crate::collectors::{
+    period_type_from_fp, CollectorError, FactSource, HttpClient, ProfileSource, SourceTarget,
+};
+use crate::domain::{CompanyProfile, FinancialFact, StatementKind};
 
 /// XBRL us-gaap concept -> (statement, normalized line item).
 const CONCEPTS: &[(&str, StatementKind, &str)] = &[
@@ -104,6 +106,11 @@ impl<H: HttpClient> EdgarCollector<H> {
         format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:0>10}.json")
     }
 
+    /// Build the submissions (company profile) URL for a CIK.
+    pub fn submissions_url(cik: &str) -> String {
+        format!("https://data.sec.gov/submissions/CIK{cik:0>10}.json")
+    }
+
     /// Fetch and parse a company's facts into normalized [`FinancialFact`]s.
     pub async fn collect_facts(
         &self,
@@ -124,6 +131,37 @@ impl<H: HttpClient> EdgarCollector<H> {
             .await?;
         parse_company_tickers(&body)
     }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> ProfileSource for EdgarCollector<H> {
+    fn name(&self) -> &'static str {
+        "edgar"
+    }
+
+    async fn fetch_profile(&self, target: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+        let body = self.http.get_text(&Self::submissions_url(&target.cik)).await?;
+        parse_submissions_profile(&body)
+    }
+}
+
+/// Parse SEC's `submissions/CIK….json` into the canonical bits of a company
+/// profile: `sicDescription` → industry, first `exchanges` entry → exchange.
+/// (EDGAR's prose `description`/`website` are usually empty; Yahoo fills those.)
+fn parse_submissions_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
+    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let nonempty = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let exchange = doc["exchanges"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(nonempty);
+    Ok(CompanyProfile {
+        industry: nonempty(&doc["sicDescription"]),
+        exchange,
+        sector: None,
+        website: nonempty(&doc["website"]),
+        description: nonempty(&doc["description"]),
+    })
 }
 
 /// Parse SEC's `company_tickers.json` (an object keyed by index). Entries
@@ -233,13 +271,14 @@ fn parse_companyfacts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collectors::CollectorError;
+    use crate::collectors::{CollectorError, ProfileSource, SourceTarget};
     use crate::domain::{PeriodType, StatementKind};
     use crate::testutil::{fixed_now as now, FakeHttp};
     use chrono::NaiveDate;
 
     const FIXTURE: &str = include_str!("../../tests/fixtures/edgar_companyfacts.json");
     const TICKERS: &str = include_str!("../../tests/fixtures/company_tickers.json");
+    const SUBMISSIONS: &str = include_str!("../../tests/fixtures/edgar_submissions.json");
 
     #[test]
     fn parse_company_tickers_pads_cik_and_skips_incomplete() {
@@ -410,6 +449,39 @@ mod tests {
             collector.http.url().as_deref(),
             Some("https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json")
         );
+    }
+
+    #[test]
+    fn submissions_url_zero_pads_cik() {
+        assert_eq!(
+            EdgarCollector::<FakeHttp>::submissions_url("109563"),
+            "https://data.sec.gov/submissions/CIK0000109563.json"
+        );
+    }
+
+    #[test]
+    fn parse_submissions_profile_maps_industry_and_exchange() {
+        let p = parse_submissions_profile(SUBMISSIONS).unwrap();
+        assert_eq!(p.industry.as_deref(), Some("Concrete, Gypsum & Plaster Products"));
+        assert_eq!(p.exchange.as_deref(), Some("NYSE"));
+        assert_eq!(p.sector, None);
+        assert_eq!(p.website, None); // empty string -> None
+        assert_eq!(p.description, None);
+    }
+
+    #[test]
+    fn parse_submissions_profile_invalid_json_errors() {
+        assert!(matches!(parse_submissions_profile("nope").unwrap_err(), CollectorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_profile_hits_submissions_then_parses() {
+        let c = EdgarCollector::new(FakeHttp::new(SUBMISSIONS));
+        let target = SourceTarget { cik: "109563".into(), symbol: "VMC".into() };
+        let p = c.fetch_profile(&target).await.unwrap();
+        assert_eq!(p.industry.as_deref(), Some("Concrete, Gypsum & Plaster Products"));
+        assert_eq!(ProfileSource::name(&c), "edgar");
+        assert!(c.http.url().unwrap().contains("/submissions/CIK0000109563.json"));
     }
 
     #[test]
