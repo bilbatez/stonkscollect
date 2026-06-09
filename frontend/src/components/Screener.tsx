@@ -27,15 +27,22 @@ export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
   const [page, setPage] = useState(0)
   const [defensive, setDefensive] = useState(false)
   const [netNet, setNetNet] = useState(false)
+  const [sortBy, setSortBy] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   useEffect(() => {
-    void screen({ defensive, net_net: netNet, limit: PAGE_SIZE, offset: page * PAGE_SIZE }).then(
-      (p) => {
-        setRows(p.rows)
-        setTotal(p.total)
-      },
-    )
-  }, [defensive, netNet, page])
+    void screen({
+      defensive,
+      net_net: netNet,
+      sort_by: sortBy ?? undefined,
+      sort_dir: sortBy ? sortDir : undefined,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+    }).then((p) => {
+      setRows(p.rows)
+      setTotal(p.total)
+    })
+  }, [defensive, netNet, page, sortBy, sortDir])
 
   const columns: GridColumn<ScreenRow>[] = [
     {
@@ -95,7 +102,13 @@ export function Screener({ onSelect }: { onSelect: (ticker: string) => void }) {
           label="Net-net"
         />
       </Stack>
-      <DataGrid columns={columns} rows={rows} getRowId={(r) => r.company.ticker} empty="No matches." />
+      <DataGrid
+        columns={columns}
+        rows={rows}
+        getRowId={(r) => r.company.ticker}
+        empty="No matches."
+        onSortChange={(col, dir) => { setPage(0); setSortBy(col); setSortDir(dir) }}
+      />
       <TablePagination
         component="div"
         count={total}

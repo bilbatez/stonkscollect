@@ -113,6 +113,8 @@ export interface ScreenFilters {
   defensive?: boolean
   net_net?: boolean
   min_score?: number
+  sort_by?: string
+  sort_dir?: string
   limit?: number
   offset?: number
 }

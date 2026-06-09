@@ -114,10 +114,20 @@ export async function loadCompanyData(ticker: string): Promise<CompanyData> {
 }
 
 /** Paginated, optionally-searched directory of all companies + their scores. */
-export function listCompanies(q: string, limit: number, offset: number): Promise<Page<CompanyRow>> {
+export function listCompanies(
+  q: string,
+  sortBy: string | null,
+  sortDir: 'asc' | 'desc',
+  limit: number,
+  offset: number,
+): Promise<Page<CompanyRow>> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (q !== '') {
     params.set('q', q)
+  }
+  if (sortBy !== null) {
+    params.set('sort_by', sortBy)
+    params.set('sort_dir', sortDir)
   }
   return getJson<Page<CompanyRow>>(`/api/companies?${params.toString()}`)
 }
@@ -131,5 +141,9 @@ export function screen(f: ScreenFilters): Promise<Page<ScreenRow>> {
     limit: String(f.limit ?? 50),
     offset: String(f.offset ?? 0),
   })
+  if (f.sort_by !== undefined) {
+    params.set('sort_by', f.sort_by)
+    params.set('sort_dir', f.sort_dir ?? 'asc')
+  }
   return getJson<Page<ScreenRow>>(`/api/screen?${params.toString()}`)
 }

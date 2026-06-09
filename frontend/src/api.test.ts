@@ -109,12 +109,14 @@ test('loadCompanyData fetches and assembles all sections', async () => {
   expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/graham')
 })
 
-test('listCompanies builds query strings with optional search', async () => {
+test('listCompanies builds query strings with optional search and sort', async () => {
   mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
-  await listCompanies('app', 25, 50)
+  await listCompanies('app', null, 'asc', 25, 50)
   expect(calls[0].url).toBe('/api/companies?limit=25&offset=50&q=app')
-  await listCompanies('', 25, 0)
+  await listCompanies('', null, 'asc', 25, 0)
   expect(calls[1].url).toBe('/api/companies?limit=25&offset=0')
+  await listCompanies('', 'score', 'desc', 25, 0)
+  expect(calls[2].url).toBe('/api/companies?limit=25&offset=0&sort_by=score&sort_dir=desc')
 })
 
 test('screen builds the query string from filters and defaults', async () => {
@@ -123,4 +125,8 @@ test('screen builds the query string from filters and defaults', async () => {
   expect(calls[0].url).toBe('/api/screen?defensive=true&net_net=false&min_score=3&limit=10&offset=0')
   await screen({})
   expect(calls[1].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0')
+  await screen({ sort_by: 'score', sort_dir: 'desc' })
+  expect(calls[2].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0&sort_by=score&sort_dir=desc')
+  await screen({ sort_by: 'graham_number' })
+  expect(calls[3].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0&sort_by=graham_number&sort_dir=asc')
 })

@@ -23,6 +23,13 @@ export function applyReorder(order: string[], activeId: string, overId: string):
   return next
 }
 
+/** Apply a TanStack-style updater: call it if it's a function, else return it directly. */
+export function applyUpdater<T>(updater: T | ((prev: T) => T), prev: T): T {
+  return typeof updater === 'function'
+    ? (updater as (prev: T) => T)(prev)
+    : updater
+}
+
 /** dnd-kit id (string|number|null) → string ('' when absent). */
 export function idOf(item: { id: string | number } | null | undefined): string {
   return item ? String(item.id) : ''

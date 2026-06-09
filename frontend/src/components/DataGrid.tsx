@@ -39,20 +39,23 @@ import {
   type Header,
   type SortingState,
 } from '@tanstack/react-table'
-import { makeDragEndHandler, type GridColumn } from './dataGridUtils'
+import { applyUpdater, makeDragEndHandler, type GridColumn } from './dataGridUtils'
 
 /** Sortable, per-column-filterable, drag-reorderable grid (TanStack + dnd-kit,
- *  MUI-rendered). Client-side over the rows it's given. */
+ *  MUI-rendered). Client-side over the rows it's given. When `onSortChange` is
+ *  provided it fires on every sort toggle so the parent can re-fetch server-side. */
 export function DataGrid<T>({
   columns,
   rows,
   getRowId,
   empty = 'No data.',
+  onSortChange,
 }: {
   columns: GridColumn<T>[]
   rows: T[]
   getRowId: (row: T) => string
   empty?: string
+  onSortChange?: (col: string | null, dir: 'asc' | 'desc') => void
 }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [filters, setFilters] = useState<ColumnFiltersState>([])
@@ -79,13 +82,19 @@ export function DataGrid<T>({
     data: rows,
     columns: colDefs,
     state: { sorting, columnFilters: filters, columnOrder: order },
-    onSortingChange: setSorting,
+    onSortingChange: (updater) => {
+      const next = applyUpdater(updater, sorting)
+      setSorting(next)
+      const first = next[0]
+      onSortChange?.(first?.id ?? null, first?.desc ? 'desc' : 'asc')
+    },
     onColumnFiltersChange: setFilters,
     onColumnOrderChange: setOrder,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getRowId,
+    autoResetAll: false,
   })
 
   const sensors = useSensors(

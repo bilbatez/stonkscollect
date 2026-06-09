@@ -13,19 +13,22 @@ interface Props {
 }
 
 /** Paginated directory of every company with its Graham score. The page is a
- *  sortable / filterable / column-reorderable grid. */
+ *  sortable / filterable / column-reorderable grid. Sorting triggers a server
+ *  re-fetch so the full dataset is sorted, not just the visible page. */
 export function AllStocks({ onSelect, onAdd }: Props) {
   const [rows, setRows] = useState<CompanyRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
   const [q, setQ] = useState('')
+  const [sortBy, setSortBy] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   useEffect(() => {
-    void listCompanies(q, PAGE_SIZE, page * PAGE_SIZE).then((p) => {
+    void listCompanies(q, sortBy, sortDir, PAGE_SIZE, page * PAGE_SIZE).then((p) => {
       setRows(p.rows)
       setTotal(p.total)
     })
-  }, [q, page])
+  }, [q, page, sortBy, sortDir])
 
   const columns: GridColumn<CompanyRow>[] = [
     {
@@ -78,7 +81,13 @@ export function AllStocks({ onSelect, onAdd }: Props) {
         slotProps={{ htmlInput: { 'aria-label': 'search stocks' } }}
         sx={{ mb: 2 }}
       />
-      <DataGrid columns={columns} rows={rows} getRowId={(r) => r.company.ticker} empty="No companies." />
+      <DataGrid
+        columns={columns}
+        rows={rows}
+        getRowId={(r) => r.company.ticker}
+        empty="No companies."
+        onSortChange={(col, dir) => { setPage(0); setSortBy(col); setSortDir(dir) }}
+      />
       <TablePagination
         component="div"
         count={total}

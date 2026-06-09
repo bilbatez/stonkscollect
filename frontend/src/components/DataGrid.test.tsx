@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { DataGrid } from './DataGrid'
-import { applyReorder, idOf, makeDragEndHandler, type GridColumn } from './dataGridUtils'
+import { applyReorder, applyUpdater, idOf, makeDragEndHandler, type GridColumn } from './dataGridUtils'
 import type { DragEndEvent } from '@dnd-kit/core'
 
 interface Row {
@@ -25,6 +25,11 @@ const rows: Row[] = [
 function nameOrder(): string[] {
   return screen.getAllByText(/^(Alpha|Beta)$/).map((e) => e.textContent ?? '')
 }
+
+test('applyUpdater calls function or returns value directly', () => {
+  expect(applyUpdater((n: number) => n + 1, 5)).toBe(6)
+  expect(applyUpdater(42, 0)).toBe(42)
+})
 
 test('applyReorder moves an id and no-ops on equal/missing ids', () => {
   expect(applyReorder(['a', 'b', 'c'], 'a', 'c')).toEqual(['b', 'c', 'a'])
@@ -80,6 +85,18 @@ test('the grid renders a drag handle per column', () => {
   render(<DataGrid columns={columns} rows={rows} getRowId={(r) => r.name} />)
   expect(screen.getByLabelText('reorder name')).toBeInTheDocument()
   expect(screen.getByLabelText('reorder act')).toBeInTheDocument()
+})
+
+test('onSortChange fires with column id and direction, then null when cleared', async () => {
+  const onSortChange = vi.fn()
+  render(<DataGrid columns={columns} rows={rows} getRowId={(r) => r.name} onSortChange={onSortChange} />)
+  await userEvent.click(screen.getByText('Name'))
+  expect(onSortChange).toHaveBeenCalledWith('name', 'asc')
+  await userEvent.click(screen.getByText('Name'))
+  expect(onSortChange).toHaveBeenCalledWith('name', 'desc')
+  // third click clears sort; first is undefined → col is null
+  await userEvent.click(screen.getByText('Name'))
+  expect(onSortChange).toHaveBeenCalledWith(null, 'asc')
 })
 
 test('empty state, default and custom', () => {

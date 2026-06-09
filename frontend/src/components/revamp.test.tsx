@@ -212,9 +212,19 @@ test('AllStocks lists, paginates, searches, selects and watches', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'watch ZZZ' }))
   expect(onAdd).toHaveBeenCalledWith('ZZZ')
   await userEvent.click(screen.getByRole('button', { name: /next page/i }))
-  await waitFor(() => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', 25, 25))
+  // numeric column → TanStack sorts desc first; page offset = 25
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', 'score', 'desc', 25, 25),
+  )
   await userEvent.type(screen.getByLabelText('search stocks'), 'a')
-  await waitFor(() => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 25, 0))
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 'score', 'desc', 25, 0),
+  )
+  // second click on same column toggles to asc
+  await userEvent.click(screen.getByText('Graham score'))
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 'score', 'asc', 25, 0),
+  )
 })
 
 test('Compare builds a metric matrix and dashes missing cells', () => {

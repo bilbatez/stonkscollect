@@ -85,6 +85,8 @@ struct ScreenParams {
     defensive: Option<bool>,
     net_net: Option<bool>,
     min_score: Option<i64>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -105,6 +107,8 @@ struct Page<T> {
 #[derive(Deserialize)]
 struct CompaniesParams {
     q: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -123,7 +127,13 @@ async fn companies(
     _user: AuthUser,
 ) -> ApiResult<Page<CompanyRow>> {
     let (rows, total) = store
-        .list_companies(p.q.as_deref(), p.limit.unwrap_or(50), p.offset.unwrap_or(0))
+        .list_companies(
+            p.q.as_deref(),
+            p.sort_by.as_deref(),
+            p.sort_dir.as_deref(),
+            p.limit.unwrap_or(50),
+            p.offset.unwrap_or(0),
+        )
         .await
         .map_err(internal)?;
     Ok(Json(Page {
@@ -172,6 +182,8 @@ async fn screen(
             p.defensive.unwrap_or(false),
             p.net_net.unwrap_or(false),
             p.min_score.unwrap_or(0),
+            p.sort_by.as_deref(),
+            p.sort_dir.as_deref(),
             p.limit.unwrap_or(50),
             p.offset.unwrap_or(0),
         )
@@ -589,6 +601,22 @@ mod tests {
         assert_eq!(json["company"]["ticker"], "AAPL");
         assert_eq!(json["graham"]["score"], 6);
         assert!(json["ratios"].is_array());
+    }
+
+    #[tokio::test]
+    async fn companies_and_screen_sort_params() {
+        let (store, _d, t) = seeded().await;
+        // sort_by=score&sort_dir=desc: AAPL has score 6, it should appear in the results
+        let (_s, json) = get(store.clone(), &t, "/api/companies?sort_by=score&sort_dir=desc&limit=10").await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+        // unknown sort_by falls back gracefully (no 500)
+        let (status, _) = get(store.clone(), &t, "/api/companies?sort_by=bogus&sort_dir=desc&limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        // screen with sort_by=ticker asc
+        let (status, json) = get(store.clone(), &t, "/api/screen?sort_by=ticker&sort_dir=asc").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
     }
 
     #[tokio::test]

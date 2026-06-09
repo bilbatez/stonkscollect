@@ -114,6 +114,30 @@ pub struct Store {
     login_throttle: LoginThrottle,
 }
 
+/// Map a `sort_by` token + `sort_dir` to a safe (whitelisted) ORDER BY clause for
+/// `list_companies`. Tokens are matched literally — no user input reaches the SQL string.
+fn companies_sort_expr(sort_by: Option<&str>, sort_dir: Option<&str>) -> String {
+    let dir = if sort_dir == Some("desc") { "DESC" } else { "ASC" };
+    match sort_by {
+        Some("name") => format!("c.name {dir}"),
+        Some("industry") => format!("COALESCE(c.industry,'') {dir}"),
+        Some("score") => format!("COALESCE(g.score,-1) {dir}"),
+        _ => format!("c.ticker {dir}"),
+    }
+}
+
+/// Map a `sort_by` token + `sort_dir` to a safe (whitelisted) ORDER BY clause for
+/// `screen`. Default (no `sort_by`) preserves the original score-desc ordering.
+fn screen_sort_expr(sort_by: Option<&str>, sort_dir: Option<&str>) -> String {
+    let dir = if sort_dir == Some("desc") { "DESC" } else { "ASC" };
+    match sort_by {
+        Some("ticker") => format!("c.ticker {dir}"),
+        Some("graham_number") => format!("COALESCE(g.graham_number,-1) {dir}"),
+        Some("margin_of_safety") => format!("COALESCE(g.margin_of_safety,-1e9) {dir}"),
+        _ => "g.score DESC, c.ticker ASC".to_string(),
+    }
+}
+
 impl Store {
     /// Open (creating if needed) the database at `url` and apply migrations.
     ///
@@ -917,14 +941,17 @@ impl Store {
         }
     }
 
-    /// Screen companies by Graham score, highest first. Returns the page plus the
-    /// total number of matches (for pagination). `defensive_only`/`net_net_only`
-    /// are optional filters.
+    /// Screen companies by Graham score. Returns the page plus the total number
+    /// of matches (for pagination). `defensive_only`/`net_net_only` are optional
+    /// filters. `sort_by`/`sort_dir` control ordering (whitelisted — no injection risk).
+    #[allow(clippy::too_many_arguments)]
     pub async fn screen(
         &self,
         defensive_only: bool,
         net_net_only: bool,
         min_score: i64,
+        sort_by: Option<&str>,
+        sort_dir: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<(Company, GrahamScore)>, i64)> {
@@ -941,10 +968,11 @@ impl Store {
             .bind(min_score)
             .fetch_one(&self.pool)
             .await?;
+        let order_by = screen_sort_expr(sort_by, sort_dir);
         let sql = format!(
             "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
              g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at\
-             {filter} ORDER BY g.score DESC, c.ticker LIMIT ? OFFSET ?"
+             {filter} ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
         let rows = sqlx::query(&sql)
             .bind(min_score)
@@ -959,11 +987,14 @@ impl Store {
         Ok((page, total))
     }
 
-    /// A page of companies (ordered by ticker) with each one's Graham score when
-    /// computed, plus the total count. `q` filters by ticker/name substring.
+    /// A page of companies with each one's Graham score when computed, plus the
+    /// total count. `q` filters by ticker/name substring. `sort_by`/`sort_dir`
+    /// control ordering (whitelisted — no injection risk).
     pub async fn list_companies(
         &self,
         q: Option<&str>,
+        sort_by: Option<&str>,
+        sort_dir: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<(Company, Option<GrahamScore>)>, i64)> {
@@ -980,11 +1011,12 @@ impl Store {
         }
         let total = count_q.fetch_one(&self.pool).await?;
 
+        let order_by = companies_sort_expr(sort_by, sort_dir);
         let sql = format!(
             "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
              g.company_id AS company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
              FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id{where_clause} \
-             ORDER BY c.ticker LIMIT ? OFFSET ?"
+             ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
         let mut query = sqlx::query(&sql);
         if let Some(l) = &like {
@@ -1565,21 +1597,21 @@ mod tests {
         assert_eq!(store.get_graham_score(aapl).await.unwrap().unwrap().score, 8);
 
         // screen: all (min 0) -> AAPL(8) before MSFT(4); total reflects all matches
-        let (all, total) = store.screen(false, false, 0, 10, 0).await.unwrap();
+        let (all, total) = store.screen(false, false, 0, None, None, 10, 0).await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(total, 2);
         assert_eq!(all[0].0.ticker, "AAPL");
         // defensive only -> just AAPL
-        let (def, def_total) = store.screen(true, false, 0, 10, 0).await.unwrap();
+        let (def, def_total) = store.screen(true, false, 0, None, None, 10, 0).await.unwrap();
         assert_eq!(def.len(), 1);
         assert_eq!(def_total, 1);
         assert_eq!(def[0].0.ticker, "AAPL");
         // min_score filter
-        assert_eq!(store.screen(false, false, 5, 10, 0).await.unwrap().0.len(), 1);
+        assert_eq!(store.screen(false, false, 5, None, None, 10, 0).await.unwrap().0.len(), 1);
         // net-net filter (none set) -> empty
-        assert_eq!(store.screen(false, true, 0, 10, 0).await.unwrap().1, 0);
+        assert_eq!(store.screen(false, true, 0, None, None, 10, 0).await.unwrap().1, 0);
         // offset paginates: skip the first of two
-        let (page2, _) = store.screen(false, false, 0, 10, 1).await.unwrap();
+        let (page2, _) = store.screen(false, false, 0, None, None, 10, 1).await.unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].0.ticker, "MSFT");
     }
@@ -1608,19 +1640,123 @@ mod tests {
             .unwrap();
 
         // page of all, ordered by ticker; AAPL has a score, MSFT does not
-        let (rows, total) = store.list_companies(None, 10, 0).await.unwrap();
+        let (rows, total) = store.list_companies(None, None, None, 10, 0).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(rows[0].0.ticker, "AAPL");
         assert!(rows[0].1.is_some());
         assert!(rows[1].1.is_none());
         // search by name
-        let (msrows, mstotal) = store.list_companies(Some("micro"), 10, 0).await.unwrap();
+        let (msrows, mstotal) = store.list_companies(Some("micro"), None, None, 10, 0).await.unwrap();
         assert_eq!(mstotal, 1);
         assert_eq!(msrows[0].0.ticker, "MSFT");
         // limit + offset
-        let (p2, _) = store.list_companies(None, 1, 1).await.unwrap();
+        let (p2, _) = store.list_companies(None, None, None, 1, 1).await.unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].0.ticker, "MSFT");
+    }
+
+    #[test]
+    fn companies_sort_expr_whitelist() {
+        assert_eq!(companies_sort_expr(Some("name"), Some("desc")), "c.name DESC");
+        assert_eq!(companies_sort_expr(Some("industry"), Some("asc")), "COALESCE(c.industry,'') ASC");
+        assert_eq!(companies_sort_expr(Some("score"), Some("desc")), "COALESCE(g.score,-1) DESC");
+        assert_eq!(companies_sort_expr(Some("ticker"), None), "c.ticker ASC");
+        assert_eq!(companies_sort_expr(None, None), "c.ticker ASC");
+        // unknown token falls back to ticker (SQL injection attempt returns safe fallback)
+        assert_eq!(companies_sort_expr(Some("'; DROP TABLE companies; --"), None), "c.ticker ASC");
+    }
+
+    #[test]
+    fn screen_sort_expr_whitelist() {
+        assert_eq!(screen_sort_expr(Some("ticker"), Some("asc")), "c.ticker ASC");
+        assert_eq!(screen_sort_expr(Some("graham_number"), Some("desc")), "COALESCE(g.graham_number,-1) DESC");
+        assert_eq!(screen_sort_expr(Some("margin_of_safety"), None), "COALESCE(g.margin_of_safety,-1e9) ASC");
+        // default (no sort_by): score DESC with ticker tiebreaker
+        assert_eq!(screen_sort_expr(None, None), "g.score DESC, c.ticker ASC");
+        // unknown sort_by falls back to default score ordering
+        assert_eq!(screen_sort_expr(Some("bogus"), Some("desc")), "g.score DESC, c.ticker ASC");
+    }
+
+    #[tokio::test]
+    async fn list_companies_sort_by_score_and_dir() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap();
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        msft.name = "Microsoft".into();
+        let msft_id = store.upsert_company(&msft).await.unwrap();
+        store
+            .save_graham_score(&GrahamScore {
+                company_id: aapl,
+                score: 8,
+                passes_defensive: true,
+                graham_number: None,
+                ncav_per_share: None,
+                margin_of_safety: None,
+                net_net: false,
+                computed_at: now,
+            })
+            .await
+            .unwrap();
+        store
+            .save_graham_score(&GrahamScore {
+                company_id: msft_id,
+                score: 3,
+                passes_defensive: false,
+                graham_number: None,
+                ncav_per_share: None,
+                margin_of_safety: None,
+                net_net: false,
+                computed_at: now,
+            })
+            .await
+            .unwrap();
+
+        // sort by score desc -> AAPL(8) first
+        let (rows, _) = store.list_companies(None, Some("score"), Some("desc"), 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "AAPL");
+        assert_eq!(rows[1].0.ticker, "MSFT");
+
+        // sort by score asc -> MSFT(3) first
+        let (rows, _) = store.list_companies(None, Some("score"), Some("asc"), 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "MSFT");
+        assert_eq!(rows[1].0.ticker, "AAPL");
+
+        // unknown sort_by falls back to ticker asc
+        let (rows, _) = store.list_companies(None, Some("bogus"), None, 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn screen_sort_by_ticker() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap();
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        let msft_id = store.upsert_company(&msft).await.unwrap();
+        let g = |cid, s| GrahamScore {
+            company_id: cid,
+            score: s,
+            passes_defensive: false,
+            graham_number: None,
+            ncav_per_share: None,
+            margin_of_safety: None,
+            net_net: false,
+            computed_at: now,
+        };
+        store.save_graham_score(&g(aapl, 5)).await.unwrap();
+        store.save_graham_score(&g(msft_id, 5)).await.unwrap();
+
+        // default (no sort_by) -> score DESC (both equal), tie-breaks by ticker -> AAPL, MSFT
+        let (rows, _) = store.screen(false, false, 0, None, None, 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "AAPL");
+
+        // sort by ticker desc -> MSFT first
+        let (rows, _) = store.screen(false, false, 0, Some("ticker"), Some("desc"), 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "MSFT");
+        assert_eq!(rows[1].0.ticker, "AAPL");
     }
 
     #[tokio::test]
