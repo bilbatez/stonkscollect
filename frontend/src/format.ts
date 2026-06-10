@@ -8,7 +8,7 @@ export function formatCurrency(value: number): string {
   if (abs >= 1_000_000) {
     return `${sign}$${(abs / 1_000_000).toFixed(1)}M`
   }
-  return `${sign}$${abs}`
+  return `${sign}$${abs.toLocaleString('en-US')}`
 }
 
 /** Turn a snake_case / PascalCase key into a spaced, capitalized fallback label. */

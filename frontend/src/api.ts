@@ -38,7 +38,7 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
 async function getJson<T>(path: string): Promise<T> {
   const res = await authedFetch(path)
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`)
+    throw new Error(`request failed: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
 }
@@ -50,7 +50,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`)
+    throw new Error(`request failed: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
 }

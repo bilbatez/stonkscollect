@@ -184,7 +184,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
-  const latestPriceDate = data.prices[0]?.date ?? null
+  // prices arrive oldest-first from the API (ORDER BY date ASC); last element is newest
+  const latestPriceDate = data.prices.at(-1)?.date ?? null
   const c = data.company
   return (
     <Card variant="outlined" component="article">

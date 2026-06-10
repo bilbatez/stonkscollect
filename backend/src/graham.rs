@@ -25,7 +25,8 @@ const MIN_STABILITY_YEARS: usize = 3;
 /// Graham Number = √(22.5 · EPS · BVPS), when both are positive.
 pub fn graham_number(eps: f64, bvps: f64) -> Option<f64> {
     if eps > 0.0 && bvps > 0.0 {
-        Some((PE_PB_MAX * eps * bvps).sqrt())
+        let v = (PE_PB_MAX * eps * bvps).sqrt();
+        v.is_finite().then_some(v)
     } else {
         None
     }
@@ -282,6 +283,8 @@ mod tests {
         assert!(graham_number(2.0, 10.0).unwrap() > 0.0);
         assert_eq!(graham_number(-1.0, 10.0), None);
         assert_eq!(graham_number(2.0, 0.0), None);
+        // astronomically large inputs → overflow to infinity → None, not Some(inf)
+        assert_eq!(graham_number(f64::MAX, f64::MAX), None);
         assert_eq!(ncav_per_share(100.0, 40.0, 10.0), Some(6.0));
         assert_eq!(ncav_per_share(100.0, 40.0, 0.0), None);
     }

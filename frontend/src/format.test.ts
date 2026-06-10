@@ -16,6 +16,7 @@ test('formatCurrency scales to B/M and handles small + negative values', () => {
   expect(formatCurrency(383_285_000_000)).toBe('$383.3B')
   expect(formatCurrency(96_995_000)).toBe('$97.0M')
   expect(formatCurrency(950)).toBe('$950')
+  expect(formatCurrency(1_234)).toBe('$1,234')
   expect(formatCurrency(-2_000_000)).toBe('-$2.0M')
 })
 

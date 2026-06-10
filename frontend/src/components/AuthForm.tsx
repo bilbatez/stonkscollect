@@ -15,8 +15,8 @@ export function AuthForm({ onAuth }: { onAuth: (token: string) => void }) {
     try {
       const token = mode === 'login' ? await login(email, password) : await signup(email, password)
       onAuth(token)
-    } catch {
-      setError(mode === 'login' ? 'Login failed' : 'Signup failed')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
     }
   }
 
@@ -35,6 +35,7 @@ export function AuthForm({ onAuth }: { onAuth: (token: string) => void }) {
                 placeholder="Email"
                 size="small"
                 fullWidth
+                required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 slotProps={{ htmlInput: { 'aria-label': 'email' } }}
@@ -45,6 +46,7 @@ export function AuthForm({ onAuth }: { onAuth: (token: string) => void }) {
                 placeholder="Password"
                 size="small"
                 fullWidth
+                required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 slotProps={{ htmlInput: { 'aria-label': 'password' } }}

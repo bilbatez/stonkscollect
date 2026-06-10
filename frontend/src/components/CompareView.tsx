@@ -15,10 +15,15 @@ function latestMetrics(d: CompanyData): Record<string, number> {
 
 export function CompareView() {
   const [tickers, setTickers] = useState<string[]>([])
-  const [rows, setRows] = useState<CompareRow[]>([])
+  const [dataMap, setDataMap] = useState<Record<string, Record<string, number>>>({})
   const [inputValue, setInputValue] = useState('')
   const [options, setOptions] = useState<CompanyRow[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loadingCount, setLoadingCount] = useState(0)
+
+  // Rows derived in insertion order regardless of fetch-completion order.
+  const rows: CompareRow[] = tickers
+    .filter((t) => t in dataMap)
+    .map((t) => ({ ticker: t, metrics: dataMap[t] }))
 
   useEffect(() => {
     if (!inputValue.trim()) {
@@ -37,18 +42,22 @@ export function CompareView() {
     const ticker = row.company.ticker
     if (tickers.includes(ticker)) return
     setTickers((prev) => [...prev, ticker])
-    setLoading(true)
+    setLoadingCount((c) => c + 1)
     try {
       const d = await loadCompanyData(ticker)
-      setRows((prev) => [...prev, { ticker, metrics: latestMetrics(d) }])
+      setDataMap((prev) => ({ ...prev, [ticker]: latestMetrics(d) }))
     } finally {
-      setLoading(false)
+      setLoadingCount((c) => c - 1)
     }
   }
 
   function removeTicker(ticker: string) {
     setTickers((prev) => prev.filter((t) => t !== ticker))
-    setRows((prev) => prev.filter((r) => r.ticker !== ticker))
+    setDataMap((prev) => {
+      const next = { ...prev }
+      delete next[ticker]
+      return next
+    })
   }
 
   return (
@@ -78,7 +87,7 @@ export function CompareView() {
           ))}
         </Stack>
       )}
-      {loading ? (
+      {loadingCount > 0 ? (
         <Skeleton />
       ) : tickers.length === 0 ? (
         <Typography color="text.secondary">Add tickers above to compare.</Typography>

@@ -998,9 +998,12 @@ impl Store {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<(Company, Option<GrahamScore>)>, i64)> {
-        let like = q.map(|s| format!("%{}%", s.trim()));
+        let like = q.map(|s| {
+            let e = s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            format!("%{}%", e)
+        });
         let where_clause = if like.is_some() {
-            " WHERE c.ticker LIKE ? OR c.name LIKE ?"
+            " WHERE c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\'"
         } else {
             ""
         };
@@ -1653,6 +1656,14 @@ mod tests {
         let (p2, _) = store.list_companies(None, None, None, 1, 1).await.unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].0.ticker, "MSFT");
+
+        // LIKE wildcards in query must be escaped and treated literally
+        let (pct, pct_total) = store.list_companies(Some("%"), None, None, 10, 0).await.unwrap();
+        assert_eq!(pct_total, 0, "bare % should not match any company");
+        assert!(pct.is_empty());
+        let (und, und_total) = store.list_companies(Some("_"), None, None, 10, 0).await.unwrap();
+        assert_eq!(und_total, 0, "bare _ should not match any company");
+        assert!(und.is_empty());
     }
 
     #[test]

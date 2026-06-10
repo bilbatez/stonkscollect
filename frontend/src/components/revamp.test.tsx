@@ -53,8 +53,10 @@ test('AuthForm logs in and reports the token', async () => {
 test('AuthForm surfaces a login error', async () => {
   vi.mocked(api.login).mockRejectedValue(new Error('nope'))
   render(<AuthForm onAuth={vi.fn()} />)
+  await userEvent.type(screen.getByLabelText('email'), 'a@e.com')
+  await userEvent.type(screen.getByLabelText('password'), 'pw')
   await userEvent.click(screen.getByRole('button', { name: /log in/i }))
-  expect(await screen.findByRole('alert')).toHaveTextContent(/login failed/i)
+  expect(await screen.findByRole('alert')).toHaveTextContent(/nope/i)
 })
 
 test('AuthForm can switch to signup and back, and surfaces signup errors', async () => {
@@ -62,11 +64,22 @@ test('AuthForm can switch to signup and back, and surfaces signup errors', async
   const onAuth = vi.fn()
   render(<AuthForm onAuth={onAuth} />)
   await userEvent.click(screen.getByRole('button', { name: /need an account/i }))
+  await userEvent.type(screen.getByLabelText('email'), 'a@e.com')
+  await userEvent.type(screen.getByLabelText('password'), 'pw')
   await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
-  expect(await screen.findByRole('alert')).toHaveTextContent(/signup failed/i)
+  expect(await screen.findByRole('alert')).toHaveTextContent(/nope/i)
   expect(onAuth).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: /have an account/i }))
   expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
+})
+
+test('AuthForm shows fallback message for non-Error rejection', async () => {
+  vi.mocked(api.login).mockRejectedValue('plain string')
+  render(<AuthForm onAuth={vi.fn()} />)
+  await userEvent.type(screen.getByLabelText('email'), 'a@e.com')
+  await userEvent.type(screen.getByLabelText('password'), 'pw')
+  await userEvent.click(screen.getByRole('button', { name: /log in/i }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(/request failed/i)
 })
 
 test('AuthForm signup success reports the token', async () => {
