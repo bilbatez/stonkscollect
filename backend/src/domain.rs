@@ -207,6 +207,16 @@ pub struct Discrepancy {
     pub flagged_at: DateTime<Utc>,
 }
 
+/// Sector-level aggregate for the overview page.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SectorStats {
+    pub sector: String,
+    pub company_count: i64,
+    pub avg_score: f64,
+    pub pct_defensive: f64,
+    pub top_ticker: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

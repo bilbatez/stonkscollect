@@ -81,6 +81,76 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
         StatementKind::CashFlow,
         "CapEx",
     ),
+    // --- Extended income statement items ---
+    (
+        "DepreciationDepletionAndAmortization",
+        StatementKind::Income,
+        "DepreciationAmortization",
+    ),
+    (
+        "ResearchAndDevelopmentExpense",
+        StatementKind::Income,
+        "ResearchAndDevelopment",
+    ),
+    (
+        "SellingGeneralAndAdministrativeExpense",
+        StatementKind::Income,
+        "SellingGeneralAdmin",
+    ),
+    ("InterestExpense", StatementKind::Income, "InterestExpense"),
+    (
+        "InterestAndDebtExpense",
+        StatementKind::Income,
+        "InterestExpense",
+    ),
+    (
+        "IncomeTaxExpenseBenefit",
+        StatementKind::Income,
+        "IncomeTaxExpense",
+    ),
+    // --- Extended balance sheet items ---
+    ("Goodwill", StatementKind::Balance, "Goodwill"),
+    (
+        "IntangibleAssetsNetExcludingGoodwill",
+        StatementKind::Balance,
+        "IntangibleAssets",
+    ),
+    (
+        "PropertyPlantAndEquipmentNet",
+        StatementKind::Balance,
+        "PropertyPlantEquipment",
+    ),
+    ("InventoryNet", StatementKind::Balance, "Inventories"),
+    (
+        "AccountsReceivableNetCurrent",
+        StatementKind::Balance,
+        "AccountsReceivable",
+    ),
+    (
+        "AccountsPayableCurrent",
+        StatementKind::Balance,
+        "AccountsPayable",
+    ),
+    (
+        "ShortTermBorrowings",
+        StatementKind::Balance,
+        "ShortTermDebt",
+    ),
+    (
+        "LongTermDebtCurrent",
+        StatementKind::Balance,
+        "ShortTermDebt",
+    ),
+    (
+        "RetainedEarningsAccumulatedDeficit",
+        StatementKind::Balance,
+        "RetainedEarnings",
+    ),
+    (
+        "CommonStockSharesOutstanding",
+        StatementKind::Balance,
+        "SharesOutstandingBalance",
+    ),
 ];
 
 /// A company identity from SEC's ticker directory.
@@ -372,6 +442,14 @@ mod tests {
         assert_eq!(find(&facts, "CurrentAssets", PeriodType::Annual, fy23).value, 143566000000.0);
         assert_eq!(find(&facts, "CurrentLiabilities", PeriodType::Annual, fy23).value, 145308000000.0);
         assert_eq!(find(&facts, "DividendPerShare", PeriodType::Annual, fy23).value, 0.94);
+        // Extended items from the expanded CONCEPTS array
+        assert_eq!(find(&facts, "DepreciationAmortization", PeriodType::Annual, fy23).value, 11519000000.0);
+        assert_eq!(find(&facts, "ResearchAndDevelopment", PeriodType::Annual, fy23).value, 29915000000.0);
+        assert_eq!(find(&facts, "AccountsPayable", PeriodType::Annual, fy23).value, 62611000000.0);
+        assert_eq!(find(&facts, "Goodwill", PeriodType::Annual, fy23).value, 0.0);
+        assert_eq!(find(&facts, "Inventories", PeriodType::Annual, fy23).value, 6331000000.0);
+        assert_eq!(find(&facts, "RetainedEarnings", PeriodType::Annual, fy23).value, -214966000000.0);
+        assert_eq!(find(&facts, "SharesOutstandingBalance", PeriodType::Annual, fy23).value, 15552752000.0);
     }
 
     #[test]

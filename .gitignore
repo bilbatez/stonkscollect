@@ -15,6 +15,10 @@ node_modules/
 # Secrets / local config
 .env
 
+# Local agent tooling (Claude worktrees, RTK filters)
+.claude/
+.rtk/
+
 # Misc
 .DS_Store
 *.log

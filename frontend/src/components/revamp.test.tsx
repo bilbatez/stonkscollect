@@ -201,6 +201,42 @@ test('Screener shows an empty state when nothing matches', async () => {
   expect(await screen.findByText(/no matches/i)).toBeInTheDocument()
 })
 
+test('Screener sector filter sends sector param', async () => {
+  vi.mocked(api.screen).mockResolvedValue({ rows: [], total: 0 })
+  render(<Screener onSelect={vi.fn()} />)
+  await screen.findByText(/no matches/i)
+  await userEvent.type(screen.getByLabelText('Sector'), 'Technology')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ sector: 'Technology' })),
+  )
+})
+
+test('Screener ratio filter fields render and send params', async () => {
+  vi.mocked(api.screen).mockResolvedValue({ rows: [], total: 0 })
+  render(<Screener onSelect={vi.fn()} />)
+  await screen.findByText(/no matches/i)
+  await userEvent.type(screen.getByLabelText('Min P/E'), '10')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ min_pe: 10 })),
+  )
+  await userEvent.type(screen.getByLabelText('Max P/E'), '20')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ max_pe: 20 })),
+  )
+  await userEvent.type(screen.getByLabelText('Min ROE'), '0.1')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ min_roe: 0.1 })),
+  )
+  await userEvent.type(screen.getByLabelText('Max D/E'), '0.5')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ max_de: 0.5 })),
+  )
+  await userEvent.type(screen.getByLabelText('Min margin'), '0.05')
+  await waitFor(() =>
+    expect(vi.mocked(api.screen)).toHaveBeenCalledWith(expect.objectContaining({ min_margin: 0.05 })),
+  )
+})
+
 test('AllStocks lists, paginates, searches, selects and watches', async () => {
   vi.mocked(api.listCompanies).mockResolvedValue({
     rows: [

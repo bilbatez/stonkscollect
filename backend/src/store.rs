@@ -107,11 +107,38 @@ const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,period
      VALUES (?,?,?,?,?,?) \
      ON CONFLICT(company_id,period_end,period_type,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
 
-/// SQLite-backed data store. Also holds the process-local login throttle, since
-/// the `Arc<Store>` is the shared handle every request sees.
+const DB_POOL_MAX_CONNECTIONS: u32 = 16;
+
+const SELECT_COMPANY_COLS: &str =
+    "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website";
+
+const SELECT_GRAHAM_COLS: &str =
+    "g.company_id,g.score,g.passes_defensive,g.graham_number,\
+     g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at";
+
+/// Process-local, config-derived policy knobs the API consults at request time.
+///
+/// Held by [`Store`] (the shared `Arc<Store>`) so handlers can read configured
+/// values instead of hard-coded constants. Defaults match the historical
+/// hard-coded behavior; production overrides via [`Store::with_policy`].
+#[derive(Clone)]
+pub struct Policy {
+    /// Graham "adequate size" revenue floor used by the assessment endpoint.
+    pub graham_min_revenue: f64,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self { graham_min_revenue: crate::graham::DEFAULT_MIN_REVENUE }
+    }
+}
+
+/// SQLite-backed data store. Also holds the process-local login throttle and
+/// [`Policy`], since the `Arc<Store>` is the shared handle every request sees.
 pub struct Store {
     pool: SqlitePool,
     login_throttle: LoginThrottle,
+    policy: Policy,
 }
 
 /// Map a `sort_by` token + `sort_dir` to a safe (whitelisted) ORDER BY clause for
@@ -138,6 +165,46 @@ fn screen_sort_expr(sort_by: Option<&str>, sort_dir: Option<&str>) -> String {
     }
 }
 
+/// Builds the dynamic JOIN + WHERE fragments for ratio-based screener filters.
+struct ScreenQueryBuilder {
+    extra_joins: String,
+    extra_conditions: String,
+    binds: Vec<f64>,
+}
+
+impl ScreenQueryBuilder {
+    fn new() -> Self {
+        Self { extra_joins: String::new(), extra_conditions: String::new(), binds: Vec::new() }
+    }
+
+    /// Add a LEFT JOIN + WHERE condition for the latest annual value of `metric`.
+    /// Only adds SQL if at least one of `min_val`/`max_val` is `Some`.
+    fn add_ratio_filter(&mut self, metric: &str, min_val: Option<f64>, max_val: Option<f64>) {
+        if min_val.is_none() && max_val.is_none() {
+            return;
+        }
+        let alias = format!("r_{metric}");
+        self.extra_joins.push_str(&format!(
+            " LEFT JOIN (SELECT r1.company_id, r1.value AS val \
+             FROM ratios r1 \
+             WHERE r1.metric='{metric}' AND r1.period_type='annual' \
+             AND r1.period_end = (\
+               SELECT MAX(r2.period_end) FROM ratios r2 \
+               WHERE r2.company_id=r1.company_id AND r2.metric='{metric}' \
+               AND r2.period_type='annual'\
+             )) {alias} ON {alias}.company_id=c.id"
+        ));
+        if let Some(v) = min_val {
+            self.extra_conditions.push_str(&format!(" AND {alias}.val >= ?"));
+            self.binds.push(v);
+        }
+        if let Some(v) = max_val {
+            self.extra_conditions.push_str(&format!(" AND {alias}.val <= ?"));
+            self.binds.push(v);
+        }
+    }
+}
+
 impl Store {
     /// Open (creating if needed) the database at `url` and apply migrations.
     ///
@@ -154,12 +221,27 @@ impl Store {
         // sized above the default collection concurrency so parallel ingest
         // never waits on a connection; acquire_timeout still bounds any wait.
         let pool = SqlitePoolOptions::new()
-            .max_connections(16)
+            .max_connections(DB_POOL_MAX_CONNECTIONS)
             .acquire_timeout(std::time::Duration::from_secs(10))
             .connect_with(opts)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
-        Ok(Self { pool, login_throttle: LoginThrottle::new(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW) })
+        Ok(Self {
+            pool,
+            login_throttle: LoginThrottle::new(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW),
+            policy: Policy::default(),
+        })
+    }
+
+    /// Override the runtime [`Policy`] (builder-style; call before sharing).
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The runtime policy knobs.
+    pub fn policy(&self) -> &Policy {
+        &self.policy
     }
 
     /// The shared login brute-force throttle.
@@ -303,12 +385,13 @@ impl Store {
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Company>> {
-        let rows = sqlx::query(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website \
+        let sql = format!(
+            "SELECT {SELECT_COMPANY_COLS} \
              FROM companies c LEFT JOIN company_state s ON s.company_id = c.id \
              WHERE s.last_collected_at IS NULL OR s.last_collected_at < ? \
-             ORDER BY c.ticker",
-        )
+             ORDER BY c.ticker"
+        );
+        let rows = sqlx::query(&sql)
         .bind(cutoff)
         .fetch_all(&self.pool)
         .await?;
@@ -852,11 +935,12 @@ impl Store {
 
     /// The companies on a user's watchlist, ordered by ticker.
     pub async fn list_watch(&self, user_id: i64) -> Result<Vec<Company>> {
-        let rows = sqlx::query(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website \
+        let sql = format!(
+            "SELECT {SELECT_COMPANY_COLS} \
              FROM watchlists w JOIN companies c ON c.id = w.company_id \
-             WHERE w.user_id=? ORDER BY c.ticker",
-        )
+             WHERE w.user_id=? ORDER BY c.ticker"
+        );
+        let rows = sqlx::query(&sql)
         .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
@@ -942,49 +1026,181 @@ impl Store {
     }
 
     /// Screen companies by Graham score. Returns the page plus the total number
-    /// of matches (for pagination). `defensive_only`/`net_net_only` are optional
-    /// filters. `sort_by`/`sort_dir` control ordering (whitelisted — no injection risk).
+    /// of matches (for pagination). `defensive_only`/`net_net_only`/`sector` and ratio
+    /// range filters are optional. `sort_by`/`sort_dir` control ordering (whitelisted).
     #[allow(clippy::too_many_arguments)]
     pub async fn screen(
         &self,
         defensive_only: bool,
         net_net_only: bool,
         min_score: i64,
+        sector: Option<&str>,
+        min_pe: Option<f64>,
+        max_pe: Option<f64>,
+        min_roe: Option<f64>,
+        max_de: Option<f64>,
+        min_margin: Option<f64>,
         sort_by: Option<&str>,
         sort_dir: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<(Company, GrahamScore)>, i64)> {
-        let mut filter = String::from(
-            " FROM graham_scores g JOIN companies c ON c.id = g.company_id WHERE g.score >= ?",
-        );
+        let mut ratio_q = ScreenQueryBuilder::new();
+        ratio_q.add_ratio_filter("pe", min_pe, max_pe);
+        ratio_q.add_ratio_filter("roe", min_roe, None);
+        ratio_q.add_ratio_filter("debt_to_equity", None, max_de);
+        ratio_q.add_ratio_filter("net_margin", min_margin, None);
+
+        let base_joins = " FROM graham_scores g JOIN companies c ON c.id = g.company_id";
+        let mut where_clause = String::from(" WHERE g.score >= ?");
         if defensive_only {
-            filter.push_str(" AND g.passes_defensive = 1");
+            where_clause.push_str(" AND g.passes_defensive = 1");
         }
         if net_net_only {
-            filter.push_str(" AND g.net_net = 1");
+            where_clause.push_str(" AND g.net_net = 1");
         }
-        let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*){filter}"))
-            .bind(min_score)
-            .fetch_one(&self.pool)
-            .await?;
+        if sector.is_some() {
+            where_clause.push_str(" AND c.sector = ?");
+        }
+        let from_clause = format!(
+            "{base_joins}{}{where_clause}{}",
+            ratio_q.extra_joins, ratio_q.extra_conditions
+        );
+        let count_sql = format!("SELECT COUNT(*){from_clause}");
+        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(min_score);
+        if let Some(s) = sector {
+            count_q = count_q.bind(s);
+        }
+        for v in &ratio_q.binds {
+            count_q = count_q.bind(*v);
+        }
+        let total = count_q.fetch_one(&self.pool).await?;
         let order_by = screen_sort_expr(sort_by, sort_dir);
         let sql = format!(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
-             g.company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at\
-             {filter} ORDER BY {order_by} LIMIT ? OFFSET ?"
+            "SELECT {SELECT_COMPANY_COLS}, {SELECT_GRAHAM_COLS}{from_clause} ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
-        let rows = sqlx::query(&sql)
-            .bind(min_score)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+        let mut query = sqlx::query(&sql).bind(min_score);
+        if let Some(s) = sector {
+            query = query.bind(s);
+        }
+        for v in &ratio_q.binds {
+            query = query.bind(*v);
+        }
+        let rows = query.bind(limit).bind(offset).fetch_all(&self.pool).await?;
         let page = rows
             .iter()
             .map(|r| Ok((company_from_row(r)?, Self::graham_score_from_row(r)?)))
             .collect::<Result<Vec<_>>>()?;
         Ok((page, total))
+    }
+
+    /// Sector-level aggregates for the overview page, ordered by avg_score desc.
+    /// Companies with no sector are excluded.
+    pub async fn get_sectors(&self) -> Result<Vec<crate::domain::SectorStats>> {
+        let rows = sqlx::query(
+            "SELECT c.sector, \
+             COUNT(DISTINCT c.id) AS company_count, \
+             COALESCE(AVG(g.score), 0.0) AS avg_score, \
+             COALESCE(AVG(CASE WHEN g.passes_defensive = 1 THEN 1.0 ELSE 0.0 END), 0.0) AS pct_defensive, \
+             (SELECT c2.ticker FROM companies c2 \
+              LEFT JOIN graham_scores g2 ON g2.company_id = c2.id \
+              WHERE c2.sector = c.sector \
+              ORDER BY COALESCE(g2.score, -1) DESC, c2.ticker ASC LIMIT 1) AS top_ticker \
+             FROM companies c \
+             LEFT JOIN graham_scores g ON g.company_id = c.id \
+             WHERE c.sector IS NOT NULL \
+             GROUP BY c.sector \
+             ORDER BY avg_score DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(crate::domain::SectorStats {
+                    sector: r.try_get("sector")?,
+                    company_count: r.try_get("company_count")?,
+                    avg_score: r.try_get("avg_score")?,
+                    pct_defensive: r.try_get("pct_defensive")?,
+                    top_ticker: r.try_get("top_ticker")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Same-sector companies (excluding `company_id`) sorted by Graham score desc.
+    pub async fn get_peers(
+        &self,
+        company_id: i64,
+        sector: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<(Company, Option<GrahamScore>)>> {
+        let Some(sector) = sector else {
+            return Ok(vec![]);
+        };
+        let sql = format!(
+            "SELECT {SELECT_COMPANY_COLS}, {SELECT_GRAHAM_COLS} \
+             FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id \
+             WHERE c.sector = ? AND c.id != ? \
+             ORDER BY COALESCE(g.score, -1) DESC, c.ticker ASC LIMIT ?"
+        );
+        let rows = sqlx::query(&sql)
+        .bind(sector)
+        .bind(company_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let score: Option<i64> = r.try_get("score")?;
+                let g = match score {
+                    Some(_) => Some(Self::graham_score_from_row(r)?),
+                    None => None,
+                };
+                Ok((company_from_row(r)?, g))
+            })
+            .collect()
+    }
+
+    /// Retrieve a user's note for a company, if any.
+    pub async fn get_note(&self, user_id: i64, company_id: i64) -> Result<Option<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT body FROM notes WHERE user_id = ? AND company_id = ?")
+                .bind(user_id)
+                .bind(company_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    /// Insert or update a user's note for a company.
+    pub async fn save_note(
+        &self,
+        user_id: i64,
+        company_id: i64,
+        body: &str,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO notes (user_id, company_id, body, updated_at) VALUES (?, ?, ?, ?) \
+             ON CONFLICT (user_id, company_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+        )
+        .bind(user_id)
+        .bind(company_id)
+        .bind(body)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Delete a user's note for a company (no-op if absent).
+    pub async fn delete_note(&self, user_id: i64, company_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM notes WHERE user_id = ? AND company_id = ?")
+            .bind(user_id)
+            .bind(company_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// A page of companies with each one's Graham score when computed, plus the
@@ -1016,8 +1232,7 @@ impl Store {
 
         let order_by = companies_sort_expr(sort_by, sort_dir);
         let sql = format!(
-            "SELECT c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website, \
-             g.company_id AS company_id,g.score,g.passes_defensive,g.graham_number,g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at \
+            "SELECT {SELECT_COMPANY_COLS}, {SELECT_GRAHAM_COLS} \
              FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id{where_clause} \
              ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
@@ -1600,21 +1815,21 @@ mod tests {
         assert_eq!(store.get_graham_score(aapl).await.unwrap().unwrap().score, 8);
 
         // screen: all (min 0) -> AAPL(8) before MSFT(4); total reflects all matches
-        let (all, total) = store.screen(false, false, 0, None, None, 10, 0).await.unwrap();
+        let (all, total) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(total, 2);
         assert_eq!(all[0].0.ticker, "AAPL");
         // defensive only -> just AAPL
-        let (def, def_total) = store.screen(true, false, 0, None, None, 10, 0).await.unwrap();
+        let (def, def_total) = store.screen(true, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
         assert_eq!(def.len(), 1);
         assert_eq!(def_total, 1);
         assert_eq!(def[0].0.ticker, "AAPL");
         // min_score filter
-        assert_eq!(store.screen(false, false, 5, None, None, 10, 0).await.unwrap().0.len(), 1);
+        assert_eq!(store.screen(false, false, 5, None, None, None, None, None, None, None, None, 10, 0).await.unwrap().0.len(), 1);
         // net-net filter (none set) -> empty
-        assert_eq!(store.screen(false, true, 0, None, None, 10, 0).await.unwrap().1, 0);
+        assert_eq!(store.screen(false, true, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap().1, 0);
         // offset paginates: skip the first of two
-        let (page2, _) = store.screen(false, false, 0, None, None, 10, 1).await.unwrap();
+        let (page2, _) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 1).await.unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].0.ticker, "MSFT");
     }
@@ -1761,11 +1976,11 @@ mod tests {
         store.save_graham_score(&g(msft_id, 5)).await.unwrap();
 
         // default (no sort_by) -> score DESC (both equal), tie-breaks by ticker -> AAPL, MSFT
-        let (rows, _) = store.screen(false, false, 0, None, None, 10, 0).await.unwrap();
+        let (rows, _) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
 
         // sort by ticker desc -> MSFT first
-        let (rows, _) = store.screen(false, false, 0, Some("ticker"), Some("desc"), 10, 0).await.unwrap();
+        let (rows, _) = store.screen(false, false, 0, None, None, None, None, None, None, Some("ticker"), Some("desc"), 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         assert_eq!(rows[1].0.ticker, "AAPL");
     }
@@ -1872,5 +2087,96 @@ mod tests {
         assert!(StoreError::Db(sqlx::Error::RowNotFound).to_string().contains("database"));
         assert!(StoreError::Decode("x".into()).to_string().contains("x"));
         assert!(StoreError::Other("boom".into()).to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn screen_sector_filter() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap(); // sector=Technology
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        msft.sector = Some("Healthcare".into());
+        let msft_id = store.upsert_company(&msft).await.unwrap();
+        for (cid, s) in [(aapl, 8i64), (msft_id, 6)] {
+            store.save_graham_score(&GrahamScore {
+                company_id: cid, score: s, passes_defensive: true,
+                graham_number: None, ncav_per_share: None, margin_of_safety: None,
+                net_net: false, computed_at: now,
+            }).await.unwrap();
+        }
+        // sector=Technology -> only AAPL
+        let (rows, total) = store.screen(false, false, 0, Some("Technology"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].0.ticker, "AAPL");
+        // sector=Healthcare -> only MSFT
+        let (rows, _) = store.screen(false, false, 0, Some("Healthcare"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        assert_eq!(rows[0].0.ticker, "MSFT");
+        // sector=Unknown -> empty
+        let (_, total) = store.screen(false, false, 0, Some("Unknown"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn get_peers_returns_same_sector_excluding_self() {
+        let (store, _d) = temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let aapl = store.upsert_company(&sample_company()).await.unwrap(); // Technology
+        let mut msft = sample_company();
+        msft.ticker = "MSFT".into();
+        msft.sector = Some("Technology".into());
+        let msft_id = store.upsert_company(&msft).await.unwrap();
+        let mut jnj = sample_company();
+        jnj.ticker = "JNJ".into();
+        jnj.sector = Some("Healthcare".into());
+        store.upsert_company(&jnj).await.unwrap();
+
+        store.save_graham_score(&GrahamScore {
+            company_id: msft_id, score: 5, passes_defensive: false,
+            graham_number: None, ncav_per_share: None, margin_of_safety: None,
+            net_net: false, computed_at: now,
+        }).await.unwrap();
+
+        // AAPL's peers: same sector (Technology), excludes AAPL itself
+        let peers = store.get_peers(aapl, Some("Technology"), 10).await.unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].0.ticker, "MSFT");
+        assert_eq!(peers[0].1.as_ref().unwrap().score, 5);
+
+        // No sector -> empty
+        let none_peers = store.get_peers(aapl, None, 10).await.unwrap();
+        assert!(none_peers.is_empty());
+
+        // MSFT's peers returns AAPL (no score -> None)
+        let msft_peers = store.get_peers(msft_id, Some("Technology"), 10).await.unwrap();
+        assert_eq!(msft_peers.len(), 1);
+        assert_eq!(msft_peers[0].0.ticker, "AAPL");
+        assert!(msft_peers[0].1.is_none());
+    }
+
+    #[tokio::test]
+    async fn notes_save_get_delete() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "h").await.unwrap();
+        let cid = store.insert_company(&sample_company()).await.unwrap();
+        let t = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+
+        // no note yet
+        assert_eq!(store.get_note(uid, cid).await.unwrap(), None);
+
+        // save creates
+        store.save_note(uid, cid, "my thoughts", t).await.unwrap();
+        assert_eq!(store.get_note(uid, cid).await.unwrap(), Some("my thoughts".into()));
+
+        // save again updates
+        store.save_note(uid, cid, "updated", t).await.unwrap();
+        assert_eq!(store.get_note(uid, cid).await.unwrap(), Some("updated".into()));
+
+        // delete removes
+        store.delete_note(uid, cid).await.unwrap();
+        assert_eq!(store.get_note(uid, cid).await.unwrap(), None);
+
+        // delete non-existent is a no-op (no error)
+        store.delete_note(uid, cid).await.unwrap();
     }
 }

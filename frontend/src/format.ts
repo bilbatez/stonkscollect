@@ -1,5 +1,56 @@
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+/** "2024-12-31" → "Dec 2024" (period column headers) */
+export function formatPeriodDate(iso: string): string {
+  const [year, month] = iso.split('-')
+  return `${MONTHS[Number(month) - 1]} ${year}`
+}
+
+/** ISO datetime → "Jan 2, 2024" (news timestamps, UTC) */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`
+}
+
+/** null-safe percentage: x * 100 at 0 dp, or "—" */
+export function formatPct(x: number | null): string {
+  return x === null ? '—' : `${(x * 100).toFixed(0)}%`
+}
+
+/** null-safe 2 dp number, or "—" */
+export function formatNum(x: number | null): string {
+  return x === null ? '—' : x.toFixed(2)
+}
+
+/** Escape one CSV cell (wrap in quotes if it contains comma, quote, or newline). */
+function csvCell(v: string | number | null): string {
+  const s = v === null ? '' : String(v)
+  return s.includes(',') || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s
+}
+
+/** Convert headers + 2D data to a CSV string. */
+export function toCsv(headers: string[], rows: (string | number | null)[][]): string {
+  return [headers, ...rows].map((r) => r.map(csvCell).join(',')).join('\n')
+}
+
+/** Trigger a browser download of a generated CSV file. */
+export function downloadCsv(
+  filename: string,
+  headers: string[],
+  rows: (string | number | null)[][],
+): void {
+  const csv = toCsv(headers, rows)
+  const a = document.createElement('a')
+  a.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`
+  a.download = filename
+  a.click()
+}
+
 /** Format a USD amount with a B/M suffix for large values. */
 export function formatCurrency(value: number): string {
+  if (!Number.isFinite(value)) return '—'
   const sign = value < 0 ? '-' : ''
   const abs = Math.abs(value)
   if (abs >= 1_000_000_000) {
@@ -59,6 +110,7 @@ export function metricGroup(key: string): string {
 
 /** Format a ratio value for humans based on its metric kind. */
 export function formatMetric(key: string, value: number): string {
+  if (!Number.isFinite(value)) return '—'
   switch (metricMeta[key]?.kind ?? 'plain') {
     case 'percent':
       return `${(value * 100).toFixed(1)}%`
@@ -92,6 +144,20 @@ export const lineItemLabel: Record<string, string> = {
   FinancingCashFlow: 'Financing cash flow',
   CapEx: 'Capital expenditure',
   DividendsPaid: 'Dividends paid',
+  DepreciationAmortization: 'Depreciation & amortization',
+  ResearchAndDevelopment: 'R&D expense',
+  SellingGeneralAdmin: 'SG&A expense',
+  InterestExpense: 'Interest expense',
+  IncomeTaxExpense: 'Income tax expense',
+  Goodwill: 'Goodwill',
+  IntangibleAssets: 'Intangible assets',
+  PropertyPlantEquipment: 'PP&E (net)',
+  Inventories: 'Inventories',
+  AccountsReceivable: 'Accounts receivable',
+  AccountsPayable: 'Accounts payable',
+  ShortTermDebt: 'Short-term debt',
+  RetainedEarnings: 'Retained earnings',
+  SharesOutstandingBalance: 'Shares outstanding (balance)',
 }
 
 /** Human label for a statement line item (falls back to a titleized key). */
@@ -127,6 +193,19 @@ export function wikipediaUrl(name: string): string {
 /** Yahoo Finance company-profile page for a ticker. */
 export function yahooProfileUrl(ticker: string): string {
   return `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/profile`
+}
+
+export interface GrowthResult {
+  pct: string
+  positive: boolean
+}
+
+/** Year-over-year % change between two values. Returns null if either is null or prior is 0. */
+export function calcGrowth(current: number | null, prior: number | null): GrowthResult | null {
+  if (current === null || prior === null || prior === 0) return null
+  const change = (current - prior) / Math.abs(prior)
+  const pct = `${change >= 0 ? '+' : ''}${(change * 100).toFixed(0)}%`
+  return { pct, positive: change >= 0 }
 }
 
 export type Freshness = 'fresh' | 'stale' | 'unknown'

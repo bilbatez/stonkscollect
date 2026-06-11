@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts'
+import { PRICE_CHART_HEIGHT } from '../constants'
 import type { PricePoint } from '../types'
 
 /** Daily price chart: candlestick when OHLC is present, else a close line.
@@ -54,5 +55,5 @@ export default function PriceChart({ prices }: { prices: PricePoint[] }) {
     }
   }, [prices])
 
-  return <div role="img" aria-label="price chart" ref={ref} style={{ height: 400 }} />
+  return <div role="img" aria-label="price chart" ref={ref} style={{ height: PRICE_CHART_HEIGHT }} />
 }

@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from 'react'
 import {
   Box,
+  Button,
   Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -10,7 +12,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { formatCurrency, statementItemLabel, statementLabel } from '../format'
+import { calcGrowth, downloadCsv, formatCurrency, formatPeriodDate, statementItemLabel, statementLabel } from '../format'
 import type { FinancialFact, Period } from '../types'
 import { PeriodToggle } from './PeriodToggle'
 
@@ -56,11 +58,18 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
       body.push(
         <TableRow key={`${section}-${item}`} hover>
           <TableCell>{statementItemLabel(item)}</TableCell>
-          {periods.map((p) => {
+          {periods.map((p, i) => {
             const v = values.get(p)
+            const prior = i < periods.length - 1 ? values.get(periods[i + 1]) : undefined
+            const growth = v !== undefined && prior !== undefined ? calcGrowth(v, prior) : null
             return (
               <TableCell key={p} align="right">
                 {v === undefined ? '—' : formatCurrency(v)}
+                {growth && (
+                  <Typography variant="caption" color={growth.positive ? 'success.main' : 'error.main'} sx={{ display: 'block' }}>
+                    {growth.pct}
+                  </Typography>
+                )}
               </TableCell>
             )
           })}
@@ -69,9 +78,25 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
     }
   }
 
+  function handleExport() {
+    const headers = ['Line item', ...periods.map(formatPeriodDate)]
+    const rows: (string | number | null)[][] = []
+    for (const section of sections) {
+      for (const [item, values] of bySection.get(section)!) {
+        rows.push([statementItemLabel(item), ...periods.map((p) => values.get(p) ?? null)])
+      }
+    }
+    downloadCsv(`${period}-statements.csv`, headers, rows)
+  }
+
   return (
     <Box>
-      <PeriodToggle period={period} onChange={setPeriod} />
+      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <PeriodToggle period={period} onChange={setPeriod} />
+        <Button size="small" variant="outlined" onClick={handleExport}>
+          Export CSV
+        </Button>
+      </Stack>
       {periods.length === 0 ? (
         <Typography color="text.secondary" sx={{ mt: 1 }}>
           No {period} statement data.
@@ -84,7 +109,7 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
                 <TableCell>Line item</TableCell>
                 {periods.map((p) => (
                   <TableCell key={p} align="right">
-                    {p}
+                    {formatPeriodDate(p)}
                   </TableCell>
                 ))}
               </TableRow>

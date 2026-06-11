@@ -29,6 +29,8 @@ function data(ticker: string): CompanyData {
     news: [],
     discrepancies: [],
     graham: { criteria: [], score: 0, graham_number: null, ncav_per_share: null, margin_of_safety: null, net_net: false, passes_defensive: false },
+    peers: [],
+    note: { body: null },
   }
 }
 

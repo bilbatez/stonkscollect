@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from 'react'
 import {
   Box,
+  Button,
   Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -10,7 +12,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { formatMetric, metricGroup, metricGroups, metricLabel } from '../format'
+import { downloadCsv, formatMetric, formatPeriodDate, metricGroup, metricGroups, metricLabel } from '../format'
 import type { Period, Ratio } from '../types'
 import { PeriodToggle } from './PeriodToggle'
 
@@ -66,9 +68,25 @@ export function RatiosPanel({ ratios }: { ratios: Ratio[] }) {
     }
   }
 
+  function handleExport() {
+    const headers = ['Metric', ...periods.map(formatPeriodDate)]
+    const rows: (string | number | null)[][] = []
+    for (const g of groupsInOrder) {
+      for (const m of metricsOf(g)) {
+        rows.push([metricLabel(m), ...periods.map((p) => byMetric.get(m)!.get(p) ?? null)])
+      }
+    }
+    downloadCsv(`${period}-ratios.csv`, headers, rows)
+  }
+
   return (
     <Box>
-      <PeriodToggle period={period} onChange={setPeriod} />
+      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+        <PeriodToggle period={period} onChange={setPeriod} />
+        <Button size="small" variant="outlined" onClick={handleExport}>
+          Export CSV
+        </Button>
+      </Stack>
       {periods.length === 0 ? (
         <Typography color="text.secondary" sx={{ mt: 1 }}>
           No {period} ratio data.
@@ -81,7 +99,7 @@ export function RatiosPanel({ ratios }: { ratios: Ratio[] }) {
                 <TableCell>Metric</TableCell>
                 {periods.map((p) => (
                   <TableCell key={p} align="right">
-                    {p}
+                    {formatPeriodDate(p)}
                   </TableCell>
                 ))}
               </TableRow>

@@ -80,6 +80,48 @@
       "PaymentsToAcquirePropertyPlantAndEquipment": {
         "units": { "USD": [ { "end": "2023-09-30", "val": 10959000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
       },
+      "DepreciationDepletionAndAmortization": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 11519000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "ResearchAndDevelopmentExpense": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 29915000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "SellingGeneralAndAdministrativeExpense": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 24932000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "InterestExpense": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 3933000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "IncomeTaxExpenseBenefit": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 29749000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "Goodwill": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 0, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "IntangibleAssetsNetExcludingGoodwill": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 0, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "PropertyPlantAndEquipmentNet": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 43715000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "InventoryNet": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 6331000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "AccountsReceivableNetCurrent": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 60985000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "AccountsPayableCurrent": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 62611000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "ShortTermBorrowings": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 9822000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "RetainedEarningsAccumulatedDeficit": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": -214966000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "CommonStockSharesOutstanding": {
+        "units": { "shares": [ { "end": "2023-09-30", "val": 15552752000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
       "UnmappedConcept": {
         "label": "ignored",
         "units": { "USD": [ { "end": "2023-09-30", "val": 777, "fp": "FY" } ] }

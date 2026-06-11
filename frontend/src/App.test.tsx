@@ -6,6 +6,9 @@ import * as api from './api'
 import type { Company, CompanyData, GrahamScore } from './types'
 
 vi.mock('./charts/PriceChart', () => ({ default: () => <div data-testid="price-chart" /> }))
+vi.mock('./charts/IncomeChart', () => ({ default: () => <div data-testid="income-chart" /> }))
+vi.mock('./charts/RatioChart', () => ({ default: () => <div data-testid="ratio-chart" /> }))
+vi.mock('./charts/GrahamChart', () => ({ default: () => <div data-testid="graham-chart" /> }))
 vi.mock('./api')
 
 const mocked = vi.mocked(api)
@@ -38,16 +41,30 @@ function data(ticker: string): CompanyData {
       score: 1, graham_number: 22.4, ncav_per_share: null, margin_of_safety: 0.1,
       net_net: false, passes_defensive: true,
     },
+    peers: [],
+    note: { body: null },
   }
 }
 
 beforeEach(() => {
+  localStorage.clear()
   mocked.getToken.mockReturnValue(null)
   mocked.getWatchlist.mockResolvedValue([])
   mocked.listCompanies.mockResolvedValue({ rows: [{ company: company('AAPL'), score: grahamScore() }], total: 1 })
   mocked.screen.mockResolvedValue({ rows: [{ company: company('KO'), score: grahamScore() }], total: 1 })
+  mocked.getSectors.mockResolvedValue([{ sector: 'Technology', company_count: 1, avg_score: 5, pct_defensive: 1, top_ticker: 'AAPL' }])
+  mocked.saveNote.mockResolvedValue()
+  mocked.deleteNote.mockResolvedValue()
 })
 afterEach(() => vi.clearAllMocks())
+
+test('restores a persisted light theme from localStorage on load', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  localStorage.setItem('stonks_theme', 'light')
+  render(<App />)
+  await screen.findByLabelText('search stocks')
+  expect(document.documentElement.dataset.theme).toBe('light')
+})
 
 test('shows the auth form when logged out, dashboard after auth', async () => {
   render(<App />)
@@ -161,4 +178,17 @@ test('company with no prices shows unknown freshness', async () => {
   render(<App />)
   await userEvent.click(await screen.findByRole('button', { name: 'AAPL' }))
   await waitFor(() => expect(screen.getByText(/unknown/i)).toBeInTheDocument())
+})
+
+test('Sectors nav shows sector rows and clicking top_ticker opens company', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.loadCompanyData.mockResolvedValue(data('AAPL'))
+
+  render(<App />)
+  await screen.findByLabelText('search stocks') // home loaded
+  await userEvent.click(screen.getByRole('button', { name: /sectors/i }))
+  await waitFor(() => expect(screen.getByText('Technology')).toBeInTheDocument())
+  expect(screen.getByText('100%')).toBeInTheDocument() // pct_defensive = 1 → 100%
+  await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
 })

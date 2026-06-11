@@ -1,4 +1,5 @@
 import { Chip, Link, List, ListItem, Stack, Typography } from '@mui/material'
+import { formatDateTime } from '../format'
 import type { NewsItem } from '../types'
 
 /** Newest-first list of headlines (title + description only). */
@@ -16,9 +17,16 @@ export function NewsFeed({ news }: { news: NewsItem[] }) {
                 {n.title}
               </Link>
               <Chip size="small" variant="outlined" label={n.source} />
+              <Typography variant="caption" color="text.secondary">
+                {formatDateTime(n.published_at)}
+              </Typography>
             </Stack>
             {n.description !== null && (
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+              >
                 {n.description}
               </Typography>
             )}

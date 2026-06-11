@@ -110,7 +110,9 @@ async fn main() {
 }
 
 async fn serve(store: Store, cfg: &Config) {
-    let store = Arc::new(store);
+    let store = Arc::new(store.with_policy(stonkscollect_backend::store::Policy {
+        graham_min_revenue: cfg.graham_min_revenue,
+    }));
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");

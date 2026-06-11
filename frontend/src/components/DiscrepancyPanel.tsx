@@ -13,7 +13,7 @@ export function DiscrepancyPanel({ discrepancies }: { discrepancies: Discrepancy
       id: 'sources',
       header: 'Sources',
       cell: (d) =>
-        `${d.source_a} ${formatCurrency(d.value_a)} vs ${d.source_b} ${formatCurrency(d.value_b)}`,
+        `${d.source_a}: ${formatCurrency(d.value_a)} vs ${d.source_b}: ${formatCurrency(d.value_b)}`,
     },
     {
       id: 'diff',

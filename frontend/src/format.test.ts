@@ -1,13 +1,20 @@
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import {
+  calcGrowth,
+  downloadCsv,
   formatCurrency,
+  formatDateTime,
   formatMetric,
+  formatNum,
+  formatPct,
+  formatPeriodDate,
   freshness,
   metricGroup,
   metricLabel,
   secFilingsUrl,
   statementItemLabel,
   statementLabel,
+  toCsv,
   wikipediaUrl,
   yahooProfileUrl,
 } from './format'
@@ -18,6 +25,10 @@ test('formatCurrency scales to B/M and handles small + negative values', () => {
   expect(formatCurrency(950)).toBe('$950')
   expect(formatCurrency(1_234)).toBe('$1,234')
   expect(formatCurrency(-2_000_000)).toBe('-$2.0M')
+  // non-finite inputs must not render as literal "Infinity"/"NaN"
+  expect(formatCurrency(Infinity)).toBe('—')
+  expect(formatCurrency(-Infinity)).toBe('—')
+  expect(formatCurrency(NaN)).toBe('—')
 })
 
 test('freshness classifies by age and missing dates', () => {
@@ -32,6 +43,10 @@ test('formatMetric renders each metric kind', () => {
   expect(formatMetric('current_ratio', 2.6858)).toBe('2.69×') // ratio
   expect(formatMetric('free_cash_flow', 1_135_300_000)).toBe('$1.1B') // currency
   expect(formatMetric('mystery_metric', 1.234)).toBe('1.23') // plain fallback
+  // non-finite values fall back to a dash for every kind
+  expect(formatMetric('roe', NaN)).toBe('—')
+  expect(formatMetric('current_ratio', Infinity)).toBe('—')
+  expect(formatMetric('mystery_metric', NaN)).toBe('—')
 })
 
 test('metric labels and groups fall back gracefully', () => {
@@ -50,11 +65,56 @@ test('reference link builders', () => {
   expect(yahooProfileUrl('VMC')).toBe('https://finance.yahoo.com/quote/VMC/profile')
 })
 
+test('toCsv converts headers and rows to a CSV string', () => {
+  expect(toCsv(['A', 'B'], [[1, 2], ['hello', null]])).toBe('A,B\n1,2\nhello,')
+  expect(toCsv(['X'], [['with, comma'], ['with "quote"'], ['with\nnewline']])).toBe(
+    'X\n"with, comma"\n"with ""quote"""\n"with\nnewline"',
+  )
+})
+
+test('downloadCsv triggers an anchor click with a data URI', () => {
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  downloadCsv('out.csv', ['Col'], [[42]])
+  expect(click).toHaveBeenCalled()
+  click.mockRestore()
+})
+
+test('formatPeriodDate humanizes ISO date strings', () => {
+  expect(formatPeriodDate('2024-12-31')).toBe('Dec 2024')
+  expect(formatPeriodDate('2023-01-01')).toBe('Jan 2023')
+})
+
+test('formatDateTime formats ISO datetimes as readable dates', () => {
+  expect(formatDateTime('2024-01-02T00:00:00Z')).toBe('Jan 2, 2024')
+  expect(formatDateTime('2024-12-31T23:59:59Z')).toBe('Dec 31, 2024')
+})
+
+test('formatPct and formatNum handle null and values', () => {
+  expect(formatPct(null)).toBe('—')
+  expect(formatPct(0.3)).toBe('30%')
+  expect(formatNum(null)).toBe('—')
+  expect(formatNum(60)).toBe('60.00')
+})
+
 test('statement labels resolve sections and line items with fallbacks', () => {
   expect(statementItemLabel('NetIncome')).toBe('Net income')
+  expect(statementItemLabel('DepreciationAmortization')).toBe('Depreciation & amortization')
   expect(statementItemLabel('WeirdConceptName')).toBe('Weird Concept Name')
   expect(statementLabel('income')).toBe('Income statement')
   expect(statementLabel('balance')).toBe('Balance sheet')
   expect(statementLabel('cashflow')).toBe('Cash flow')
   expect(statementLabel('segments')).toBe('Segments')
+})
+
+test('calcGrowth returns formatted pct and sign', () => {
+  expect(calcGrowth(200, 100)).toEqual({ pct: '+100%', positive: true })
+  expect(calcGrowth(80, 100)).toEqual({ pct: '-20%', positive: false })
+  expect(calcGrowth(100, 100)).toEqual({ pct: '+0%', positive: true })
+  // null inputs
+  expect(calcGrowth(null, 100)).toBeNull()
+  expect(calcGrowth(100, null)).toBeNull()
+  // zero prior
+  expect(calcGrowth(100, 0)).toBeNull()
+  // negative prior (e.g. net loss to profit)
+  expect(calcGrowth(50, -100)).toEqual({ pct: '+150%', positive: true })
 })

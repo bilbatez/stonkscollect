@@ -11,14 +11,8 @@ import {
 } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
+import { formatNum, formatPct } from '../format'
 import type { GrahamAssessment } from '../types'
-
-function pct(x: number | null): string {
-  return x === null ? '—' : `${(x * 100).toFixed(0)}%`
-}
-function num(x: number | null): string {
-  return x === null ? '—' : x.toFixed(2)
-}
 
 /** Humanize a criterion's detail; price-dependent checks explain the data gap. */
 function detailText(name: string, detail: string): string {
@@ -67,13 +61,13 @@ export function GrahamScorecard({ assessment }: { assessment: GrahamAssessment }
             <Typography variant="caption" color="text.secondary">
               Graham Number
             </Typography>
-            <Typography variant="body1">{num(graham_number)}</Typography>
+            <Typography variant="body1">{formatNum(graham_number)}</Typography>
           </Stack>
           <Stack>
             <Typography variant="caption" color="text.secondary">
               Margin of safety
             </Typography>
-            <Typography variant="body1">{pct(margin_of_safety)}</Typography>
+            <Typography variant="body1">{formatPct(margin_of_safety)}</Typography>
           </Stack>
         </Stack>
       </CardContent>

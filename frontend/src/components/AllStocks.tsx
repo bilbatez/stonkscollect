@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Box, Button, Chip, TablePagination, TextField } from '@mui/material'
 import { listCompanies } from '../api'
+import { PAGE_SIZE } from '../constants'
 import type { CompanyRow } from '../types'
 import { DataGrid } from './DataGrid'
 import type { GridColumn } from './dataGridUtils'
-
-const PAGE_SIZE = 25
 
 interface Props {
   onSelect: (ticker: string) => void
