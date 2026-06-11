@@ -2,12 +2,18 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   addWatch,
   clearToken,
+  deleteNote,
+  getNote,
+  getPeers,
+  getSectors,
   getToken,
   getWatchlist,
+  listCompanies,
   loadCompanyData,
   login,
   logout,
   removeWatch,
+  saveNote,
   screen,
   setToken,
   signup,
@@ -95,10 +101,18 @@ test('watchlist add and remove hit the right method + path', async () => {
   expect(calls[1].init.method).toBe('DELETE')
 })
 
+test('a mutation throws on a non-ok response instead of silently succeeding', async () => {
+  mockFetch(() => ({ ok: false, status: 500 }))
+  await expect(addWatch('AAPL')).rejects.toThrow(/500/)
+})
+
 test('loadCompanyData fetches and assembles all sections', async () => {
   const company = { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null }
   let i = 0
-  const bodies: unknown[] = [company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }], [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] }]
+  const bodies: unknown[] = [
+    company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }],
+    [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] }, [], { body: null },
+  ]
   mockFetch(() => ({ json: async () => bodies[i++] }))
   const data = await loadCompanyData('AAPL')
   expect(data.company.ticker).toBe('AAPL')
@@ -108,8 +122,76 @@ test('loadCompanyData fetches and assembles all sections', async () => {
   expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/graham')
 })
 
-test('screen builds the query string', async () => {
+test('listCompanies builds query strings with optional search and sort', async () => {
+  mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
+  await listCompanies('app', null, 'asc', 25, 50)
+  expect(calls[0].url).toBe('/api/companies?limit=25&offset=50&q=app')
+  await listCompanies('', null, 'asc', 25, 0)
+  expect(calls[1].url).toBe('/api/companies?limit=25&offset=0')
+  await listCompanies('', 'score', 'desc', 25, 0)
+  expect(calls[2].url).toBe('/api/companies?limit=25&offset=0&sort_by=score&sort_dir=desc')
+})
+
+test('screen builds the query string from filters and defaults', async () => {
+  mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
+  await screen({ defensive: true, net_net: false, min_score: 3, limit: 10, offset: 0 })
+  expect(calls[0].url).toBe('/api/screen?defensive=true&net_net=false&min_score=3&limit=10&offset=0')
+  await screen({})
+  expect(calls[1].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0')
+  await screen({ sort_by: 'score', sort_dir: 'desc' })
+  expect(calls[2].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0&sort_by=score&sort_dir=desc')
+  await screen({ sort_by: 'graham_number' })
+  expect(calls[3].url).toBe('/api/screen?defensive=false&net_net=false&min_score=0&limit=50&offset=0&sort_by=graham_number&sort_dir=asc')
+  // sector filter appended when non-empty
+  await screen({ sector: 'Technology' })
+  expect(calls[4].url).toContain('sector=Technology')
+  // empty sector omitted
+  await screen({ sector: '' })
+  expect(calls[5].url).not.toContain('sector')
+  // ratio filters appended when set
+  await screen({ min_pe: 10, max_pe: 20, min_roe: 0.1, max_de: 0.5, min_margin: 0.05 })
+  const ratioUrl = calls[6].url
+  expect(ratioUrl).toContain('min_pe=10')
+  expect(ratioUrl).toContain('max_pe=20')
+  expect(ratioUrl).toContain('min_roe=0.1')
+  expect(ratioUrl).toContain('max_de=0.5')
+  expect(ratioUrl).toContain('min_margin=0.05')
+})
+
+test('loadCompanyData includes peers and note', async () => {
+  let i = 0
+  const bodies: unknown[] = [
+    { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null },
+    [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }],
+    [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] },
+    [{ company: { ticker: 'MSFT' }, score: null }],
+    { body: 'my note' },
+  ]
+  mockFetch(() => ({ json: async () => bodies[i++] }))
+  const data = await loadCompanyData('AAPL')
+  expect(data.peers[0].company.ticker).toBe('MSFT')
+  expect(data.note.body).toBe('my note')
+  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/peers')
+  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/note')
+})
+
+test('getPeers, getNote, saveNote, deleteNote hit the right endpoints', async () => {
   mockFetch(() => ({ json: async () => [] }))
-  await screen(true, 3)
-  expect(calls[0].url).toBe('/api/screen?defensive=true&min_score=3')
+  await getPeers('AAPL')
+  expect(calls[0].url).toBe('/api/companies/AAPL/peers')
+  await getNote('AAPL')
+  expect(calls[1].url).toBe('/api/companies/AAPL/note')
+  await saveNote('AAPL', 'text')
+  expect(calls[2].url).toBe('/api/companies/AAPL/note')
+  expect(calls[2].init.method).toBe('PUT')
+  expect(JSON.parse(calls[2].init.body as string)).toEqual({ body: 'text' })
+  await deleteNote('AAPL')
+  expect(calls[3].url).toBe('/api/companies/AAPL/note')
+  expect(calls[3].init.method).toBe('DELETE')
+})
+
+test('getSectors hits /api/sectors', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await getSectors()
+  expect(calls[0].url).toBe('/api/sectors')
 })

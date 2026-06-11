@@ -3,7 +3,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
 
 /// Reporting period of a financial fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PeriodType {
     Quarterly,
     Annual,
@@ -30,6 +31,7 @@ impl PeriodType {
 
 /// Which financial statement a fact belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum StatementKind {
     Income,
     Balance,
@@ -76,6 +78,44 @@ pub struct Company {
     pub exchange: Option<String>,
     pub sector: Option<String>,
     pub industry: Option<String>,
+    /// Prose "what it does" (Yahoo assetProfile longBusinessSummary).
+    pub description: Option<String>,
+    /// Official company website.
+    pub website: Option<String>,
+}
+
+/// A partial company-profile enrichment update (from EDGAR + Yahoo). Only the
+/// `Some` fields overwrite stored values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompanyProfile {
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+    pub exchange: Option<String>,
+    pub website: Option<String>,
+    pub description: Option<String>,
+}
+
+impl CompanyProfile {
+    /// Merge `other` (a later, higher-priority source) on top of `self`:
+    /// each `Some` field in `other` overrides; `None` fields keep `self`'s value.
+    pub fn overlay(mut self, other: CompanyProfile) -> CompanyProfile {
+        if other.sector.is_some() {
+            self.sector = other.sector;
+        }
+        if other.industry.is_some() {
+            self.industry = other.industry;
+        }
+        if other.exchange.is_some() {
+            self.exchange = other.exchange;
+        }
+        if other.website.is_some() {
+            self.website = other.website;
+        }
+        if other.description.is_some() {
+            self.description = other.description;
+        }
+        self
+    }
 }
 
 /// A single daily price bar from one source. OHLC is optional (older rows /
@@ -122,6 +162,7 @@ pub struct NewsItem {
 pub struct Ratio {
     pub company_id: i64,
     pub period_end: NaiveDate,
+    pub period_type: PeriodType,
     pub metric: String,
     pub value: f64,
     pub computed_at: DateTime<Utc>,
@@ -166,6 +207,16 @@ pub struct Discrepancy {
     pub flagged_at: DateTime<Utc>,
 }
 
+/// Sector-level aggregate for the overview page.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SectorStats {
+    pub sector: String,
+    pub company_count: i64,
+    pub avg_score: f64,
+    pub pct_defensive: f64,
+    pub top_ticker: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +254,7 @@ mod tests {
         let r = Ratio {
             company_id: 1,
             period_end: chrono::NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+            period_type: PeriodType::Annual,
             metric: "pe".into(),
             value: 28.5,
             computed_at: chrono::Utc::now(),
@@ -221,8 +273,32 @@ mod tests {
             exchange: Some("NASDAQ".into()),
             sector: None,
             industry: None,
+            description: None,
+            website: None,
         };
         assert_eq!(c.clone(), c);
         assert!(format!("{c:?}").contains("AAPL"));
+    }
+
+    #[test]
+    fn company_profile_overlay_lets_later_source_override_and_fill() {
+        let edgar = CompanyProfile {
+            industry: Some("Cement, Hydraulic".into()),
+            exchange: Some("NYSE".into()),
+            ..Default::default()
+        };
+        let yahoo = CompanyProfile {
+            sector: Some("Basic Materials".into()),
+            industry: Some("Building Materials".into()),
+            website: Some("https://x.com".into()),
+            description: Some("makes things".into()),
+            ..Default::default()
+        };
+        let merged = edgar.overlay(yahoo);
+        assert_eq!(merged.industry.as_deref(), Some("Building Materials")); // yahoo overrides
+        assert_eq!(merged.exchange.as_deref(), Some("NYSE")); // edgar kept (yahoo None)
+        assert_eq!(merged.sector.as_deref(), Some("Basic Materials"));
+        assert_eq!(merged.website.as_deref(), Some("https://x.com"));
+        assert_eq!(merged.description.as_deref(), Some("makes things"));
     }
 }

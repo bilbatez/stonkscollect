@@ -1,38 +1,76 @@
+import {
+  Card,
+  CardContent,
+  Chip,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Stack,
+  Typography,
+} from '@mui/material'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import CancelIcon from '@mui/icons-material/Cancel'
+import { formatNum, formatPct } from '../format'
 import type { GrahamAssessment } from '../types'
 
-function pct(x: number | null): string {
-  return x === null ? '—' : `${(x * 100).toFixed(0)}%`
-}
-function num(x: number | null): string {
-  return x === null ? '—' : x.toFixed(2)
+/** Humanize a criterion's detail; price-dependent checks explain the data gap. */
+function detailText(name: string, detail: string): string {
+  if (detail === 'insufficient data' && /P\/E|P\/B/.test(name)) {
+    return 'needs price data'
+  }
+  return detail
 }
 
 /** Graham defensive-investor scorecard for one company. */
 export function GrahamScorecard({ assessment }: { assessment: GrahamAssessment }) {
   const { criteria, score, passes_defensive, graham_number, margin_of_safety, net_net } = assessment
   return (
-    <section className="graham">
-      <header>
-        <h3>Graham scorecard</h3>
-        <span className={`badge badge-${passes_defensive ? 'fresh' : 'stale'}`}>
-          {score}/{criteria.length} {passes_defensive ? '— defensive' : ''}
-        </span>
-        {net_net && <span className="badge badge-fresh">net-net</span>}
-      </header>
-      <ul className="criteria">
-        {criteria.map((c) => (
-          <li key={c.name} className={c.passed ? 'pass' : 'fail'}>
-            <span aria-label={c.passed ? 'pass' : 'fail'}>{c.passed ? '✓' : '✗'}</span> {c.name}
-            <span className="detail"> — {c.detail}</span>
-          </li>
-        ))}
-      </ul>
-      <dl className="valuation">
-        <dt>Graham Number</dt>
-        <dd>{num(graham_number)}</dd>
-        <dt>Margin of safety</dt>
-        <dd>{pct(margin_of_safety)}</dd>
-      </dl>
-    </section>
+    <Card variant="outlined">
+      <CardContent>
+        <Stack direction="row" spacing={1} sx={{ mb: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typography variant="h6" component="h3">
+            Graham scorecard
+          </Typography>
+          <Chip
+            size="small"
+            color={passes_defensive ? 'success' : 'warning'}
+            label={`${score}/${criteria.length}`}
+          />
+          {passes_defensive && <Chip size="small" color="success" label="defensive" />}
+          {net_net && <Chip size="small" color="primary" label="net-net" />}
+        </Stack>
+
+        <List dense disablePadding>
+          {criteria.map((c) => (
+            <ListItem key={c.name} disableGutters>
+              <ListItemIcon sx={{ minWidth: 36 }}>
+                {c.passed ? (
+                  <CheckCircleIcon color="success" aria-label="pass" />
+                ) : (
+                  <CancelIcon color="error" aria-label="fail" />
+                )}
+              </ListItemIcon>
+              <ListItemText primary={c.name} secondary={detailText(c.name, c.detail)} />
+            </ListItem>
+          ))}
+        </List>
+
+        <Stack direction="row" spacing={4} sx={{ mt: 1.5 }}>
+          <Stack>
+            <Typography variant="caption" color="text.secondary">
+              Graham Number
+            </Typography>
+            <Typography variant="body1">{formatNum(graham_number)}</Typography>
+          </Stack>
+          <Stack>
+            <Typography variant="caption" color="text.secondary">
+              Margin of safety
+            </Typography>
+            <Typography variant="body1">{formatPct(margin_of_safety)}</Typography>
+          </Stack>
+        </Stack>
+      </CardContent>
+    </Card>
   )
 }

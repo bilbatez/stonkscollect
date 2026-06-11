@@ -45,7 +45,7 @@ impl Config {
             collect_concurrency: get("COLLECT_CONCURRENCY")
                 .and_then(|c| c.parse().ok())
                 .filter(|&c| c > 0)
-                .unwrap_or(6),
+                .unwrap_or(8),
             reconcile_threshold: get("RECONCILE_THRESHOLD")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(0.05),
@@ -123,7 +123,7 @@ mod tests {
         assert!(!cfg.collect_all);
         assert_eq!(cfg.request_delay_ms, 150);
         assert_eq!(cfg.collect_max_age_hrs, None);
-        assert_eq!(cfg.collect_concurrency, 6); // default
+        assert_eq!(cfg.collect_concurrency, 8); // default
         assert_eq!(cfg.reconcile_threshold, 0.05);
         assert_eq!(cfg.graham_min_revenue, crate::graham::DEFAULT_MIN_REVENUE);
     }
@@ -139,7 +139,7 @@ mod tests {
         ]));
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.request_delay_ms, 150);
-        assert_eq!(cfg.collect_concurrency, 6);
+        assert_eq!(cfg.collect_concurrency, 8);
         assert!(!cfg.collect_all); // "maybe" is not truthy
         assert_eq!(cfg.reconcile_threshold, 0.05);
     }

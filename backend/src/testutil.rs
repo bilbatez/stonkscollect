@@ -11,6 +11,8 @@ use crate::store::Store;
 /// Uses a `Mutex` (not `RefCell`) so it is `Send + Sync` for `dyn` use.
 pub struct FakeHttp {
     body: String,
+    /// `(url substring, body)` overrides — first match wins; else `body`.
+    routes: Vec<(String, String)>,
     last_url: Mutex<Option<String>>,
 }
 
@@ -18,6 +20,18 @@ impl FakeHttp {
     pub fn new(body: impl Into<String>) -> Self {
         Self {
             body: body.into(),
+            routes: Vec::new(),
+            last_url: Mutex::new(None),
+        }
+    }
+
+    /// A fake that returns different bodies per URL substring (for multi-call
+    /// flows like the Yahoo crumb → assetProfile handshake). Unmatched URLs get
+    /// an empty body.
+    pub fn routed(routes: &[(&str, &str)]) -> Self {
+        Self {
+            body: String::new(),
+            routes: routes.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             last_url: Mutex::new(None),
         }
     }
@@ -31,7 +45,13 @@ impl FakeHttp {
 impl HttpClient for FakeHttp {
     async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
         *self.last_url.lock().unwrap() = Some(url.to_string());
-        Ok(self.body.clone())
+        let body = self
+            .routes
+            .iter()
+            .find(|(k, _)| url.contains(k.as_str()))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| self.body.clone());
+        Ok(body)
     }
 }
 

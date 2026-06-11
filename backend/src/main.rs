@@ -11,9 +11,12 @@ use clap::{Parser, Subcommand};
 
 use stonkscollect_backend::collectors::edgar::EdgarCollector;
 use stonkscollect_backend::collectors::fmp::FmpCollector;
-use stonkscollect_backend::collectors::news::FinnhubCollector;
+use stonkscollect_backend::collectors::news::{FinnhubCollector, YahooNewsCollector};
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
-use stonkscollect_backend::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
+use stonkscollect_backend::collectors::yahoo::{YahooCollector, YahooProfileCollector};
+use stonkscollect_backend::collectors::{
+    FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
+};
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
 use stonkscollect_backend::net::{RateLimiter, RetryPolicy};
@@ -24,6 +27,26 @@ use stonkscollect_backend::{app, pipeline, scheduler};
 /// Build a rate-limited, retrying HTTP client sharing `limiter`.
 fn http_client(user_agent: &str, limiter: &Arc<RateLimiter>) -> ReqwestClient {
     ReqwestClient::with_limiter(user_agent, RetryPolicy::default(), Some(limiter.clone()))
+}
+
+/// Live, single-line progress for the `collect --all` CLI run.
+struct CliProgress;
+impl pipeline::CollectProgress for CliProgress {
+    fn start(&self, total: usize) {
+        if total == 0 {
+            eprintln!("No companies in the database. Run `make bootstrap` first.");
+        } else {
+            eprintln!("Collecting {total} companies…");
+        }
+    }
+    fn company_done(&self, done: usize, total: usize, ticker: &str, ok: bool) {
+        let mark = if ok { "ok" } else { "FAIL" };
+        // \r overwrites the line in place; \x1b[K clears any trailing chars.
+        eprint!("\r[{done}/{total}] {ticker} {mark}\x1b[K");
+        if done == total {
+            eprintln!();
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -48,6 +71,16 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Enrich company profiles (description, sector/industry, website) from
+    /// EDGAR + Yahoo. Keyless; idempotent.
+    Enrich {
+        #[arg(long = "ticker")]
+        tickers: Vec<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Dev only: seed an `admin`/`admin` login (idempotent). Never use in prod.
+    SeedAdmin,
 }
 
 #[tokio::main]
@@ -71,11 +104,15 @@ async fn main() {
         Command::Serve => serve(store, &cfg).await,
         Command::Bootstrap => bootstrap(&store, &cfg).await,
         Command::Collect { tickers, all } => collect(&store, &cfg, tickers, all).await,
+        Command::Enrich { tickers, all } => enrich(&store, &cfg, tickers, all).await,
+        Command::SeedAdmin => seed_admin(&store).await,
     }
 }
 
 async fn serve(store: Store, cfg: &Config) {
-    let store = Arc::new(store);
+    let store = Arc::new(store.with_policy(stonkscollect_backend::store::Policy {
+        graham_min_revenue: cfg.graham_min_revenue,
+    }));
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
@@ -120,29 +157,34 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
         std::future::pending::<()>().await;
     }
 
-    // One shared rate limiter keeps total request rate polite. One FMP instance
-    // serves both the FactSource and PriceSource roles.
-    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
+    // One rate limiter PER HOST (REQUEST_DELAY_MS spacing each) so EDGAR, Yahoo
+    // and the vendors throttle independently and run in parallel.
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
 
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut fact_sources: Vec<&dyn FactSource> = vec![&edgar];
+    // Yahoo is keyless, so prices work without any API key.
+    let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
     let fmp;
-    let mut price_sources: Vec<&dyn PriceSource> = Vec::new();
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         fact_sources.push(&fmp);
         price_sources.push(&fmp);
     }
     let scrape; // scrape only for targeted runs (not the whole universe)
     if !cfg.collect_all {
-        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &mk()));
         fact_sources.push(&scrape);
     }
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
+    // Keyless per-company news; Finnhub adds more when a key is set.
+    let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let finnhub;
-    let mut news_sources: Vec<&dyn NewsSource> = Vec::new();
     if let Some(key) = &cfg.finnhub_api_key {
-        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         news_sources.push(&finnhub);
     }
 
@@ -156,7 +198,9 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
 
         let result = scheduler::run_tracked(store, label, None, fired, || async {
             match tier {
-                Tier::Fundamentals => collect_fundamentals(store, cfg, &fact_sources, fired).await,
+                Tier::Fundamentals => {
+                    collect_fundamentals(store, cfg, &fact_sources, &price_sources, fired).await
+                }
                 Tier::Price => collect_prices(store, cfg, &price_sources, fired, delay).await,
                 Tier::News => collect_news(store, cfg, &news_sources, fired, delay).await,
             }
@@ -171,28 +215,34 @@ async fn collect_fundamentals(
     store: &Store,
     cfg: &Config,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
-    // Ratios + Graham scores are recomputed per company inside collect_* (only
-    // for companies actually collected this pass), not over the whole universe.
+    // Prices, ratios + Graham scores are recomputed per company inside collect_*
+    // (only for companies actually collected this pass), not the whole universe.
     if cfg.collect_all {
         pipeline::collect_all(
             store,
             sources,
+            price_sources,
+            &[], // news handled by the dedicated News tier in serve
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
             cutoff,
             cfg.graham_min_revenue,
+            &pipeline::NoProgress,
         )
         .await
     } else {
         let outcomes = pipeline::collect_tickers(
             store,
             sources,
+            price_sources,
+            &[],
             &cfg.tickers,
             cfg.reconcile_threshold,
             now,
@@ -260,6 +310,48 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
     }
 }
 
+/// Enrich company profiles from EDGAR (industry/exchange) + Yahoo (description/
+/// website/sector). Keyless; idempotent (COALESCE update).
+async fn enrich(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
+    let bulk = all || cfg.collect_all;
+    let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo = YahooProfileCollector::new(http_client(&cfg.user_agent, &mk()));
+    // EDGAR first (canonical industry/exchange), Yahoo overlays prose/website/sector.
+    let profile_sources: Vec<&dyn ProfileSource> = vec![&edgar, &yahoo];
+
+    if bulk {
+        let s = pipeline::enrich_all(store, &profile_sources, cfg.collect_concurrency, &CliProgress)
+            .await
+            .expect("enrich all");
+        report_bulk("enrich", Ok(s));
+    } else {
+        if tickers.is_empty() {
+            tickers = cfg.tickers.clone();
+        }
+        tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
+        let n = pipeline::enrich_tickers(store, &profile_sources, &tickers)
+            .await
+            .expect("enrich tickers");
+        tracing::info!("enriched {n} companies");
+    }
+}
+
+/// Dev convenience: ensure an admin login exists so a developer can sign straight
+/// into the dashboard. The email form field requires a valid address, so the
+/// login is `admin@admin.com` / `admin`. Insecure by design — development only.
+async fn seed_admin(store: &Store) {
+    let created = pipeline::ensure_user(store, "admin@admin.com", "admin")
+        .await
+        .expect("seed admin user");
+    if created {
+        tracing::warn!("seeded DEV login: admin@admin.com / admin (insecure — dev only)");
+    } else {
+        tracing::info!("admin user already exists; left unchanged");
+    }
+}
+
 async fn bootstrap(store: &Store, cfg: &Config) {
     let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
     let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
@@ -273,32 +365,52 @@ async fn bootstrap(store: &Store, cfg: &Config) {
 async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
 
-    let limiter = Arc::new(RateLimiter::new(std::time::Duration::from_millis(cfg.request_delay_ms)));
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &limiter));
+    // One rate limiter PER HOST (each client owns its clone), so EDGAR, Yahoo and
+    // the vendors throttle independently and actually run in parallel under
+    // COLLECT_CONCURRENCY. REQUEST_DELAY_MS is the per-host spacing.
+    let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
+    let mk = || Arc::new(RateLimiter::new(delay));
+    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news (same provider)
+    let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
+    // Keyless prices via Yahoo so P/E, P/B and the screener populate without keys.
+    let mut price_sources: Vec<&dyn PriceSource> = vec![&yahoo];
+    // Keyless per-company news via Yahoo's per-symbol RSS.
+    let yahoo_news = YahooNewsCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
+    let mut news_sources: Vec<&dyn NewsSource> = vec![&yahoo_news];
     let fmp;
     if let Some(key) = &cfg.fmp_api_key {
-        fmp = FmpCollector::new(http_client(&cfg.user_agent, &limiter), key.clone());
+        fmp = FmpCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         sources.push(&fmp);
+        price_sources.push(&fmp);
+    }
+    let finnhub;
+    if let Some(key) = &cfg.finnhub_api_key {
+        finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
+        news_sources.push(&finnhub);
     }
     let scrape;
     if !bulk {
-        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &limiter));
+        scrape = ScrapeCollector::new(http_client(&cfg.user_agent, &mk()));
         sources.push(&scrape);
     }
 
     let now = chrono::Utc::now();
-    // collect_* recompute ratios + Graham scores per collected company.
+    // collect_* collect prices then recompute ratios + Graham per collected company.
     if bulk {
         // One-shot CLI always collects (no freshness cutoff).
         let s = pipeline::collect_all(
             store,
             &sources,
+            &price_sources,
+            &news_sources,
             cfg.reconcile_threshold,
             now,
             cfg.collect_concurrency,
             None,
             cfg.graham_min_revenue,
+            &CliProgress,
         )
         .await
         .expect("collect all");
@@ -311,6 +423,8 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
         let outcomes = pipeline::collect_tickers(
             store,
             &sources,
+            &price_sources,
+            &news_sources,
             &tickers,
             cfg.reconcile_threshold,
             now,

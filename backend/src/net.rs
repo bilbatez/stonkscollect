@@ -67,7 +67,7 @@ impl RateLimiter {
     /// Reserve the next slot relative to `now`; returns how long to sleep first.
     pub fn reserve(&self, now: DateTime<Utc>) -> Duration {
         let interval = chrono::Duration::from_std(self.min_interval).unwrap_or(chrono::Duration::zero());
-        let mut next = self.next_slot.lock().unwrap();
+        let mut next = self.next_slot.lock().expect("rate limiter mutex poisoned");
         let slot = match *next {
             Some(t) if t > now => t,
             _ => now,
@@ -111,14 +111,14 @@ impl LoginThrottle {
 
     /// Whether a login attempt for `key` is currently permitted.
     pub fn allowed(&self, key: &str, now: DateTime<Utc>) -> bool {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock().expect("login throttle mutex poisoned");
         !matches!(map.get(key), Some(a) if a.count >= self.max && self.within_window(a.first, now))
     }
 
     /// Record a failed attempt for `key`, starting a fresh window if the prior
     /// one has elapsed.
     pub fn record_failure(&self, key: &str, now: DateTime<Utc>) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock().expect("login throttle mutex poisoned");
         let a = map.entry(key.to_string()).or_insert(Attempt { count: 0, first: now });
         if !self.within_window(a.first, now) {
             a.count = 0;
@@ -129,7 +129,7 @@ impl LoginThrottle {
 
     /// Clear a key's failure history (call on a successful login).
     pub fn clear(&self, key: &str) {
-        self.inner.lock().unwrap().remove(key);
+        self.inner.lock().expect("login throttle mutex poisoned").remove(key);
     }
 }
 

@@ -208,6 +208,7 @@ fn parse_ratios(
                 ratios.push(Ratio {
                     company_id,
                     period_end: row.date,
+                    period_type: crate::domain::PeriodType::Annual,
                     metric: metric.to_string(),
                     value,
                     computed_at: now,

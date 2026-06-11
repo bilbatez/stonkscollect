@@ -1,41 +1,101 @@
 import { render, screen } from '@testing-library/react'
-import { expect, test } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import * as format from '../format'
+import * as api from '../api'
 import { DiscrepancyPanel } from './DiscrepancyPanel'
 import { FreshnessBadge } from './FreshnessBadge'
+import { MetricsSummary } from './MetricsSummary'
 import { NewsFeed } from './NewsFeed'
+import { NotePanel } from './NotePanel'
+import { PeersPanel } from './PeersPanel'
 import { RatiosPanel } from './RatiosPanel'
+import { SectorOverview } from './SectorOverview'
 import { StatementTable } from './StatementTable'
-import type { Discrepancy, FinancialFact, NewsItem, Ratio } from '../types'
+import type { Company, Discrepancy, FinancialFact, GrahamAssessment, GrahamScore, NewsItem, Period, PeerRow, Ratio, SectorStats } from '../types'
 
-const fact = (item: string, period: string, value: number): FinancialFact => ({
+let downloadSpy: ReturnType<typeof vi.spyOn>
+
+beforeEach(() => {
+  downloadSpy = vi.spyOn(format, 'downloadCsv').mockImplementation(() => {})
+})
+afterEach(() => {
+  downloadSpy.mockRestore()
+})
+
+const fact = (
+  statement: string,
+  item: string,
+  period: string,
+  value: number,
+  period_type: Period = 'annual',
+): FinancialFact => ({
   company_id: 1,
-  statement: 'income',
+  statement,
   line_item: item,
-  period_type: 'annual',
+  period_type,
   period_end: period,
   value,
   source: 'edgar',
   fetched_at: '2024-01-01T00:00:00Z',
 })
 
-test('StatementTable pivots facts and fills missing cells with a dash', () => {
+const ratio = (
+  metric: string,
+  period: string,
+  value: number,
+  period_type: Period = 'annual',
+): Ratio => ({
+  company_id: 1,
+  period_end: period,
+  period_type,
+  metric,
+  value,
+  computed_at: '',
+})
+
+test('StatementTable groups by section, humanizes labels, dashes gaps', async () => {
   render(
     <StatementTable
       facts={[
-        fact('Revenue', '2023-12-31', 2_000_000_000),
-        fact('Revenue', '2022-12-31', 1_000_000_000),
-        // NetIncome only in 2023 -> its 2022 cell must render a dash.
-        fact('NetIncome', '2023-12-31', 500_000_000),
+        fact('income', 'Revenue', '2023-12-31', 2_000_000_000),
+        fact('income', 'Revenue', '2022-12-31', 1_000_000_000),
+        fact('income', 'Revenue', '2021-12-31', 2_000_000_000), // 2022 vs 2021 = -50%
+        fact('income', 'NetIncome', '2023-12-31', 500_000_000), // 2022 cell dashed
+        fact('balance', 'StockholdersEquity', '2023-12-31', 8_000_000_000),
+        fact('segments', 'NorthAmerica', '2023-12-31', 1_000_000), // unknown section
       ]}
     />,
   )
+  expect(screen.getByText('Income statement')).toBeInTheDocument()
+  expect(screen.getByText('Balance sheet')).toBeInTheDocument()
+  expect(screen.getByText('Segments')).toBeInTheDocument() // unknown section, titleized
+  expect(screen.getByText('Net income')).toBeInTheDocument() // humanized label
+  expect(screen.getByText("Shareholders' equity")).toBeInTheDocument()
+  expect(screen.getAllByText('$2.0B').length).toBeGreaterThan(0)
+  expect(screen.getByText('Dec 2023')).toBeInTheDocument() // formatted column header
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0) // gaps dashed
+  expect(screen.getByText('+100%')).toBeInTheDocument() // Revenue 2023 YoY growth badge
+  expect(screen.getByText('-50%')).toBeInTheDocument() // Revenue 2022 negative growth badge
+  await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
+  expect(downloadSpy).toHaveBeenCalledWith(
+    'annual-statements.csv',
+    expect.arrayContaining(['Line item']),
+    expect.any(Array),
+  )
+})
+
+test('StatementTable toggles annual/quarterly and shows an empty period', async () => {
+  render(
+    <StatementTable
+      facts={[fact('income', 'Revenue', '2023-09-30', 80_000_000_000, 'quarterly')]}
+    />,
+  )
+  // default is annual; this company only has a quarterly fact
+  expect(screen.getByText(/no annual statement data/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
   expect(screen.getByText('Revenue')).toBeInTheDocument()
-  expect(screen.getByText('NetIncome')).toBeInTheDocument()
-  expect(screen.getByText('$2.0B')).toBeInTheDocument()
-  expect(screen.getByText('2023-12-31')).toBeInTheDocument()
-  expect(screen.getByText('2022-12-31')).toBeInTheDocument()
-  // the missing NetIncome/2022 cell
-  expect(screen.getByText('—')).toBeInTheDocument()
+  expect(screen.getByText('$80.0B')).toBeInTheDocument()
 })
 
 test('StatementTable shows an empty state when there are no facts', () => {
@@ -43,14 +103,49 @@ test('StatementTable shows an empty state when there are no facts', () => {
   expect(screen.getByText(/no statement data/i)).toBeInTheDocument()
 })
 
-test('RatiosPanel lists metrics and values', () => {
-  const ratios: Ratio[] = [
-    { company_id: 1, period_end: '2023-12-31', metric: 'pe', value: 28.5, computed_at: '' },
-  ]
-  const { rerender } = render(<RatiosPanel ratios={ratios} />)
-  expect(screen.getByText('pe')).toBeInTheDocument()
-  expect(screen.getByText('28.5')).toBeInTheDocument()
-  rerender(<RatiosPanel ratios={[]} />)
+test('RatiosPanel groups metrics, formats by kind, dashes gaps', async () => {
+  render(
+    <RatiosPanel
+      ratios={[
+        ratio('roe', '2023-12-31', 0.126),
+        ratio('current_ratio', '2023-12-31', 2.6858),
+        ratio('current_ratio', '2022-12-31', 2.0),
+        ratio('book_value_per_share', '2023-12-31', 64.24),
+        ratio('mystery_metric', '2023-12-31', 1.5), // -> "Other" group
+      ]}
+    />,
+  )
+  expect(screen.getByText('Profitability')).toBeInTheDocument()
+  expect(screen.getByText('Liquidity')).toBeInTheDocument()
+  expect(screen.getByText('Other')).toBeInTheDocument()
+  expect(screen.getByText('Return on equity')).toBeInTheDocument()
+  expect(screen.getByText('12.6%')).toBeInTheDocument() // percent
+  expect(screen.getByText('2.69×')).toBeInTheDocument() // ratio
+  expect(screen.getByText('$64.24')).toBeInTheDocument() // currency (per-share)
+  expect(screen.getByText('Dec 2023')).toBeInTheDocument() // formatted column header
+  // metrics without a 2022 value -> dash in that column
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }))
+  expect(downloadSpy).toHaveBeenCalledWith(
+    'annual-ratios.csv',
+    expect.arrayContaining(['Metric']),
+    expect.any(Array),
+  )
+})
+
+test('RatiosPanel shows empty period, toggles, and ignores re-clicking active', async () => {
+  // only quarterly data -> the default annual view is empty
+  render(<RatiosPanel ratios={[ratio('roe', '2023-09-30', 0.05, 'quarterly')]} />)
+  expect(screen.getByText(/no annual ratio data/i)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('5.0%')).toBeInTheDocument()
+  // clicking the already-selected toggle yields null -> ignored, stays quarterly
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('5.0%')).toBeInTheDocument()
+})
+
+test('RatiosPanel shows an empty state when there are no ratios', () => {
+  render(<RatiosPanel ratios={[]} />)
   expect(screen.getByText(/no ratio data/i)).toBeInTheDocument()
 })
 
@@ -64,18 +159,24 @@ test('NewsFeed renders headlines with optional descriptions', () => {
   expect(screen.getByText('why')).toBeInTheDocument()
   expect(screen.getByText('Flat')).toBeInTheDocument()
   expect(screen.getByText('reuters')).toBeInTheDocument()
+  expect(screen.getByText('Jan 2, 2024')).toBeInTheDocument() // published_at formatted
+  render(<NewsFeed news={[]} />)
+  expect(screen.getByText(/no news/i)).toBeInTheDocument()
 })
 
-test('DiscrepancyPanel shows a row per flag and an empty state', () => {
+test('DiscrepancyPanel shows a row per flag and an empty state', async () => {
   const d: Discrepancy[] = [
     { company_id: 1, field: 'Revenue', period: '2023-12-31', source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.5, flagged_at: '' },
-    // null period must render a dash
     { company_id: 1, field: 'NetIncome', period: null, source_a: 'edgar', value_a: 1, source_b: 'fmp', value_b: 2, pct_diff: 0.1, flagged_at: '' },
   ]
   const { rerender } = render(<DiscrepancyPanel discrepancies={d} />)
   expect(screen.getByText('Revenue')).toBeInTheDocument()
   expect(screen.getAllByText(/edgar/)[0]).toBeInTheDocument()
   expect(screen.getByText('—')).toBeInTheDocument()
+  // sort each sortable column (exercises the sort accessors, incl. null period)
+  await userEvent.click(screen.getByText('Field'))
+  await userEvent.click(screen.getByText('Period'))
+  await userEvent.click(screen.getByText('Diff'))
   rerender(<DiscrepancyPanel discrepancies={[]} />)
   expect(screen.getByText(/no discrepancies/i)).toBeInTheDocument()
 })
@@ -87,4 +188,164 @@ test('FreshnessBadge reflects each status', () => {
   expect(screen.getByText(/stale/i)).toBeInTheDocument()
   rerender(<FreshnessBadge status="unknown" />)
   expect(screen.getByText(/unknown/i)).toBeInTheDocument()
+})
+
+// --- PeersPanel ---
+
+function makeCompany(ticker: string): Company {
+  return { id: 1, cik: '', ticker, name: `${ticker} Corp`, exchange: null, sector: 'Tech', industry: null, description: null, website: null }
+}
+
+function makeScore(): GrahamScore {
+  return { company_id: 1, score: 5, passes_defensive: true, graham_number: 42.5, ncav_per_share: null, margin_of_safety: 0.2, net_net: false, computed_at: '' }
+}
+
+test('PeersPanel shows a row per peer', () => {
+  const peers: PeerRow[] = [
+    { company: makeCompany('MSFT'), score: makeScore() },
+    { company: makeCompany('GOOG'), score: null },
+  ]
+  render(<PeersPanel peers={peers} />)
+  expect(screen.getByText('MSFT')).toBeInTheDocument()
+  expect(screen.getByText('GOOG')).toBeInTheDocument()
+  expect(screen.getByText('42.50')).toBeInTheDocument() // graham number
+  expect(screen.getByText('20%')).toBeInTheDocument() // margin of safety
+})
+
+test('PeersPanel shows empty state when no peers', () => {
+  render(<PeersPanel peers={[]} />)
+  expect(screen.getByText(/no peers/i)).toBeInTheDocument()
+})
+
+// --- NotePanel ---
+
+test('NotePanel saves a note on button click and typing clears saved', async () => {
+  const saveSpy = vi.spyOn(api, 'saveNote').mockResolvedValue()
+  render(<NotePanel ticker="AAPL" initialBody="draft" />)
+  expect(screen.getByDisplayValue('draft')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: /save/i }))
+  expect(saveSpy).toHaveBeenCalledWith('AAPL', 'draft')
+  expect(screen.getByText(/saved/i)).toBeInTheDocument()
+  // typing clears the saved indicator
+  await userEvent.type(screen.getByDisplayValue('draft'), ' more')
+  expect(screen.queryByText(/saved/i)).toBeNull()
+  saveSpy.mockRestore()
+})
+
+test('NotePanel deletes note on delete button', async () => {
+  const deleteSpy = vi.spyOn(api, 'deleteNote').mockResolvedValue()
+  render(<NotePanel ticker="AAPL" initialBody="old" />)
+  await userEvent.click(screen.getByRole('button', { name: /delete/i }))
+  expect(deleteSpy).toHaveBeenCalledWith('AAPL')
+  expect(screen.getByPlaceholderText(/notes/i)).toBeInTheDocument()
+  deleteSpy.mockRestore()
+})
+
+test('NotePanel shows error when save fails', async () => {
+  vi.spyOn(api, 'saveNote').mockRejectedValue(new Error('fail'))
+  render(<NotePanel ticker="AAPL" initialBody="text" />)
+  await userEvent.click(screen.getByRole('button', { name: /save/i }))
+  expect(screen.getByText(/failed to save/i)).toBeInTheDocument()
+  vi.restoreAllMocks()
+})
+
+test('NotePanel shows error when delete fails', async () => {
+  vi.spyOn(api, 'deleteNote').mockRejectedValue(new Error('fail'))
+  render(<NotePanel ticker="AAPL" initialBody="text" />)
+  await userEvent.click(screen.getByRole('button', { name: /delete/i }))
+  expect(screen.getByText(/failed to delete/i)).toBeInTheDocument()
+  vi.restoreAllMocks()
+})
+
+test('NotePanel starts empty with null body and disables buttons', () => {
+  render(<NotePanel ticker="AAPL" initialBody={null} />)
+  expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /delete/i })).toBeDisabled()
+})
+
+// --- MetricsSummary ---
+
+const graham: GrahamAssessment = {
+  criteria: [],
+  score: 5,
+  graham_number: 42.5,
+  ncav_per_share: null,
+  margin_of_safety: 0.2,
+  net_net: false,
+  passes_defensive: true,
+}
+
+test('MetricsSummary renders 8 metric cards with formatted values', () => {
+  const ratios: Ratio[] = [
+    ratio('pe', '2023-12-31', 15.4),
+    ratio('pe', '2022-12-31', 10.0), // older period — latestAnnual must pick 2023
+    ratio('pb', '2023-12-31', 2.1),
+    ratio('roe', '2023-12-31', 0.18),
+    ratio('net_margin', '2023-12-31', 0.12),
+    ratio('debt_to_equity', '2023-12-31', 0.45),
+    ratio('current_ratio', '2023-12-31', 2.3),
+  ]
+  render(<MetricsSummary ratios={ratios} graham={graham} />)
+  expect(screen.getByText('P/E')).toBeInTheDocument()
+  expect(screen.getByText('15.40×')).toBeInTheDocument()
+  expect(screen.getByText('P/B')).toBeInTheDocument()
+  expect(screen.getByText('2.10×')).toBeInTheDocument()
+  expect(screen.getByText('Return on equity')).toBeInTheDocument()
+  expect(screen.getByText('18.0%')).toBeInTheDocument()
+  expect(screen.getByText('Net margin')).toBeInTheDocument()
+  expect(screen.getByText('12.0%')).toBeInTheDocument()
+  expect(screen.getByText('Debt to equity')).toBeInTheDocument()
+  expect(screen.getByText('0.45×')).toBeInTheDocument()
+  expect(screen.getByText('Current ratio')).toBeInTheDocument()
+  expect(screen.getByText('2.30×')).toBeInTheDocument()
+  expect(screen.getByText('Graham #')).toBeInTheDocument()
+  expect(screen.getByText('42.50')).toBeInTheDocument()
+  expect(screen.getByText('Margin of safety')).toBeInTheDocument()
+  expect(screen.getByText('20%')).toBeInTheDocument()
+})
+
+test('MetricsSummary dashes missing metrics and null graham fields', () => {
+  render(<MetricsSummary ratios={[]} graham={{ ...graham, graham_number: null, margin_of_safety: null }} />)
+  expect(screen.getAllByText('—').length).toBe(8)
+})
+
+test('MetricsSummary returns null when no ratios and no graham values', () => {
+  const { container } = render(
+    <MetricsSummary ratios={[]} graham={{ ...graham, graham_number: null, margin_of_safety: null }} />,
+  )
+  // component still renders the 8 dash cards — not null
+  expect(container.firstChild).not.toBeNull()
+})
+
+// --- SectorOverview ---
+
+test('SectorOverview renders a row per sector with formatted values', () => {
+  const sectors: SectorStats[] = [
+    { sector: 'Technology', company_count: 5, avg_score: 4.2, pct_defensive: 0.6, top_ticker: 'AAPL' },
+    { sector: 'Healthcare', company_count: 3, avg_score: 2.0, pct_defensive: 0.0, top_ticker: null },
+  ]
+  const onSelect = vi.fn()
+  render(<SectorOverview sectors={sectors} onSelect={onSelect} />)
+  expect(screen.getByText('Technology')).toBeInTheDocument()
+  expect(screen.getByText('5')).toBeInTheDocument() // company count
+  expect(screen.getByText('4.20')).toBeInTheDocument() // avg score formatted
+  expect(screen.getByText('60%')).toBeInTheDocument() // pct_defensive 0.6
+  expect(screen.getByRole('button', { name: 'AAPL' })).toBeInTheDocument() // top_ticker clickable
+  expect(screen.getByText('Healthcare')).toBeInTheDocument()
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0) // null top_ticker
+})
+
+test('SectorOverview calls onSelect with top_ticker on click', async () => {
+  const sectors: SectorStats[] = [
+    { sector: 'Technology', company_count: 1, avg_score: 5, pct_defensive: 1, top_ticker: 'MSFT' },
+  ]
+  const onSelect = vi.fn()
+  render(<SectorOverview sectors={sectors} onSelect={onSelect} />)
+  await userEvent.click(screen.getByRole('button', { name: 'MSFT' }))
+  expect(onSelect).toHaveBeenCalledWith('MSFT')
+})
+
+test('SectorOverview shows empty state when no sectors', () => {
+  render(<SectorOverview sectors={[]} onSelect={vi.fn()} />)
+  expect(screen.getByText(/no sector data/i)).toBeInTheDocument()
 })

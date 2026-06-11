@@ -31,6 +31,9 @@ impl ReqwestClient {
     ) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(user_agent)
+            // Persist cookies across requests (needed for the Yahoo crumb handshake:
+            // the cookie seeded from fc.yahoo.com authorizes the crumb + profile call).
+            .cookie_store(true)
             .build()
             .expect("build reqwest client");
         Self {

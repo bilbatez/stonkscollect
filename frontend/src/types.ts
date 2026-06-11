@@ -6,6 +6,8 @@ export interface Company {
   exchange: string | null
   sector: string | null
   industry: string | null
+  description: string | null
+  website: string | null
 }
 
 export interface PricePoint {
@@ -30,9 +32,12 @@ export interface FinancialFact {
   fetched_at: string
 }
 
+export type Period = 'annual' | 'quarterly'
+
 export interface Ratio {
   company_id: number
   period_end: string
+  period_type: Period
   metric: string
   value: number
   computed_at: string
@@ -92,6 +97,51 @@ export interface ScreenRow {
   score: GrahamScore
 }
 
+/** A company in the directory, with its Graham score when computed. */
+export interface CompanyRow {
+  company: Company
+  score: GrahamScore | null
+}
+
+/** A page of results plus the total match count. */
+export interface Page<T> {
+  rows: T[]
+  total: number
+}
+
+export interface ScreenFilters {
+  defensive?: boolean
+  net_net?: boolean
+  min_score?: number
+  sector?: string
+  min_pe?: number
+  max_pe?: number
+  min_roe?: number
+  max_de?: number
+  min_margin?: number
+  sort_by?: string
+  sort_dir?: string
+  limit?: number
+  offset?: number
+}
+
+export interface PeerRow {
+  company: Company
+  score: GrahamScore | null
+}
+
+export interface Note {
+  body: string | null
+}
+
+export interface SectorStats {
+  sector: string
+  company_count: number
+  avg_score: number
+  pct_defensive: number
+  top_ticker: string | null
+}
+
 export interface CompanyData {
   company: Company
   prices: PricePoint[]
@@ -100,4 +150,6 @@ export interface CompanyData {
   news: NewsItem[]
   discrepancies: Discrepancy[]
   graham: GrahamAssessment
+  peers: PeerRow[]
+  note: Note
 }

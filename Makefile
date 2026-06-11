@@ -14,6 +14,7 @@ help:
 	@echo "Setup:    make setup        (one-time: .env, data dir, deps, build)"
 	@echo "          make demo         (bootstrap + collect a few tickers + Graham scores)"
 	@echo "Run:      make bootstrap    (load SEC ticker universe)"
+	@echo "          make dev-admin    (dev only: seed admin@admin.com/admin login)"
 	@echo "          make collect      (collect; ARGS=\"--ticker AAPL\" or default --all)"
 	@echo "          make serve        (API + scheduled collection on :8080)"
 	@echo "          make dev-frontend (dashboard dev server)"
@@ -38,8 +39,17 @@ setup:
 bootstrap:
 	cd $(BACKEND) && cargo run -- bootstrap
 
+# Dev only: seed an admin login so you can sign in immediately. Insecure.
+dev-admin:
+	cd $(BACKEND) && cargo run -- seed-admin
+	@echo "Dev login ready: admin@admin.com / admin"
+
 collect:
 	cd $(BACKEND) && cargo run -- collect $(ARGS)
+
+# Enrich company profiles (description, sector/industry, website) from EDGAR + Yahoo.
+enrich:
+	cd $(BACKEND) && cargo run -- enrich $(ARGS)
 
 serve dev-backend:
 	cd $(BACKEND) && cargo run -- serve

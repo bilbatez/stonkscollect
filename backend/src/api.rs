@@ -21,6 +21,15 @@ use crate::store::{Store, StoreError};
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
 type ApiError = (StatusCode, String);
 
+/// Default page size when a list request omits `limit`.
+const DEFAULT_PAGE_LIMIT: i64 = 50;
+/// Max sector peers returned for a company.
+const PEERS_LIMIT: i64 = 20;
+/// Session lifetime before re-authentication is required.
+const SESSION_TTL_DAYS: i64 = 30;
+/// Number of recent collection runs surfaced by `/api/runs`.
+const RECENT_RUNS_LIMIT: i64 = 50;
+
 /// Authenticated user, extracted from a `Authorization: Bearer <token>` header.
 pub struct AuthUser {
     pub user_id: i64,
@@ -67,6 +76,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/auth/me", get(me))
         .route("/api/watchlist", get(watchlist).post(watch_add))
         .route("/api/watchlist/:ticker", delete(watch_remove))
+        .route("/api/companies", get(companies))
         .route("/api/companies/:ticker", get(company))
         .route("/api/companies/:ticker/prices", get(prices))
         .route("/api/companies/:ticker/facts", get(facts))
@@ -75,21 +85,79 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/discrepancies", get(discrepancies))
         .route("/api/companies/:ticker/graham", get(graham_assessment))
         .route("/api/companies/:ticker/summary", get(summary))
+        .route("/api/companies/:ticker/peers", get(peers))
+        .route("/api/companies/:ticker/note", get(get_note).put(save_note).delete(delete_note))
         .route("/api/screen", get(screen))
+        .route("/api/sectors", get(sectors))
         .route("/api/runs", get(runs))
 }
 
 #[derive(Deserialize)]
 struct ScreenParams {
     defensive: Option<bool>,
+    net_net: Option<bool>,
     min_score: Option<i64>,
+    sector: Option<String>,
+    min_pe: Option<f64>,
+    max_pe: Option<f64>,
+    min_roe: Option<f64>,
+    max_de: Option<f64>,
+    min_margin: Option<f64>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
     limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct ScreenRow {
     company: Company,
     score: GrahamScore,
+}
+
+/// A page of results plus the total match count (for client pagination).
+#[derive(Serialize)]
+struct Page<T> {
+    rows: Vec<T>,
+    total: i64,
+}
+
+#[derive(Deserialize)]
+struct CompaniesParams {
+    q: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct CompanyRow {
+    company: Company,
+    score: Option<GrahamScore>,
+}
+
+/// Paginated, optionally-searched directory of all companies, each with its
+/// Graham score when computed.
+async fn companies(
+    State(store): State<Arc<Store>>,
+    Query(p): Query<CompaniesParams>,
+    _user: AuthUser,
+) -> ApiResult<Page<CompanyRow>> {
+    let (rows, total) = store
+        .list_companies(
+            p.q.as_deref(),
+            p.sort_by.as_deref(),
+            p.sort_dir.as_deref(),
+            p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
+            p.offset.unwrap_or(0),
+        )
+        .await
+        .map_err(internal)?;
+    Ok(Json(Page {
+        rows: rows.into_iter().map(|(company, score)| CompanyRow { company, score }).collect(),
+        total,
+    }))
 }
 
 async fn graham_assessment(
@@ -100,7 +168,7 @@ async fn graham_assessment(
     let c = resolve(&store, &ticker).await?;
     let facts = store.get_facts(c.id).await.map_err(internal)?;
     let price = store.latest_price(c.id).await.map_err(internal)?;
-    Ok(Json(graham::assess(&facts, price, graham::DEFAULT_MIN_REVENUE)))
+    Ok(Json(graham::assess(&facts, price, store.policy().graham_min_revenue)))
 }
 
 #[derive(Serialize)]
@@ -117,7 +185,7 @@ async fn summary(
     _user: AuthUser,
 ) -> ApiResult<CompanySummary> {
     let company = resolve(&store, &ticker).await?;
-    let ratios = store.get_ratios(company.id).await.map_err(internal)?;
+    let ratios = store.get_ratios(company.id, None).await.map_err(internal)?;
     let graham = store.get_graham_score(company.id).await.map_err(internal)?;
     Ok(Json(CompanySummary { company, ratios, graham }))
 }
@@ -126,12 +194,95 @@ async fn screen(
     State(store): State<Arc<Store>>,
     Query(p): Query<ScreenParams>,
     _user: AuthUser,
-) -> ApiResult<Vec<ScreenRow>> {
-    let rows = store
-        .screen(p.defensive.unwrap_or(false), p.min_score.unwrap_or(0), p.limit.unwrap_or(100))
+) -> ApiResult<Page<ScreenRow>> {
+    let (rows, total) = store
+        .screen(
+            p.defensive.unwrap_or(false),
+            p.net_net.unwrap_or(false),
+            p.min_score.unwrap_or(0),
+            p.sector.as_deref(),
+            p.min_pe,
+            p.max_pe,
+            p.min_roe,
+            p.max_de,
+            p.min_margin,
+            p.sort_by.as_deref(),
+            p.sort_dir.as_deref(),
+            p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
+            p.offset.unwrap_or(0),
+        )
         .await
         .map_err(internal)?;
-    Ok(Json(rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect()))
+    Ok(Json(Page {
+        rows: rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect(),
+        total,
+    }))
+}
+
+async fn sectors(
+    State(store): State<Arc<Store>>,
+    _user: AuthUser,
+) -> ApiResult<Vec<crate::domain::SectorStats>> {
+    Ok(Json(store.get_sectors().await.map_err(internal)?))
+}
+
+#[derive(Serialize)]
+struct PeerRow {
+    company: Company,
+    score: Option<GrahamScore>,
+}
+
+async fn peers(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+) -> ApiResult<Vec<PeerRow>> {
+    let c = resolve(&store, &ticker).await?;
+    let rows = store.get_peers(c.id, c.sector.as_deref(), PEERS_LIMIT).await.map_err(internal)?;
+    Ok(Json(
+        rows.into_iter().map(|(company, score)| PeerRow { company, score }).collect(),
+    ))
+}
+
+#[derive(Serialize)]
+struct NoteResponse {
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NoteRequest {
+    body: String,
+}
+
+async fn get_note(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    user: AuthUser,
+) -> ApiResult<NoteResponse> {
+    let c = resolve(&store, &ticker).await?;
+    let body = store.get_note(user.user_id, c.id).await.map_err(internal)?;
+    Ok(Json(NoteResponse { body }))
+}
+
+async fn save_note(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    user: AuthUser,
+    Json(req): Json<NoteRequest>,
+) -> Result<StatusCode, ApiError> {
+    let c = resolve(&store, &ticker).await?;
+    store.save_note(user.user_id, c.id, &req.body, Utc::now()).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_note(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    user: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let c = resolve(&store, &ticker).await?;
+    store.delete_note(user.user_id, c.id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Log the real cause server-side; never surface store/SQL detail to the client.
@@ -165,7 +316,7 @@ struct WatchRequest {
 async fn issue_session(store: &Store, user_id: i64) -> Result<String, ApiError> {
     let (token, token_hash) = auth::new_token();
     store
-        .create_session(&token_hash, user_id, Utc::now() + Duration::days(30))
+        .create_session(&token_hash, user_id, Utc::now() + Duration::days(SESSION_TTL_DAYS))
         .await
         .map_err(internal)?;
     Ok(token)
@@ -297,7 +448,7 @@ async fn ratios(
     _user: AuthUser,
 ) -> ApiResult<Vec<Ratio>> {
     let c = resolve(&store, &ticker).await?;
-    Ok(Json(store.get_ratios(c.id).await.map_err(internal)?))
+    Ok(Json(store.get_ratios(c.id, None).await.map_err(internal)?))
 }
 
 async fn news(
@@ -319,7 +470,7 @@ async fn discrepancies(
 }
 
 async fn runs(State(store): State<Arc<Store>>, _user: AuthUser) -> ApiResult<Vec<CollectionRun>> {
-    Ok(Json(store.recent_runs(50).await.map_err(internal)?))
+    Ok(Json(store.recent_runs(RECENT_RUNS_LIMIT).await.map_err(internal)?))
 }
 
 #[cfg(test)]
@@ -378,16 +529,19 @@ mod tests {
             })
             .await
             .unwrap();
-        store
-            .upsert_ratio(&Ratio {
-                company_id: id,
-                period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
-                metric: "pe".into(),
-                value: 28.5,
-                computed_at: now,
-            })
-            .await
-            .unwrap();
+        for (metric, value) in [("pe", 28.5_f64), ("roe", 0.15), ("debt_to_equity", 0.5), ("net_margin", 0.10)] {
+            store
+                .upsert_ratio(&Ratio {
+                    company_id: id,
+                    period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                    period_type: PeriodType::Annual,
+                    metric: metric.into(),
+                    value,
+                    computed_at: now,
+                })
+                .await
+                .unwrap();
+        }
         store
             .insert_news(&NewsItem {
                 company_id: id,
@@ -470,6 +624,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn graham_endpoint_uses_configured_min_revenue() {
+        use crate::store::Policy;
+        let (store, _dir) = crate::testutil::temp_store().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let id = store
+            .insert_company(&NewCompany {
+                cik: "0000320193".into(),
+                ticker: "AAPL".into(),
+                name: "Apple Inc.".into(),
+                exchange: None,
+                sector: None,
+                industry: None,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_fact(&FinancialFact {
+                company_id: id,
+                statement: StatementKind::Income,
+                line_item: "Revenue".into(),
+                period_type: PeriodType::Annual,
+                period_end: NaiveDate::from_ymd_opt(2023, 12, 31).unwrap(),
+                value: 1.0,
+                source: "edgar".into(),
+                fetched_at: now,
+            })
+            .await
+            .unwrap();
+        let uid = store.create_user("u@e.com", &auth::hash_password("pw")).await.unwrap();
+        let (token, token_hash) = auth::new_token();
+        store.create_session(&token_hash, uid, Utc::now() + Duration::days(1)).await.unwrap();
+        // A min-revenue below the seeded 1.0 revenue makes "Adequate size" pass;
+        // the default (500M) would fail it. Passing proves the endpoint reads the
+        // configured policy rather than graham::DEFAULT_MIN_REVENUE.
+        let store = Arc::new(store.with_policy(Policy { graham_min_revenue: 0.5 }));
+        let (status, body) = get(store, &token, "/api/companies/AAPL/graham").await;
+        assert_eq!(status, StatusCode::OK);
+        let size = body["criteria"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "Adequate size")
+            .unwrap();
+        assert_eq!(size["passed"], true);
+    }
+
+    #[tokio::test]
     async fn requires_a_bearer_token() {
         let (store, _d, _t) = seeded().await;
         // missing token
@@ -516,9 +717,49 @@ mod tests {
 
         let (status, json) = get(store.clone(), &t, "/api/screen?defensive=true&min_score=1").await;
         assert_eq!(status, StatusCode::OK);
-        let rows = json.as_array().unwrap();
+        assert_eq!(json["total"], 1);
+        let rows = json["rows"].as_array().unwrap();
         assert_eq!(rows[0]["company"]["ticker"], "AAPL");
         assert_eq!(rows[0]["score"]["score"], 6);
+
+        // paginated companies directory: AAPL present with its score; search works
+        let (status, json) = get(store.clone(), &t, "/api/companies?limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+        assert_eq!(json["rows"][0]["score"]["score"], 6);
+        let (_s, json) = get(store.clone(), &t, "/api/companies?q=zzz").await;
+        assert_eq!(json["total"], 0);
+        // net-net filter (none qualify) returns an empty page
+        let (_s, json) = get(store.clone(), &t, "/api/screen?net_net=true").await;
+        assert_eq!(json["total"], 0);
+
+        // ratio filters: pe=28.5, roe=0.15, debt_to_equity=0.5, net_margin=0.10
+        // max_pe=30 should include AAPL; max_pe=20 should exclude
+        let (_s, json) = get(store.clone(), &t, "/api/screen?max_pe=30").await;
+        assert_eq!(json["total"], 1);
+        let (_s, json) = get(store.clone(), &t, "/api/screen?max_pe=20").await;
+        assert_eq!(json["total"], 0);
+        // min_pe=28 should include; min_pe=29 should exclude
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_pe=28").await;
+        assert_eq!(json["total"], 1);
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_pe=29").await;
+        assert_eq!(json["total"], 0);
+        // min_roe=0.10 includes; min_roe=0.20 excludes
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_roe=0.10").await;
+        assert_eq!(json["total"], 1);
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_roe=0.20").await;
+        assert_eq!(json["total"], 0);
+        // max_de=0.6 includes; max_de=0.3 excludes
+        let (_s, json) = get(store.clone(), &t, "/api/screen?max_de=0.6").await;
+        assert_eq!(json["total"], 1);
+        let (_s, json) = get(store.clone(), &t, "/api/screen?max_de=0.3").await;
+        assert_eq!(json["total"], 0);
+        // min_margin=0.05 includes; min_margin=0.20 excludes
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_margin=0.05").await;
+        assert_eq!(json["total"], 1);
+        let (_s, json) = get(store.clone(), &t, "/api/screen?min_margin=0.20").await;
+        assert_eq!(json["total"], 0);
 
         // aggregate summary
         let (status, json) = get(store, &t, "/api/companies/AAPL/summary").await;
@@ -526,6 +767,34 @@ mod tests {
         assert_eq!(json["company"]["ticker"], "AAPL");
         assert_eq!(json["graham"]["score"], 6);
         assert!(json["ratios"].is_array());
+    }
+
+    #[tokio::test]
+    async fn companies_and_screen_sort_params() {
+        let (store, _d, t) = seeded().await;
+        // sort_by=score&sort_dir=desc: AAPL has score 6, it should appear in the results
+        let (_s, json) = get(store.clone(), &t, "/api/companies?sort_by=score&sort_dir=desc&limit=10").await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+        // unknown sort_by falls back gracefully (no 500)
+        let (status, _) = get(store.clone(), &t, "/api/companies?sort_by=bogus&sort_dir=desc&limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        // screen with sort_by=ticker asc
+        let (status, json) = get(store.clone(), &t, "/api/screen?sort_by=ticker&sort_dir=asc").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+    }
+
+    #[tokio::test]
+    async fn enum_fields_serialize_lowercase() {
+        // The frontend filters facts/ratios on lowercase period_type/statement,
+        // so the JSON must be lowercase (not the PascalCase enum variant names).
+        let (store, _d, t) = seeded().await;
+        let (_s, facts) = get(store.clone(), &t, "/api/companies/AAPL/facts").await;
+        assert_eq!(facts[0]["period_type"], "annual");
+        assert_eq!(facts[0]["statement"], "income");
+        let (_s, ratios) = get(store, &t, "/api/companies/AAPL/ratios").await;
+        assert_eq!(ratios[0]["period_type"], "annual");
     }
 
     #[tokio::test]
@@ -648,6 +917,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn peers_and_notes_endpoints() {
+        let (store, _d, t) = seeded().await;
+        // Give AAPL a sector so get_peers runs the SQL path.
+        let aapl = store.get_company("AAPL").await.unwrap().unwrap();
+        store
+            .update_company_profile(
+                aapl.id,
+                &crate::domain::CompanyProfile {
+                    sector: Some("Technology".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // Insert a peer in the same sector.
+        store
+            .insert_company(&crate::domain::NewCompany {
+                cik: "0000789019".into(),
+                ticker: "MSFT".into(),
+                name: "Microsoft Corp.".into(),
+                exchange: Some("NASDAQ".into()),
+                sector: Some("Technology".into()),
+                industry: None,
+            })
+            .await
+            .unwrap();
+
+        // peers: AAPL now has sector=Technology; MSFT is in same sector
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/peers").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json.as_array().unwrap()[0]["company"]["ticker"], "MSFT");
+
+        // note: none yet
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/note").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["body"], Value::Null);
+
+        // save note
+        let body = json!({"body": "interesting stock"});
+        let (status, _) = send(store.clone(), req("PUT", "/api/companies/AAPL/note", Some(&t), Some(body))).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // retrieve saved note
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/note").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["body"], "interesting stock");
+
+        // delete note
+        let (status, _) = send(store.clone(), req("DELETE", "/api/companies/AAPL/note", Some(&t), None)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // gone after delete
+        let (_, json) = get(store.clone(), &t, "/api/companies/AAPL/note").await;
+        assert_eq!(json["body"], Value::Null);
+
+        // screen with sector filter (AAPL now has sector=Technology)
+        let (status, json) = get(store.clone(), &t, "/api/screen?sector=Technology").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["total"], 1);
+        // screen with a different sector -> empty
+        let (status, json) = get(store.clone(), &t, "/api/screen?sector=Healthcare").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["total"], 0);
+    }
+
+    #[tokio::test]
     async fn watchlist_add_list_remove() {
         let (store, _d, t) = seeded().await;
         // add
@@ -666,5 +1001,35 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_s, json) = get(store, &t, "/api/watchlist").await;
         assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sectors_endpoint() {
+        let (store, _d, t) = seeded().await;
+        // AAPL has no sector yet — sectors endpoint should return empty
+        let (status, json) = get(store.clone(), &t, "/api/sectors").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json.as_array().unwrap().is_empty());
+
+        // Give AAPL a sector and re-check
+        let aapl = store.get_company("AAPL").await.unwrap().unwrap();
+        store
+            .update_company_profile(
+                aapl.id,
+                &crate::domain::CompanyProfile {
+                    sector: Some("Technology".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (status, json) = get(store.clone(), &t, "/api/sectors").await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = json.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["sector"], "Technology");
+        assert_eq!(rows[0]["company_count"], 1);
+        assert!(rows[0]["avg_score"].as_f64().unwrap() > 0.0);
+        assert_eq!(rows[0]["top_ticker"], "AAPL");
     }
 }

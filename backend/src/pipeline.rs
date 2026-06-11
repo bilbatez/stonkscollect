@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 
 use crate::collectors::edgar::CompanyRef;
-use crate::collectors::{FactSource, NewsSource, PriceSource, SourceTarget};
-use crate::domain::{Company, FinancialFact, GrahamScore, NewCompany};
+use crate::collectors::{FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget};
+use crate::domain::{Company, CompanyProfile, FinancialFact, GrahamScore, NewCompany};
 use crate::{graham, ratios};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
@@ -66,7 +66,9 @@ pub async fn collect_prices_for(
     for s in sources {
         match s.fetch_prices(company_id, target).await {
             Ok(p) => all.extend(p),
-            Err(e) => tracing::warn!("price source {} failed: {e}", s.name()),
+            // Best-effort: a missing/delisted ticker (e.g. Yahoo 404) is expected
+            // across a 10k-company run, so log at debug, not warn.
+            Err(e) => tracing::debug!("price source {} failed: {e}", s.name()),
         }
     }
     store.save_prices(&all).await?;
@@ -85,7 +87,7 @@ pub async fn collect_news_for(
     for s in sources {
         match s.fetch_news(company_id, target, now).await {
             Ok(n) => all.extend(n),
-            Err(e) => tracing::warn!("news source {} failed: {e}", s.name()),
+            Err(e) => tracing::debug!("news source {} failed: {e}", s.name()),
         }
     }
     store.save_news(&all).await?;
@@ -180,6 +182,85 @@ pub async fn recompute_ratios_all(
     Ok(s)
 }
 
+/// Create a user with `email`/`password` if absent (idempotent). Returns `true`
+/// when a new user was created, `false` if one already existed. Used to seed a
+/// dev login; never call with a weak password outside development.
+pub async fn ensure_user(store: &Store, email: &str, password: &str) -> Result<bool, StoreError> {
+    if store.user_credentials(email).await?.is_some() {
+        return Ok(false);
+    }
+    store.create_user(email, &crate::auth::hash_password(password)).await?;
+    Ok(true)
+}
+
+/// Enrich one company's profile from all profile sources (best-effort), merging
+/// in source order (later non-`None` fields win) and persisting via COALESCE.
+pub async fn enrich_company(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    company: &Company,
+) -> Result<(), StoreError> {
+    let target = target_of(company);
+    let mut profile = CompanyProfile::default();
+    for src in profile_sources {
+        match src.fetch_profile(&target).await {
+            Ok(p) => profile = profile.overlay(p),
+            Err(e) => tracing::debug!("profile source {} failed for {}: {e}", src.name(), company.ticker),
+        }
+    }
+    store.update_company_profile(company.id, &profile).await
+}
+
+/// Enrich every company's profile (parallel, best-effort).
+pub async fn enrich_all(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    concurrency: usize,
+    progress: &dyn CollectProgress,
+) -> Result<CollectSummary, StoreError> {
+    let companies = store.all_companies().await?;
+    let total = companies.len();
+    progress.start(total);
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+
+    let outcomes = futures::stream::iter(companies)
+        .map(|company| {
+            let counter = &counter;
+            async move {
+                let ok = enrich_company(store, profile_sources, &company).await.is_ok();
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                progress.company_done(done, total, &company.ticker, ok);
+                ok
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut s = CollectSummary::default();
+    for ok in outcomes {
+        s.companies += usize::from(ok);
+        s.failed += usize::from(!ok);
+    }
+    Ok(s)
+}
+
+/// Enrich an explicit ticker list (unknown tickers skipped). Returns the count enriched.
+pub async fn enrich_tickers(
+    store: &Store,
+    profile_sources: &[&dyn ProfileSource],
+    tickers: &[String],
+) -> Result<usize, StoreError> {
+    let mut n = 0;
+    for ticker in tickers {
+        if let Some(c) = store.get_company(ticker).await? {
+            let _ = enrich_company(store, profile_sources, &c).await;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// Upsert a batch of company identities (idempotent). Returns the count.
 pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
     let companies: Vec<NewCompany> = refs
@@ -194,6 +275,22 @@ pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<u
         })
         .collect();
     store.upsert_companies(&companies).await
+}
+
+/// Progress sink for a bulk collection pass. Implementations must be `Sync`
+/// because `company_done` is called from the concurrent collection stream.
+pub trait CollectProgress: Sync {
+    /// Called once before any company is processed, with the total to process.
+    fn start(&self, total: usize);
+    /// Called as each company finishes (`done` is 1-based, in completion order).
+    fn company_done(&self, done: usize, total: usize, ticker: &str, ok: bool);
+}
+
+/// A [`CollectProgress`] that reports nothing (for callers that don't care).
+pub struct NoProgress;
+impl CollectProgress for NoProgress {
+    fn start(&self, _total: usize) {}
+    fn company_done(&self, _done: usize, _total: usize, _ticker: &str, _ok: bool) {}
 }
 
 /// Aggregate totals from collecting many companies.
@@ -218,33 +315,51 @@ pub struct CollectSummary {
 ///
 /// Up to `concurrency` companies are fetched at once; politeness is enforced by
 /// the shared rate limiter in the HTTP client, not a per-company sleep.
+#[allow(clippy::too_many_arguments)]
 pub async fn collect_all(
     store: &Store,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
+    news_sources: &[&dyn NewsSource],
     threshold: f64,
     now: DateTime<Utc>,
     concurrency: usize,
     cutoff: Option<DateTime<Utc>>,
     min_revenue: f64,
+    progress: &dyn CollectProgress,
 ) -> Result<CollectSummary, StoreError> {
     let companies = match cutoff {
         Some(c) => store.companies_due(c).await?,
         None => store.all_companies().await?,
     };
 
+    let total = companies.len();
+    progress.start(total);
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+
     let outcomes = futures::stream::iter(companies)
-        .map(|company| async move {
-            let target = target_of(&company);
-            match ingest(store, sources, company.id, &target, threshold, now).await {
-                Ok(report) => {
-                    // Best-effort timestamp + per-company metric recompute.
-                    let _ = store.mark_collected(company.id, now).await;
-                    let _ = recompute_metrics(store, company.id, min_revenue, now).await;
-                    Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
-                }
-                Err(e) => {
-                    tracing::warn!("collect failed for {}: {e}", company.ticker);
-                    Err(())
+        .map(|company| {
+            let counter = &counter;
+            async move {
+                let target = target_of(&company);
+                let result = ingest(store, sources, company.id, &target, threshold, now).await;
+                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                match result {
+                    Ok(report) => {
+                        // Best-effort: prices first (so Graham sees a price), then
+                        // news, timestamp + per-company metric recompute.
+                        let _ = collect_prices_for(store, price_sources, company.id, &target).await;
+                        let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
+                        let _ = store.mark_collected(company.id, now).await;
+                        let _ = recompute_metrics(store, company.id, min_revenue, now).await;
+                        progress.company_done(done, total, &company.ticker, true);
+                        Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
+                    }
+                    Err(e) => {
+                        tracing::warn!("collect failed for {}: {e}", company.ticker);
+                        progress.company_done(done, total, &company.ticker, false);
+                        Err(())
+                    }
                 }
             }
         })
@@ -269,9 +384,12 @@ pub async fn collect_all(
 
 /// Run [`ingest`] for each known ticker. Unknown tickers (not yet bootstrapped)
 /// are skipped. Returns the per-ticker reports.
+#[allow(clippy::too_many_arguments)]
 pub async fn collect_tickers(
     store: &Store,
     sources: &[&dyn FactSource],
+    price_sources: &[&dyn PriceSource],
+    news_sources: &[&dyn NewsSource],
     tickers: &[String],
     threshold: f64,
     now: DateTime<Utc>,
@@ -288,6 +406,8 @@ pub async fn collect_tickers(
         };
         match ingest(store, sources, company.id, &target, threshold, now).await {
             Ok(report) => {
+                let _ = collect_prices_for(store, price_sources, company.id, &target).await;
+                let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
                 let _ = recompute_metrics(store, company.id, min_revenue, now).await;
                 outcomes.push((ticker.clone(), report));
             }
@@ -523,7 +643,7 @@ mod tests {
 
     #[test]
     fn fact_sources_expose_stable_names() {
-        assert_eq!(EdgarCollector::new(FakeHttp::new("")).name(), "edgar");
+        assert_eq!(FactSource::name(&EdgarCollector::new(FakeHttp::new(""))), "edgar");
         assert_eq!(
             FactSource::name(&FmpCollector::new(FakeHttp::new(""), "K".into())),
             "fmp"
@@ -569,6 +689,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ensure_user_is_idempotent_and_sets_password() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        assert!(ensure_user(&store, "admin", "admin").await.unwrap()); // created
+        assert!(!ensure_user(&store, "admin", "admin").await.unwrap()); // already exists
+        let (_, hash) = store.user_credentials("admin").await.unwrap().unwrap();
+        assert!(crate::auth::verify_password(&hash, "admin"));
+    }
+
+    #[tokio::test]
     async fn collect_all_iterates_every_company() {
         let (store, _id, _d) = store_with_company().await; // inserts AAPL (cik "1")
         bootstrap_companies(
@@ -583,7 +712,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
+        let summary = collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap();
 
@@ -607,10 +736,10 @@ mod tests {
         let cutoff = Some(now - ChronoDuration::hours(1));
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
+        let s1 = collect_all(&store, &sources, &[], &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, 0.05, now, 2, cutoff, 500_000_000.0).await.unwrap();
+        let s2 = collect_all(&store, &sources, &[], &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -619,11 +748,210 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, 0.05, fixed_now(), 2, None, 500_000_000.0)
+        let summary = collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);
         assert_eq!(summary.failed, 1);
+    }
+
+    #[derive(Default)]
+    struct CountProgress {
+        start_calls: std::sync::atomic::AtomicUsize,
+        started_total: std::sync::atomic::AtomicUsize,
+        done: std::sync::atomic::AtomicUsize,
+    }
+    impl CollectProgress for CountProgress {
+        fn start(&self, total: usize) {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.start_calls.fetch_add(1, SeqCst);
+            self.started_total.store(total, SeqCst);
+        }
+        fn company_done(&self, _done: usize, _total: usize, _ticker: &str, _ok: bool) {
+            self.done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_all_reports_progress() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[
+                CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() },
+                CompanyRef { cik: "320193".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+            ],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        let p = CountProgress::default();
+
+        let summary =
+            collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &p)
+                .await
+                .unwrap();
+
+        assert_eq!(p.start_calls.load(SeqCst), 1); // start fired once
+        assert_eq!(p.started_total.load(SeqCst), 2); // with the full count
+        assert_eq!(p.done.load(SeqCst), 2); // one per company finished
+        assert_eq!(summary.companies, 2);
+    }
+
+    /// A price source returning one valid bar for the requested company.
+    struct GoodPriceSource;
+    #[async_trait(?Send)]
+    impl PriceSource for GoodPriceSource {
+        fn name(&self) -> &'static str {
+            "good"
+        }
+        async fn fetch_prices(
+            &self,
+            id: i64,
+            _t: &SourceTarget,
+        ) -> Result<Vec<PricePoint>, CollectorError> {
+            Ok(vec![PricePoint {
+                company_id: id,
+                date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
+                close: 50.0,
+                volume: None,
+                source: "good".into(),
+            }])
+        }
+    }
+
+    /// A news source returning one item for the requested company.
+    struct GoodNewsSource;
+    #[async_trait(?Send)]
+    impl NewsSource for GoodNewsSource {
+        fn name(&self) -> &'static str {
+            "goodnews"
+        }
+        async fn fetch_news(
+            &self,
+            id: i64,
+            _t: &SourceTarget,
+            now: DateTime<Utc>,
+        ) -> Result<Vec<NewsItem>, CollectorError> {
+            Ok(vec![NewsItem {
+                company_id: id,
+                title: "Headline".into(),
+                description: None,
+                url: "http://news".into(),
+                source: "goodnews".into(),
+                published_at: now,
+                dedup_hash: "gn1".into(),
+            }])
+        }
+    }
+
+    /// A profile source returning fixed metadata.
+    struct FakeProfile;
+    #[async_trait(?Send)]
+    impl ProfileSource for FakeProfile {
+        fn name(&self) -> &'static str {
+            "fakeprofile"
+        }
+        async fn fetch_profile(&self, _t: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+            Ok(CompanyProfile {
+                sector: Some("Tech".into()),
+                industry: Some("Software".into()),
+                website: Some("https://x.com".into()),
+                description: Some("makes software".into()),
+                exchange: None,
+            })
+        }
+    }
+
+    /// A profile source that always errors (exercises the best-effort skip).
+    struct FailingProfile;
+    #[async_trait(?Send)]
+    impl ProfileSource for FailingProfile {
+        fn name(&self) -> &'static str {
+            "failprofile"
+        }
+        async fn fetch_profile(&self, _t: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+            Err(CollectorError::Http("boom".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_company_merges_sources_and_persists() {
+        let (store, id, _d) = store_with_company().await;
+        let company = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(ProfileSource::name(&FakeProfile), "fakeprofile");
+        assert_eq!(ProfileSource::name(&FailingProfile), "failprofile");
+        // a failing source is skipped; the good one fills the profile
+        let sources: [&dyn ProfileSource; 2] = [&FailingProfile, &FakeProfile];
+        enrich_company(&store, &sources, &company).await.unwrap();
+        let c = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(c.id, id);
+        assert_eq!(c.sector.as_deref(), Some("Tech"));
+        assert_eq!(c.industry.as_deref(), Some("Software"));
+        assert_eq!(c.website.as_deref(), Some("https://x.com"));
+        assert!(c.description.as_deref().unwrap().contains("software"));
+    }
+
+    #[tokio::test]
+    async fn enrich_all_and_tickers_cover_every_company() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[
+                CompanyRef { cik: "1".into(), ticker: "AAPL".into(), name: "Apple".into() },
+                CompanyRef { cik: "2".into(), ticker: "MSFT".into(), name: "Microsoft".into() },
+            ],
+        )
+        .await
+        .unwrap();
+        let sources: [&dyn ProfileSource; 1] = [&FakeProfile];
+        let s = enrich_all(&store, &sources, 2, &NoProgress).await.unwrap();
+        assert_eq!(s.companies, 2);
+        assert_eq!(s.failed, 0);
+        assert_eq!(store.get_company("MSFT").await.unwrap().unwrap().sector.as_deref(), Some("Tech"));
+
+        // ticker-list variant: known enriched, unknown skipped
+        let n = enrich_tickers(&store, &sources, &["AAPL".to_string(), "NOPE".to_string()]).await.unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn collect_collects_prices_so_graham_gets_valuation() {
+        let (store, _id, _d) = store_with_company().await;
+        bootstrap_companies(
+            &store,
+            &[CompanyRef { cik: "320193".into(), ticker: "AAPL".into(), name: "Apple".into() }],
+        )
+        .await
+        .unwrap();
+        let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        let price_sources: [&dyn PriceSource; 1] = [&GoodPriceSource];
+        let news_sources: [&dyn NewsSource; 1] = [&GoodNewsSource];
+        assert_eq!(GoodPriceSource.name(), "good");
+        assert_eq!(GoodNewsSource.name(), "goodnews");
+
+        collect_tickers(&store, &sources, &price_sources, &news_sources, &["AAPL".to_string()], 0.05, fixed_now(), 500_000_000.0)
+            .await
+            .unwrap();
+
+        let id = store.get_company("AAPL").await.unwrap().unwrap().id;
+        let price = store.latest_price(id).await.unwrap();
+        assert!(price.is_some(), "price persisted by the collect path");
+        assert!(!store.get_news(id).await.unwrap().is_empty(), "news collected by the collect path");
+        // and that price reaches Graham: the P/E criterion is now computed
+        // (price / EPS) instead of being reported as "insufficient data".
+        let facts = store.get_facts(id).await.unwrap();
+        let a = graham::assess(&facts, price, 500_000_000.0);
+        let pe = a.criteria.iter().find(|c| c.name == "P/E <= 15").unwrap();
+        assert_ne!(pe.detail, "insufficient data", "P/E computed from the collected price");
+        // a Graham score row was persisted for the company
+        assert!(store.get_graham_score(id).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -633,6 +961,8 @@ mod tests {
         let outcomes = collect_tickers(
             &store,
             &sources,
+            &[],
+            &[],
             &["AAPL".to_string()],
             0.05,
             fixed_now(),
@@ -658,6 +988,8 @@ mod tests {
         let outcomes = collect_tickers(
             &store,
             &sources,
+            &[],
+            &[],
             &["AAPL".to_string(), "UNKNOWN".to_string()],
             0.05,
             fixed_now(),
@@ -728,7 +1060,7 @@ mod tests {
             .unwrap();
         let n = recompute_ratios(&store, id, fixed_now()).await.unwrap();
         assert_eq!(n, 1); // net_margin
-        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -795,6 +1127,6 @@ mod tests {
             .unwrap();
         let s = recompute_ratios_all(&store, fixed_now()).await.unwrap();
         assert_eq!(s.companies, 1);
-        assert_eq!(store.get_ratios(id).await.unwrap().len(), 1);
+        assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
 }

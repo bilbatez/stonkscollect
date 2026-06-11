@@ -1,13 +1,19 @@
 import type {
   Company,
   CompanyData,
+  CompanyRow,
   Discrepancy,
   FinancialFact,
   GrahamAssessment,
   NewsItem,
+  Note,
+  Page,
+  PeerRow,
   PricePoint,
   Ratio,
+  ScreenFilters,
   ScreenRow,
+  SectorStats,
 } from './types'
 
 const TOKEN_KEY = 'stonks_token'
@@ -35,7 +41,7 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
 async function getJson<T>(path: string): Promise<T> {
   const res = await authedFetch(path)
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`)
+    throw new Error(`request failed: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
 }
@@ -47,9 +53,23 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    throw new Error(`request failed: ${res.status}`)
+    throw new Error(`request failed: ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
+}
+
+/** Send a body-bearing or empty mutation and throw on a non-ok response.
+ *  Mutations return no JSON, but a failed write must not look like success. */
+async function mutate(method: string, path: string, body?: unknown): Promise<void> {
+  const init: RequestInit = { method }
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  const res = await authedFetch(path, init)
+  if (!res.ok) {
+    throw new Error(`request failed: ${res.status} ${res.statusText}`)
+  }
 }
 
 // --- Auth ---
@@ -71,7 +91,7 @@ export async function login(email: string, password: string): Promise<string> {
 }
 
 export async function logout(): Promise<void> {
-  await authedFetch('/auth/logout', { method: 'POST' })
+  await mutate('POST', '/auth/logout')
   clearToken()
 }
 
@@ -82,15 +102,11 @@ export function getWatchlist(): Promise<Company[]> {
 }
 
 export async function addWatch(ticker: string): Promise<void> {
-  await authedFetch('/api/watchlist', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ ticker }),
-  })
+  await mutate('POST', '/api/watchlist', { ticker })
 }
 
 export async function removeWatch(ticker: string): Promise<void> {
-  await authedFetch(`/api/watchlist/${ticker}`, { method: 'DELETE' })
+  await mutate('DELETE', `/api/watchlist/${encodeURIComponent(ticker)}`)
 }
 
 // --- Company data ---
@@ -98,19 +114,83 @@ export async function removeWatch(ticker: string): Promise<void> {
 /** Fetch a company and all of its records in parallel. */
 export async function loadCompanyData(ticker: string): Promise<CompanyData> {
   const base = `/api/companies/${ticker}`
-  const [company, prices, facts, ratios, news, discrepancies, graham] = await Promise.all([
-    getJson<Company>(base),
-    getJson<PricePoint[]>(`${base}/prices`),
-    getJson<FinancialFact[]>(`${base}/facts`),
-    getJson<Ratio[]>(`${base}/ratios`),
-    getJson<NewsItem[]>(`${base}/news`),
-    getJson<Discrepancy[]>(`${base}/discrepancies`),
-    getJson<GrahamAssessment>(`${base}/graham`),
-  ])
-  return { company, prices, facts, ratios, news, discrepancies, graham }
+  const [company, prices, facts, ratios, news, discrepancies, graham, peers, note] =
+    await Promise.all([
+      getJson<Company>(base),
+      getJson<PricePoint[]>(`${base}/prices`),
+      getJson<FinancialFact[]>(`${base}/facts`),
+      getJson<Ratio[]>(`${base}/ratios`),
+      getJson<NewsItem[]>(`${base}/news`),
+      getJson<Discrepancy[]>(`${base}/discrepancies`),
+      getJson<GrahamAssessment>(`${base}/graham`),
+      getJson<PeerRow[]>(`${base}/peers`),
+      getJson<Note>(`${base}/note`),
+    ])
+  return { company, prices, facts, ratios, news, discrepancies, graham, peers, note }
 }
 
-/** Screen companies by Graham score. */
-export function screen(defensive: boolean, minScore = 0): Promise<ScreenRow[]> {
-  return getJson<ScreenRow[]>(`/api/screen?defensive=${defensive}&min_score=${minScore}`)
+/** Paginated, optionally-searched directory of all companies + their scores. */
+export function listCompanies(
+  q: string,
+  sortBy: string | null,
+  sortDir: 'asc' | 'desc',
+  limit: number,
+  offset: number,
+): Promise<Page<CompanyRow>> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (q !== '') {
+    params.set('q', q)
+  }
+  if (sortBy !== null) {
+    params.set('sort_by', sortBy)
+    params.set('sort_dir', sortDir)
+  }
+  return getJson<Page<CompanyRow>>(`/api/companies?${params.toString()}`)
+}
+
+/** Screen companies by Graham score, ranked, with optional filters + paging. */
+export function screen(f: ScreenFilters): Promise<Page<ScreenRow>> {
+  const params = new URLSearchParams({
+    defensive: String(f.defensive ?? false),
+    net_net: String(f.net_net ?? false),
+    min_score: String(f.min_score ?? 0),
+    limit: String(f.limit ?? 50),
+    offset: String(f.offset ?? 0),
+  })
+  if (f.sort_by !== undefined) {
+    params.set('sort_by', f.sort_by)
+    params.set('sort_dir', f.sort_dir ?? 'asc')
+  }
+  if (f.sector !== undefined && f.sector !== '') params.set('sector', f.sector)
+  if (f.min_pe !== undefined) params.set('min_pe', String(f.min_pe))
+  if (f.max_pe !== undefined) params.set('max_pe', String(f.max_pe))
+  if (f.min_roe !== undefined) params.set('min_roe', String(f.min_roe))
+  if (f.max_de !== undefined) params.set('max_de', String(f.max_de))
+  if (f.min_margin !== undefined) params.set('min_margin', String(f.min_margin))
+  return getJson<Page<ScreenRow>>(`/api/screen?${params.toString()}`)
+}
+
+/** Peers in the same sector, sorted by Graham score. */
+export function getPeers(ticker: string): Promise<PeerRow[]> {
+  return getJson<PeerRow[]>(`/api/companies/${ticker}/peers`)
+}
+
+/** Get the current user's note for a company. */
+export function getNote(ticker: string): Promise<Note> {
+  return getJson<Note>(`/api/companies/${ticker}/note`)
+}
+
+/** Save (upsert) a note for a company. */
+export async function saveNote(ticker: string, body: string): Promise<void> {
+  await mutate('PUT', `/api/companies/${encodeURIComponent(ticker)}/note`, { body })
+}
+
+/** Delete the note for a company. */
+export async function deleteNote(ticker: string): Promise<void> {
+  await mutate('DELETE', `/api/companies/${encodeURIComponent(ticker)}/note`)
+}
+
+/** Sector-level aggregates for the overview page. */
+export function getSectors(): Promise<SectorStats[]> {
+  return getJson<SectorStats[]>('/api/sectors')
 }
