@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, test, vi } from 'vitest'
-import { DataGrid } from './DataGrid'
-import { applyReorder, applyUpdater, idOf, makeDragEndHandler, type GridColumn } from './dataGridUtils'
+import { DataGrid } from './shared/DataGrid'
+import { applyReorder, applyUpdater, idOf, makeDragEndHandler, type GridColumn } from './shared/dataGridUtils'
 import type { DragEndEvent } from '@dnd-kit/core'
 
 interface Row {

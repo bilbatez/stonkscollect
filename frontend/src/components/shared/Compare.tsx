@@ -1,5 +1,5 @@
 import { Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material'
-import { formatMetric, metricLabel } from '../format'
+import { formatMetric, metricLabel } from '../../format'
 
 export interface CompareRow {
   ticker: string

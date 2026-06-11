@@ -3,6 +3,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent, MarkAreaComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { bindChartResize } from './chartResize'
 import { grahamChartData } from '../chartData'
 import { CHART_HEIGHT } from '../constants'
 import { formatCurrency } from '../format'
@@ -57,12 +58,7 @@ export default function GrahamChart({
         },
       ],
     })
-    const onResize = () => chart.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      chart.dispose()
-    }
+    return bindChartResize(chart)
   }, [d])
 
   if (!d) return null

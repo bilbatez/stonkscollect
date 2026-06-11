@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts'
+import { bindChartResize } from './chartResize'
 import { PRICE_CHART_HEIGHT } from '../constants'
 import type { PricePoint } from '../types'
 
@@ -47,12 +48,7 @@ export default function PriceChart({ prices }: { prices: PricePoint[] }) {
       series: [series],
     })
 
-    const onResize = () => chart.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      chart.dispose()
-    }
+    return bindChartResize(chart)
   }, [prices])
 
   return <div role="img" aria-label="price chart" ref={ref} style={{ height: PRICE_CHART_HEIGHT }} />

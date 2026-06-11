@@ -1,6 +1,6 @@
 import { Chip, Link, List, ListItem, Stack, Typography } from '@mui/material'
-import { formatDateTime } from '../format'
-import type { NewsItem } from '../types'
+import { formatDateTime } from '../../format'
+import type { NewsItem } from '../../types'
 
 /** Newest-first list of headlines (title + description only). */
 export function NewsFeed({ news }: { news: NewsItem[] }) {

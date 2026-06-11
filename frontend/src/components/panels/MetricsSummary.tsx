@@ -1,6 +1,6 @@
 import { Box, Card, CardContent, Typography } from '@mui/material'
-import { formatMetric, formatNum, formatPct } from '../format'
-import type { GrahamAssessment, Ratio } from '../types'
+import { formatMetric, formatNum, formatPct } from '../../format'
+import type { GrahamAssessment, Ratio } from '../../types'
 
 interface MetricCard {
   label: string

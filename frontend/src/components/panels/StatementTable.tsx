@@ -12,9 +12,9 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { calcGrowth, downloadCsv, formatCurrency, formatPeriodDate, statementItemLabel, statementLabel } from '../format'
-import type { FinancialFact, Period } from '../types'
-import { PeriodToggle } from './PeriodToggle'
+import { calcGrowth, downloadCsv, formatCurrency, formatPeriodDate, statementItemLabel, statementLabel } from '../../format'
+import type { FinancialFact, Period } from '../../types'
+import { PeriodToggle } from '../shared/PeriodToggle'
 
 const SECTION_ORDER = ['income', 'balance', 'cashflow']
 

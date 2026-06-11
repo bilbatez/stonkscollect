@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CssBaseline, ThemeProvider, createTheme } from '@mui/material'
 import { getToken, logout } from './api'
-import { AuthForm } from './components/AuthForm'
-import { Dashboard } from './components/Dashboard'
-import { type Theme } from './components/ThemeToggle'
+import { AuthForm } from './components/auth/AuthForm'
+import { Dashboard } from './components/layout/Dashboard'
+import { type Theme } from './components/shared/ThemeToggle'
 
 const THEME_KEY = 'stonks_theme'
 

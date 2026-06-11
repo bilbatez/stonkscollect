@@ -2,14 +2,12 @@
 //! deduplicated by normalized headline so the same story from multiple sources
 //! collapses to one row.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
-use crate::collectors::{CollectorError, HttpClient, NewsSource, SourceTarget};
+use crate::collectors::{parse_json, CollectorError, HttpClient, NewsSource, SourceTarget, ISO_DATE};
 use crate::domain::NewsItem;
 
 /// Normalize a headline for dedup: collapse whitespace, lowercase.
@@ -18,10 +16,13 @@ fn normalize(title: &str) -> String {
 }
 
 /// Stable hex hash of a normalized headline, used to dedup across sources.
+///
+/// Uses SHA-256 (first 8 bytes, 16 hex chars) rather than `DefaultHasher`,
+/// whose output is not guaranteed stable across Rust releases — the hash is
+/// persisted, so a toolchain bump must not change it.
 pub fn dedup_hash(title: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    normalize(title).hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let digest = Sha256::digest(normalize(title).as_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Parse an RSS 2.0 feed into news items. Items without a title are skipped;
@@ -72,8 +73,7 @@ fn parse_finnhub(
     json: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<NewsItem>, CollectorError> {
-    let rows: Vec<FinnhubItem> =
-        serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let rows: Vec<FinnhubItem> = parse_json(json)?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -197,8 +197,8 @@ impl<H: HttpClient> NewsSource for FinnhubCollector<H> {
         now: DateTime<Utc>,
     ) -> Result<Vec<NewsItem>, CollectorError> {
         // Last 30 days of company news.
-        let to = now.format("%Y-%m-%d").to_string();
-        let from = (now - Duration::days(30)).format("%Y-%m-%d").to_string();
+        let to = now.format(ISO_DATE).to_string();
+        let from = (now - Duration::days(30)).format(ISO_DATE).to_string();
         self.collect(company_id, &target.symbol, &from, &to, now).await
     }
 }
@@ -217,6 +217,13 @@ mod tests {
     fn dedup_hash_normalizes_case_and_whitespace() {
         assert_eq!(dedup_hash("Apple  Hits   HIGH "), dedup_hash("apple hits high"));
         assert_ne!(dedup_hash("Apple up"), dedup_hash("Apple down"));
+    }
+
+    #[test]
+    fn dedup_hash_is_stable_across_toolchains() {
+        // Pinned SHA-256 (first 8 bytes) of the normalized headline. The hash is
+        // persisted, so this value must never change with a compiler upgrade.
+        assert_eq!(dedup_hash("Apple hits high"), "d1f935de83da529b");
     }
 
     #[test]

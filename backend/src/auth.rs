@@ -5,6 +5,9 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use sha2::{Digest, Sha256};
 
+/// Entropy of a session token before hex-encoding (256 bits).
+const TOKEN_BYTES: usize = 32;
+
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -36,7 +39,7 @@ pub fn hash_token(token: &str) -> String {
 
 /// Generate a fresh session token and its stored hash: `(token, token_hash)`.
 pub fn new_token() -> (String, String) {
-    let raw: [u8; 32] = rand::random();
+    let raw: [u8; TOKEN_BYTES] = rand::random();
     let token = to_hex(&raw);
     let token_hash = hash_token(&token);
     (token, token_hash)

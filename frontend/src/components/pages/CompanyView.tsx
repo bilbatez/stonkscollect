@@ -8,24 +8,24 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../format'
-import { DiscrepancyPanel } from './DiscrepancyPanel'
-import { FreshnessBadge } from './FreshnessBadge'
-import { GrahamScorecard } from './GrahamScorecard'
-import { MetricsSummary } from './MetricsSummary'
-import { NewsFeed } from './NewsFeed'
-import { NotePanel } from './NotePanel'
-import { PeersPanel } from './PeersPanel'
-import { PeriodToggle } from './PeriodToggle'
-import { RatiosPanel } from './RatiosPanel'
-import { Skeleton } from './Skeleton'
-import { StatementTable } from './StatementTable'
-import type { CompanyData, Period } from '../types'
+import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../../format'
+import { DiscrepancyPanel } from '../panels/DiscrepancyPanel'
+import { FreshnessBadge } from '../shared/FreshnessBadge'
+import { GrahamScorecard } from '../panels/GrahamScorecard'
+import { MetricsSummary } from '../panels/MetricsSummary'
+import { NewsFeed } from '../panels/NewsFeed'
+import { NotePanel } from '../panels/NotePanel'
+import { PeersPanel } from '../panels/PeersPanel'
+import { PeriodToggle } from '../shared/PeriodToggle'
+import { RatiosPanel } from '../panels/RatiosPanel'
+import { Skeleton } from '../shared/Skeleton'
+import { StatementTable } from '../panels/StatementTable'
+import type { CompanyData, Period } from '../../types'
 
-const PriceChart = lazy(() => import('../charts/PriceChart'))
-const IncomeChart = lazy(() => import('../charts/IncomeChart'))
-const RatioChart = lazy(() => import('../charts/RatioChart'))
-const GrahamChart = lazy(() => import('../charts/GrahamChart'))
+const PriceChart = lazy(() => import('../../charts/PriceChart'))
+const IncomeChart = lazy(() => import('../../charts/IncomeChart'))
+const RatioChart = lazy(() => import('../../charts/RatioChart'))
+const GrahamChart = lazy(() => import('../../charts/GrahamChart'))
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

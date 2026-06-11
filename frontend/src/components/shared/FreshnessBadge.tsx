@@ -1,5 +1,5 @@
 import { Chip } from '@mui/material'
-import type { Freshness } from '../format'
+import type { Freshness } from '../../format'
 
 const LABELS: Record<Freshness, string> = {
   fresh: 'Fresh',

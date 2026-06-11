@@ -9,8 +9,8 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { formatNum, formatPct } from '../format'
-import type { SectorStats } from '../types'
+import { formatNum, formatPct } from '../../format'
+import type { SectorStats } from '../../types'
 
 export function SectorOverview({
   sectors,

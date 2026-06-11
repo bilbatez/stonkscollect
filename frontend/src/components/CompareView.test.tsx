@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
-import { CompareView } from './CompareView'
+import { CompareView } from './pages/CompareView'
 import * as api from '../api'
 import type { Company, CompanyData, CompanyRow } from '../types'
 

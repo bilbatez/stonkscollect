@@ -6,7 +6,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 
 use crate::collectors::{
-    period_type_from_fp, CollectorError, FactSource, HttpClient, PriceSource, SourceTarget,
+    parse_json, period_type_from_fp, CollectorError, FactSource, HttpClient, PriceSource,
+    SourceTarget,
 };
 use crate::domain::{FinancialFact, PricePoint, Ratio, StatementKind};
 
@@ -122,8 +123,7 @@ struct HistoricalDoc {
 }
 
 fn parse_prices(company_id: i64, json: &str) -> Result<Vec<PricePoint>, CollectorError> {
-    let doc: HistoricalDoc =
-        serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let doc: HistoricalDoc = parse_json(json)?;
     Ok(doc
         .historical
         .into_iter()
@@ -154,8 +154,7 @@ fn parse_income(
     json: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<FinancialFact>, CollectorError> {
-    let rows: Vec<IncomeRow> =
-        serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let rows: Vec<IncomeRow> = parse_json(json)?;
     let mut facts = Vec::new();
     for row in rows {
         let Some(period_type) = period_type_from_fp(&row.period) else {
@@ -195,8 +194,7 @@ fn parse_ratios(
     json: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<Ratio>, CollectorError> {
-    let rows: Vec<RatioRow> =
-        serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let rows: Vec<RatioRow> = parse_json(json)?;
     let mut ratios = Vec::new();
     for row in rows {
         for (metric, value) in [

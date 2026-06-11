@@ -1,14 +1,14 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
-import { AllStocks } from './AllStocks'
-import { AuthForm } from './AuthForm'
-import { Compare } from './Compare'
-import { GrahamScorecard } from './GrahamScorecard'
-import { Screener } from './Screener'
-import { Skeleton } from './Skeleton'
-import { ThemeToggle } from './ThemeToggle'
-import { Watchlist } from './Watchlist'
+import { AllStocks } from './pages/AllStocks'
+import { AuthForm } from './auth/AuthForm'
+import { Compare } from './shared/Compare'
+import { GrahamScorecard } from './panels/GrahamScorecard'
+import { Screener } from './pages/Screener'
+import { Skeleton } from './shared/Skeleton'
+import { ThemeToggle } from './shared/ThemeToggle'
+import { Watchlist } from './layout/Watchlist'
 import * as api from '../api'
 import type { Company, GrahamAssessment, GrahamScore } from '../types'
 
@@ -289,4 +289,16 @@ test('Compare builds a metric matrix and dashes missing cells', () => {
   expect(screen.getByText('—')).toBeInTheDocument()
   rerender(<Compare rows={[]} />)
   expect(screen.getByText(/nothing to compare/i)).toBeInTheDocument()
+})
+
+test('AllStocks surfaces a fetch error', async () => {
+  vi.mocked(api.listCompanies).mockRejectedValue(new Error('network down'))
+  render(<AllStocks onSelect={vi.fn()} onAdd={vi.fn()} />)
+  expect(await screen.findByText('network down')).toBeInTheDocument()
+})
+
+test('Screener surfaces a fetch error', async () => {
+  vi.mocked(api.screen).mockRejectedValue(new Error('screen failed'))
+  render(<Screener onSelect={vi.fn()} />)
+  expect(await screen.findByText('screen failed')).toBeInTheDocument()
 })

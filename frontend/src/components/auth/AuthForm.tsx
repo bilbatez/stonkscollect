@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Alert, Box, Button, Container, Link, Paper, Stack, TextField, Typography } from '@mui/material'
-import { login, signup } from '../api'
+import { login, signup } from '../../api'
 
 /** Login / signup form. Calls `onAuth` with the token on success. */
 export function AuthForm({ onAuth }: { onAuth: (token: string) => void }) {

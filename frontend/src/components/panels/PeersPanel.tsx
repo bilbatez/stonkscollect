@@ -1,6 +1,6 @@
 import { Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material'
-import { formatNum, formatPct } from '../format'
-import type { PeerRow } from '../types'
+import { formatNum, formatPct } from '../../format'
+import type { PeerRow } from '../../types'
 
 export function PeersPanel({ peers }: { peers: PeerRow[] }) {
   if (peers.length === 0) {

@@ -1,7 +1,7 @@
-import { formatCurrency } from '../format'
-import type { Discrepancy } from '../types'
-import { DataGrid } from './DataGrid'
-import type { GridColumn } from './dataGridUtils'
+import { formatCurrency } from '../../format'
+import type { Discrepancy } from '../../types'
+import { DataGrid } from '../shared/DataGrid'
+import type { GridColumn } from '../shared/dataGridUtils'
 
 /** Cross-source mismatches flagged by the reconcile layer (sortable / filterable
  *  / column-reorderable grid). */

@@ -3,6 +3,7 @@ import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { bindChartResize } from './chartResize'
 import { incomeChartData } from '../chartData'
 import { CHART_HEIGHT } from '../constants'
 import { formatCurrency } from '../format'
@@ -25,12 +26,7 @@ export default function IncomeChart({ facts, period = 'annual' }: { facts: Finan
       yAxis: { type: 'value', scale: true },
       series: series.map((s) => ({ type: 'bar', name: s.name, data: s.data })),
     })
-    const onResize = () => chart.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      chart.dispose()
-    }
+    return bindChartResize(chart)
   }, [facts, period])
 
   if (incomeChartData(facts, period).categories.length === 0) return null

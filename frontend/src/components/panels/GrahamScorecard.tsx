@@ -11,8 +11,8 @@ import {
 } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
-import { formatNum, formatPct } from '../format'
-import type { GrahamAssessment } from '../types'
+import { formatNum, formatPct } from '../../format'
+import type { GrahamAssessment } from '../../types'
 
 /** Humanize a criterion's detail; price-dependent checks explain the data gap. */
 function detailText(name: string, detail: string): string {

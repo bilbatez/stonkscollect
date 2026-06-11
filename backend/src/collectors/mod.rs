@@ -10,8 +10,27 @@ pub mod yahoo;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use crate::domain::{CompanyProfile, FinancialFact, NewsItem, PeriodType, PricePoint};
+
+/// `chrono` format string for ISO `YYYY-MM-DD` dates, as emitted by EDGAR and
+/// expected by the Finnhub news query.
+pub(crate) const ISO_DATE: &str = "%Y-%m-%d";
+
+/// Deserialize a JSON body into `T`, mapping any error to
+/// [`CollectorError::Parse`]. Replaces the `from_str(...).map_err(...)` boilerplate
+/// repeated across every collector.
+pub(crate) fn parse_json<T: DeserializeOwned>(json: &str) -> Result<T, CollectorError> {
+    serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))
+}
+
+/// A JSON string field as an owned `String`, or `None` when the value is absent,
+/// not a string, or empty.
+pub(crate) fn nonempty(v: &Value) -> Option<String> {
+    v.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+}
 
 /// Identifies a company across sources: EDGAR keys on CIK, vendors on ticker.
 #[derive(Debug, Clone)]

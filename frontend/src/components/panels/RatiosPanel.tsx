@@ -12,9 +12,9 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { downloadCsv, formatMetric, formatPeriodDate, metricGroup, metricGroups, metricLabel } from '../format'
-import type { Period, Ratio } from '../types'
-import { PeriodToggle } from './PeriodToggle'
+import { downloadCsv, formatMetric, formatPeriodDate, metricGroup, metricGroups, metricLabel } from '../../format'
+import type { Period, Ratio } from '../../types'
+import { PeriodToggle } from '../shared/PeriodToggle'
 
 /** Derived ratios, grouped by category (rows) across periods (date columns),
  *  with an Annual/Quarterly toggle and human labels + formatting. */

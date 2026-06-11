@@ -8,7 +8,8 @@ use serde_json::Value;
 use async_trait::async_trait;
 
 use crate::collectors::{
-    period_type_from_fp, CollectorError, FactSource, HttpClient, ProfileSource, SourceTarget,
+    nonempty, parse_json, period_type_from_fp, CollectorError, FactSource, HttpClient,
+    ProfileSource, SourceTarget, ISO_DATE,
 };
 use crate::domain::{CompanyProfile, FinancialFact, StatementKind};
 
@@ -219,8 +220,7 @@ impl<H: HttpClient> ProfileSource for EdgarCollector<H> {
 /// profile: `sicDescription` → industry, first `exchanges` entry → exchange.
 /// (EDGAR's prose `description`/`website` are usually empty; Yahoo fills those.)
 fn parse_submissions_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
-    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
-    let nonempty = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let doc: Value = parse_json(json)?;
     let exchange = doc["exchanges"]
         .as_array()
         .and_then(|a| a.first())
@@ -237,7 +237,7 @@ fn parse_submissions_profile(json: &str) -> Result<CompanyProfile, CollectorErro
 /// Parse SEC's `company_tickers.json` (an object keyed by index). Entries
 /// missing a CIK or ticker are skipped.
 fn parse_company_tickers(json: &str) -> Result<Vec<CompanyRef>, CollectorError> {
-    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let doc: Value = parse_json(json)?;
     let Some(entries) = doc.as_object() else {
         return Ok(Vec::new());
     };
@@ -281,7 +281,7 @@ fn parse_companyfacts(
     json: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<FinancialFact>, CollectorError> {
-    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let doc: Value = parse_json(json)?;
     // Keep, per (line item, period type, period end), the entry from the
     // latest filing. "filed" is ISO (YYYY-MM-DD) so lexicographic compare works.
     let mut deduped: BTreeMap<(&'static str, &'static str, NaiveDate), (String, FinancialFact)> =
@@ -305,7 +305,7 @@ fn parse_companyfacts(
             let Some(end_str) = entry["end"].as_str() else {
                 continue;
             };
-            let Ok(period_end) = NaiveDate::parse_from_str(end_str, "%Y-%m-%d") else {
+            let Ok(period_end) = NaiveDate::parse_from_str(end_str, ISO_DATE) else {
                 continue;
             };
             let Some(value) = entry["val"].as_f64() else {

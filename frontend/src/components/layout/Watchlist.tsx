@@ -13,7 +13,7 @@ import {
   Typography,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
-import type { Company } from '../types'
+import type { Company } from '../../types'
 
 interface Props {
   items: Company[]

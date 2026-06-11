@@ -1,5 +1,5 @@
 import { ToggleButton, ToggleButtonGroup } from '@mui/material'
-import type { Period } from '../types'
+import type { Period } from '../../types'
 
 /** Annual / Quarterly switch for ratios and statements. */
 export function PeriodToggle({

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Stack, TextField, Typography } from '@mui/material'
-import * as api from '../api'
+import * as api from '../../api'
 
 interface Props {
   ticker: string

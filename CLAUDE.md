@@ -33,14 +33,14 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   src/main.rs       CLI: serve | bootstrap | collect | enrich | seed-admin; NO logic (coverage-excluded)
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
-  src/store.rs      SQLite (WAL) CRUD, range queries, OHLC, Parquet export
-  src/collectors/   edgar (facts+ProfileSource), fmp, yahoo (keyless prices + ProfileSource via assetProfile), news (rss+finnhub), scrape — Fact/Price/News/ProfileSource traits
+  src/store/        SQLite (WAL) persistence, split by aggregate: mod (struct/pool/policy/helpers + tests), companies, records (prices/facts/news/ratios/discrepancies), runs, accounts (users/sessions/watch/notes), analytics (graham/screen/sectors/peers + Parquet export)
+  src/collectors/   mod (shared traits + parse_json/nonempty/ISO_DATE helpers), edgar (facts+ProfileSource), fmp, yahoo (keyless prices + ProfileSource via assetProfile), news (rss+finnhub, sha256 dedup), scrape — Fact/Price/News/ProfileSource traits
   src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
   src/net.rs        RetryPolicy + RateLimiter + LoginThrottle (pure, time-injected)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
   src/ratios.rs     derived ratios (per period_type: annual/quarterly) incl. P/E, P/B, FCF, payout (pure)
   src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
-  src/pipeline.rs   ingest, collect_all/tickers (parallel, incremental, CollectProgress sink), recompute_metrics
+  src/pipeline/     mod (CollectProgress/NoProgress/CollectSummary + tests), collect (per-company + batch collect, recompute_metrics), enrich (profiles/users/bootstrap), orchestrate (collect_all/tickers, ingest, persist_facts)
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
   src/auth.rs       argon2 password hashing + session tokens (pure)
   src/api.rs        axum REST handlers + AuthUser extractor; login brute-force
@@ -48,8 +48,10 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   migrations/       SQL (companies, facts, prices(OHLC), ratios, graham_scores, users…)
   tests/            integration tests + fixtures/
 frontend/         React + Vite SPA
-  src/            api client, format utils, components/ + co-located *.test.tsx
-  src/charts/     echarts canvas wrappers (lazy-loaded, coverage-excluded)
+  src/            api client, format utils, constants, types
+  src/hooks/      reusable hooks (usePaginatedFetch — loading/error/abort)
+  src/components/ grouped: auth/, layout/, pages/, panels/, shared/; *.test.tsx co-located or at components/ root for cross-cutting suites
+  src/charts/     echarts canvas wrappers + bindChartResize (lazy-loaded, coverage-excluded)
   e2e/            Playwright specs (smoke + route-mocked dashboard)
 data/             mounted volume: stonks.db + parquet/ exports + backups (gitignored)
 Makefile          dev tasks

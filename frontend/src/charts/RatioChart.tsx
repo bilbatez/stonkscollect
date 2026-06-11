@@ -3,6 +3,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { bindChartResize } from './chartResize'
 import { ratioChartData } from '../chartData'
 import { CHART_HEIGHT } from '../constants'
 import type { Period, Ratio } from '../types'
@@ -24,12 +25,7 @@ export default function RatioChart({ ratios, period = 'annual' }: { ratios: Rati
       yAxis: { type: 'value', scale: true },
       series: series.map((s) => ({ type: 'line', name: s.name, data: s.data, connectNulls: false })),
     })
-    const onResize = () => chart.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      chart.dispose()
-    }
+    return bindChartResize(chart)
   }, [ratios, period])
 
   if (ratioChartData(ratios, period).categories.length === 0) return null

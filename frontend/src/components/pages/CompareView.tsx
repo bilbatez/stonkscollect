@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Autocomplete, Box, Chip, Stack, TextField, Typography } from '@mui/material'
-import { listCompanies, loadCompanyData } from '../api'
-import type { CompanyData, CompanyRow } from '../types'
-import { Compare, type CompareRow } from './Compare'
-import { Skeleton } from './Skeleton'
+import { listCompanies, loadCompanyData } from '../../api'
+import { COMPARE_AUTOCOMPLETE_LIMIT, SEARCH_DEBOUNCE_MS } from '../../constants'
+import type { CompanyData, CompanyRow } from '../../types'
+import { Compare, type CompareRow } from '../shared/Compare'
+import { Skeleton } from '../shared/Skeleton'
 
 function latestMetrics(d: CompanyData): Record<string, number> {
   const m: Record<string, number> = {}
@@ -32,8 +33,10 @@ export function CompareView() {
       return
     }
     const id = setTimeout(() => {
-      void listCompanies(inputValue, null, 'asc', 8, 0).then((p) => setOptions(p.rows))
-    }, 300)
+      void listCompanies(inputValue, null, 'asc', COMPARE_AUTOCOMPLETE_LIMIT, 0).then((p) =>
+        setOptions(p.rows),
+      )
+    }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(id)
   }, [inputValue])
 

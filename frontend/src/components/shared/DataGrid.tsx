@@ -39,7 +39,7 @@ import {
   type Header,
   type SortingState,
 } from '@tanstack/react-table'
-import { applyUpdater, makeDragEndHandler, type GridColumn } from './dataGridUtils'
+import { applyUpdater, makeDragEndHandler, type GridColumn } from '../shared/dataGridUtils'
 
 /** Sortable, per-column-filterable, drag-reorderable grid (TanStack + dnd-kit,
  *  MUI-rendered). Client-side over the rows it's given. When `onSortChange` is

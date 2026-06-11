@@ -14,7 +14,9 @@ use serde_json::Value;
 
 use async_trait::async_trait;
 
-use crate::collectors::{CollectorError, HttpClient, PriceSource, ProfileSource, SourceTarget};
+use crate::collectors::{
+    nonempty, parse_json, CollectorError, HttpClient, PriceSource, ProfileSource, SourceTarget,
+};
 use crate::domain::{CompanyProfile, PricePoint};
 
 const SOURCE: &str = "yahoo";
@@ -105,8 +107,7 @@ impl<H: HttpClient> PriceSource for YahooCollector<H> {
 /// Parse Yahoo's chart JSON into price points. Days with a null close (no trade)
 /// are skipped; an error/empty response (no `result`) yields no points.
 fn parse_chart_json(company_id: i64, json: &str) -> Result<Vec<PricePoint>, CollectorError> {
-    let doc: ChartResponse =
-        serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let doc: ChartResponse = parse_json(json)?;
     let Some(result) = doc.chart.result.and_then(|mut r| r.drain(..).next()) else {
         return Ok(Vec::new());
     };
@@ -193,9 +194,8 @@ impl<H: HttpClient> ProfileSource for YahooProfileCollector<H> {
 /// Parse a Yahoo `assetProfile` response into a [`CompanyProfile`]. Missing/empty
 /// fields become `None`; a result-less response yields an empty profile.
 fn parse_asset_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
-    let doc: Value = serde_json::from_str(json).map_err(|e| CollectorError::Parse(e.to_string()))?;
+    let doc: Value = parse_json(json)?;
     let p = &doc["quoteSummary"]["result"][0]["assetProfile"];
-    let nonempty = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_string);
     Ok(CompanyProfile {
         sector: nonempty(&p["sector"]),
         industry: nonempty(&p["industry"]),
