@@ -33,6 +33,8 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await page.route(`${base}/ratios`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/news`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/discrepancies`, (route) => route.fulfill({ json: [] }))
+  await page.route(`${base}/peers`, (route) => route.fulfill({ json: [] }))
+  await page.route(`${base}/note`, (route) => route.fulfill({ json: { body: null } }))
   await page.route(`${base}/graham`, (route) =>
     route.fulfill({
       json: {
