@@ -1066,6 +1066,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_errors_save_and_list_newest_first() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let t = |h| Utc.with_ymd_and_hms(2024, 1, 1, h, 0, 0).unwrap();
+        assert!(store.recent_source_errors(id, 10).await.unwrap().is_empty());
+
+        store
+            .save_source_errors(id, &[("edgar".into(), "503".into())], t(1))
+            .await
+            .unwrap();
+        store
+            .save_source_errors(
+                id,
+                &[("fmp".into(), "timeout".into()), ("yahoo".into(), "404".into())],
+                t(2),
+            )
+            .await
+            .unwrap();
+        // saving an empty batch is a no-op, not an error
+        store.save_source_errors(id, &[], t(3)).await.unwrap();
+
+        let errors = store.recent_source_errors(id, 10).await.unwrap();
+        assert_eq!(errors.len(), 3);
+        assert_eq!(errors[0].occurred_at, t(2)); // newest first
+        assert_eq!(errors[2].source, "edgar");
+        assert_eq!(errors[2].message, "503");
+        assert_eq!(errors[0].clone(), errors[0]);
+        assert!(format!("{:?}", errors[1]).contains("fmp") || format!("{:?}", errors[1]).contains("yahoo"));
+        // limit applies
+        assert_eq!(store.recent_source_errors(id, 1).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn http_validators_roundtrip_and_overwrite() {
         let (store, _d) = temp_store().await;
         assert_eq!(store.http_validators("https://u").await.unwrap(), None);

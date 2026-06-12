@@ -144,6 +144,7 @@ pub async fn ingest(
             Err(e) => source_errors.push((source.name().to_string(), e.to_string())),
         }
     }
+    store.save_source_errors(company_id, &source_errors, now).await?;
     supplement_with_stored_facts(store, company_id, &mut all_facts).await?;
     let (facts_written, discrepancies_written) =
         persist_facts(store, &all_facts, threshold, now).await?;

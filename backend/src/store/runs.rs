@@ -40,6 +40,57 @@ impl Store {
         Ok(())
     }
 
+    /// Record per-source failures for one company's ingest pass.
+    pub async fn save_source_errors(
+        &self,
+        company_id: i64,
+        errors: &[(String, String)],
+        occurred_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        if errors.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for (source, message) in errors {
+            sqlx::query(
+                "INSERT INTO source_errors (company_id,source,message,occurred_at) VALUES (?,?,?,?)",
+            )
+            .bind(company_id)
+            .bind(source)
+            .bind(message)
+            .bind(occurred_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// A company's most recent source failures, newest first.
+    pub async fn recent_source_errors(
+        &self,
+        company_id: i64,
+        limit: i64,
+    ) -> Result<Vec<SourceError>> {
+        let rows = sqlx::query(
+            "SELECT source,message,occurred_at FROM source_errors \
+             WHERE company_id=? ORDER BY occurred_at DESC, id DESC LIMIT ?",
+        )
+        .bind(company_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(SourceError {
+                    source: r.try_get("source")?,
+                    message: r.try_get("message")?,
+                    occurred_at: r.try_get("occurred_at")?,
+                })
+            })
+            .collect()
+    }
+
     /// Stored HTTP cache validators for `url`, if any.
     pub async fn http_validators(&self, url: &str) -> Result<Option<Validators>> {
         let row = sqlx::query("SELECT etag,last_modified FROM http_cache WHERE url=?")

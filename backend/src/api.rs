@@ -84,6 +84,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/ratios", get(ratios))
         .route("/api/companies/:ticker/news", get(news))
         .route("/api/companies/:ticker/discrepancies", get(discrepancies))
+        .route("/api/companies/:ticker/errors", get(source_errors))
         .route("/api/companies/:ticker/graham", get(graham_assessment))
         .route("/api/companies/:ticker/summary", get(summary))
         .route("/api/companies/:ticker/peers", get(peers))
@@ -473,6 +474,17 @@ async fn discrepancies(
     Ok(Json(store.get_discrepancies(c.id).await.map_err(internal)?))
 }
 
+/// Recent per-source collection failures for a company ("why is this ticker's
+/// data stale / partial?").
+async fn source_errors(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+) -> ApiResult<Vec<crate::domain::SourceError>> {
+    let c = resolve(&store, &ticker).await?;
+    Ok(Json(store.recent_source_errors(c.id, RECENT_RUNS_LIMIT).await.map_err(internal)?))
+}
+
 async fn runs(State(store): State<Arc<Store>>, _user: AuthUser) -> ApiResult<Vec<CollectionRun>> {
     Ok(Json(store.recent_runs(RECENT_RUNS_LIMIT).await.map_err(internal)?))
 }
@@ -787,6 +799,22 @@ mod tests {
         let (_s, json) = get(store, &t, "/api/companies/AAPL/summary").await;
         assert_eq!(json["shares"]["shares"], 15_550_061_000.0);
         assert_eq!(json["shares"]["as_of"], "2023-09-30");
+    }
+
+    #[tokio::test]
+    async fn company_source_errors_endpoint_lists_recent() {
+        let (store, _d, t) = seeded().await;
+        let id = store.get_company("AAPL").await.unwrap().unwrap().id;
+        store
+            .save_source_errors(id, &[("edgar".into(), "503".into())], chrono::Utc::now())
+            .await
+            .unwrap();
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/errors").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json[0]["source"], "edgar");
+        assert_eq!(json[0]["message"], "503");
+        let (status, _) = get(store, &t, "/api/companies/NOPE/errors").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

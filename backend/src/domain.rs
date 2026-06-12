@@ -4,6 +4,14 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+/// A recorded per-source collection failure for a company.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SourceError {
+    pub source: String,
+    pub message: String,
+    pub occurred_at: DateTime<Utc>,
+}
+
 /// A point-in-time share count (e.g. from an SEC filing's DEI cover page).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ShareCount {

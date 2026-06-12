@@ -662,6 +662,11 @@ mod tests {
         assert_eq!(report.source_errors[0].0, "boom");
         // the healthy EDGAR source still produced + persisted facts
         assert!(report.facts_written > 0);
+        // and the failure is persisted for the API to surface
+        let persisted = store.recent_source_errors(id, 10).await.unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].source, "boom");
+        assert!(persisted[0].message.contains("down"));
     }
 
     fn target() -> SourceTarget {
