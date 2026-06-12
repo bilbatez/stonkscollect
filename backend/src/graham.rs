@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use chrono::Datelike;
 use serde::Serialize;
 
-use crate::domain::{FinancialFact, PeriodType};
+use crate::domain::{share_count, FinancialFact, PeriodType};
 
 pub const PE_MAX: f64 = 15.0;
 pub const PB_MAX: f64 = 1.5;
@@ -161,7 +161,8 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
     } else {
         avg(&eps[eps.len().saturating_sub(3)..])
     };
-    let bvps = match (get("StockholdersEquity"), get("SharesOutstanding")) {
+    let shares = latest.and_then(|items| share_count(items));
+    let bvps = match (get("StockholdersEquity"), shares) {
         (Some(e), Some(s)) if s != 0.0 => Some(e / s),
         _ => None,
     };
@@ -208,7 +209,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
         (Some(e), Some(b)) => graham_number(e, b),
         _ => None,
     };
-    let ncav = match (get("CurrentAssets"), get("TotalLiabilities"), get("SharesOutstanding")) {
+    let ncav = match (get("CurrentAssets"), get("TotalLiabilities"), shares) {
         (Some(ca), Some(tl), Some(s)) => ncav_per_share(ca, tl, s),
         _ => None,
     };
@@ -335,6 +336,26 @@ mod tests {
         assert!(a.criteria.iter().all(|c| !c.passed && c.detail == "insufficient data"));
         assert!(a.graham_number.is_none());
         assert!(!a.net_net);
+    }
+
+    #[test]
+    fn bvps_uses_share_fallback_chain() {
+        let mut f = strong_company();
+        f.retain(|x| x.line_item != "SharesOutstanding");
+        f.push(fact("SharesOutstandingBalance", 2023, 100.0)); // BVPS still 10
+        let a = assess(&f, Some(12.0), 500_000_000.0);
+        assert!(a.passes_defensive, "criteria: {:?}", a.criteria);
+        assert!(a.graham_number.is_some());
+    }
+
+    #[test]
+    fn ncav_uses_share_fallback_chain() {
+        let mut f = strong_company();
+        f.retain(|x| x.line_item != "SharesOutstanding");
+        f.push(fact("SharesOutstandingDei", 2023, 100.0));
+        let a = assess(&f, Some(12.0), 500_000_000.0);
+        // NCAV/share = (400 - 150) / 100 = 2.5 via the DEI share count
+        assert_eq!(a.ncav_per_share, Some(2.5));
     }
 
     #[test]

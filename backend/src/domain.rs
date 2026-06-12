@@ -1,6 +1,16 @@
 //! Core domain models. Pure data + value-object conversions, no I/O.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
+
+/// Share count for a period, preferring the income-statement weighted figure,
+/// then the balance-sheet figure, then the DEI cover-page figure.
+pub(crate) fn share_count(items: &BTreeMap<&str, f64>) -> Option<f64> {
+    ["SharesOutstanding", "SharesOutstandingBalance", "SharesOutstandingDei"]
+        .iter()
+        .find_map(|key| items.get(key).copied())
+}
 
 /// Reporting period of a financial fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]

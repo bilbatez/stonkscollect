@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::domain::{FinancialFact, PeriodType, PricePoint, Ratio};
+use crate::domain::{share_count, FinancialFact, PeriodType, PricePoint, Ratio};
 
 /// Compute per-period ratios from a company's facts (and `prices`, for the
 /// historical P/E and P/B series). Only ratios whose inputs are present (and
@@ -65,7 +65,7 @@ pub fn compute(
             "current_ratio",
             ratio(items.get("CurrentAssets"), items.get("CurrentLiabilities")),
         );
-        let bvps = ratio(items.get("StockholdersEquity"), items.get("SharesOutstanding"));
+        let bvps = ratio(items.get("StockholdersEquity"), share_count(&items).as_ref());
         add("book_value_per_share", bvps);
         add("payout_ratio", ratio(items.get("DividendPerShare"), items.get("Eps")));
         // Historical valuation: price at the period end ÷ EPS / BVPS.
@@ -205,6 +205,33 @@ mod tests {
         let r = compute(1, &facts, &prices, fixed_now());
         assert_eq!(metric(&r, "pe").unwrap().value, 30.0); // 150 / 5
         assert_eq!(metric(&r, "pb").unwrap().value, 15.0); // 150 / 10
+    }
+
+    #[test]
+    fn bvps_falls_back_to_balance_then_dei_shares() {
+        let p = (2023, 12, 31);
+        let from_balance = vec![
+            fact("StockholdersEquity", p, 100.0),
+            fact("SharesOutstandingBalance", p, 10.0),
+        ];
+        let r = compute(1, &from_balance, &[], fixed_now());
+        assert_eq!(metric(&r, "book_value_per_share").unwrap().value, 10.0);
+
+        let from_dei = vec![
+            fact("StockholdersEquity", p, 100.0),
+            fact("SharesOutstandingDei", p, 4.0),
+        ];
+        let r = compute(1, &from_dei, &[], fixed_now());
+        assert_eq!(metric(&r, "book_value_per_share").unwrap().value, 25.0);
+
+        // weighted income-statement figure wins over the balance-sheet one
+        let both = vec![
+            fact("StockholdersEquity", p, 100.0),
+            fact("SharesOutstanding", p, 20.0),
+            fact("SharesOutstandingBalance", p, 10.0),
+        ];
+        let r = compute(1, &both, &[], fixed_now());
+        assert_eq!(metric(&r, "book_value_per_share").unwrap().value, 5.0);
     }
 
     #[test]
