@@ -13,6 +13,7 @@ import {
 import HomeIcon from '@mui/icons-material/Home'
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import FilterAltIcon from '@mui/icons-material/FilterAlt'
+import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import LogoutIcon from '@mui/icons-material/Logout'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
@@ -20,6 +21,7 @@ import { addWatch, getSectors, getWatchlist, loadCompanyData, removeWatch } from
 import { CompareView } from '../pages/CompareView'
 import { AllStocks } from '../pages/AllStocks'
 import { CompanyView } from '../pages/CompanyView'
+import { MoversView } from '../pages/MoversView'
 import { SectorOverview } from '../pages/SectorOverview'
 import { Screener } from '../pages/Screener'
 import { Skeleton } from '../shared/Skeleton'
@@ -27,7 +29,7 @@ import { ThemeToggle, type Theme } from '../shared/ThemeToggle'
 import { Watchlist } from '../layout/Watchlist'
 import type { Company, CompanyData, SectorStats } from '../../types'
 
-type Page = 'home' | 'compare' | 'screen' | 'sectors'
+type Page = 'home' | 'compare' | 'screen' | 'movers' | 'sectors'
 
 type Detail =
   | { kind: 'none' }
@@ -102,6 +104,9 @@ export function Dashboard({
           <Button color="inherit" startIcon={<FilterAltIcon />} onClick={() => setPage('screen')}>
             Screener
           </Button>
+          <Button color="inherit" startIcon={<TrendingUpIcon />} onClick={() => setPage('movers')}>
+            Movers
+          </Button>
           <Button
             color="inherit"
             onClick={() => {
@@ -159,6 +164,7 @@ export function Dashboard({
         )}
         {page === 'compare' && <CompareView />}
         {page === 'screen' && <Screener onSelect={(t) => void select(t)} />}
+        {page === 'movers' && <MoversView onSelect={(t) => void select(t)} />}
         {page === 'sectors' && (
           <SectorOverview
             sectors={sectors}

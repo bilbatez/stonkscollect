@@ -193,3 +193,22 @@ test('Sectors nav shows sector rows and clicking top_ticker opens company', asyn
   await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
 })
+
+test('Movers nav shows the three buckets and a row opens the company', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.getMovers.mockResolvedValue({
+    gainers: [
+      { company: company('UP'), last_close: 110, change: 10, change_pct: 0.1, volume: 50, as_of: '2024-03-01' },
+    ],
+    losers: [],
+    most_active: [],
+  })
+  mocked.loadCompanyData.mockResolvedValue(data('UP'))
+
+  render(<App />)
+  await screen.findByLabelText('search stocks') // home loaded
+  await userEvent.click(screen.getByRole('button', { name: /movers/i }))
+  expect(await screen.findByText('Top gainers')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'UP' }))
+  await waitFor(() => expect(screen.getByRole('heading', { name: /up inc/i })).toBeInTheDocument())
+})
