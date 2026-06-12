@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import {
   Box,
   Button,
+  Chip,
   IconButton,
   List,
   ListItem,
@@ -13,10 +14,11 @@ import {
   Typography,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
-import type { Company } from '../../types'
+import { formatNum, formatPct } from '../../format'
+import type { WatchQuote } from '../../types'
 
 interface Props {
-  items: Company[]
+  items: WatchQuote[]
   onSelect: (ticker: string) => void
   onAdd: (ticker: string) => void
   onRemove: (ticker: string) => void
@@ -65,7 +67,7 @@ export function Watchlist({ items, onSelect, onAdd, onRemove }: Props) {
         </Typography>
       ) : (
         <List dense sx={{ mt: 1 }}>
-          {items.map((c) => (
+          {items.map(({ company: c, last_close, change, change_pct }) => (
             <ListItem
               key={c.ticker}
               disablePadding
@@ -81,7 +83,19 @@ export function Watchlist({ items, onSelect, onAdd, onRemove }: Props) {
               }
             >
               <ListItemButton onClick={() => onSelect(c.ticker)}>
-                <ListItemText primary={c.ticker} />
+                <ListItemText
+                  primary={c.ticker}
+                  secondary={last_close !== null ? formatNum(last_close) : '—'}
+                />
+                {change !== null && change_pct !== null && (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    color={change >= 0 ? 'success' : 'error'}
+                    label={`${change >= 0 ? '+' : ''}${formatPct(change_pct)}`}
+                    sx={{ ml: 1 }}
+                  />
+                )}
               </ListItemButton>
             </ListItem>
           ))}

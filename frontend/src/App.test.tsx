@@ -50,7 +50,7 @@ function data(ticker: string): CompanyData {
 beforeEach(() => {
   localStorage.clear()
   mocked.getToken.mockReturnValue(null)
-  mocked.getWatchlist.mockResolvedValue([])
+  mocked.getWatchlistQuotes.mockResolvedValue([])
   mocked.listCompanies.mockResolvedValue({ rows: [{ company: company('AAPL'), score: grahamScore() }], total: 1 })
   mocked.screen.mockResolvedValue({ rows: [{ company: company('KO'), score: grahamScore() }], total: 1 })
   mocked.getSectors.mockResolvedValue([{ sector: 'Technology', company_count: 1, avg_score: 5, pct_defensive: 1, top_ticker: 'AAPL' }])
@@ -123,7 +123,16 @@ test('home All Stocks tab opens a company; theme toggles; logout returns to auth
 
 test('Watchlist tab adds and removes tickers', async () => {
   mocked.getToken.mockReturnValue('tok')
-  mocked.getWatchlist.mockResolvedValueOnce([]).mockResolvedValue([company('MSFT')])
+  mocked.getWatchlistQuotes.mockResolvedValueOnce([]).mockResolvedValue([
+    {
+      company: company('MSFT'),
+      last_close: 410.5,
+      change: 4.5,
+      change_pct: 0.011,
+      volume: null,
+      as_of: '2024-03-01',
+    },
+  ])
   mocked.addWatch.mockResolvedValue()
   mocked.removeWatch.mockResolvedValue()
   mocked.loadCompanyData.mockResolvedValue(data('MSFT'))
@@ -136,8 +145,9 @@ test('Watchlist tab adds and removes tickers', async () => {
   await waitFor(() => expect(mocked.addWatch).toHaveBeenCalledWith('MSFT'))
   await userEvent.click(await screen.findByRole('button', { name: 'remove MSFT' }))
   expect(mocked.removeWatch).toHaveBeenCalledWith('MSFT')
-  // the list refreshes to still contain MSFT; selecting it opens the company
-  await userEvent.click(await screen.findByRole('button', { name: 'MSFT' }))
+  // the list refreshes to still contain MSFT (now with its quote); selecting
+  // it opens the company
+  await userEvent.click(await screen.findByRole('button', { name: /^MSFT/ }))
   await waitFor(() => expect(screen.getByRole('heading', { name: /msft inc/i })).toBeInTheDocument())
 })
 

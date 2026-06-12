@@ -10,7 +10,7 @@ import { Skeleton } from './shared/Skeleton'
 import { ThemeToggle } from './shared/ThemeToggle'
 import { Watchlist } from './layout/Watchlist'
 import * as api from '../api'
-import type { Company, GrahamAssessment, GrahamScore } from '../types'
+import type { Company, GrahamAssessment, GrahamScore, WatchQuote } from '../types'
 
 vi.mock('../api')
 
@@ -93,14 +93,29 @@ test('AuthForm signup success reports the token', async () => {
   await waitFor(() => expect(onAuth).toHaveBeenCalledWith('newtok'))
 })
 
+const watchQuote = (ticker: string, overrides: Partial<WatchQuote> = {}): WatchQuote => ({
+  company: company(ticker),
+  last_close: 110,
+  change: 10,
+  change_pct: 0.1,
+  volume: null,
+  as_of: '2024-03-01',
+  ...overrides,
+})
+
 test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async () => {
   const onSelect = vi.fn()
   const onAdd = vi.fn()
   const onRemove = vi.fn()
   render(
-    <Watchlist items={[company('AAPL')]} onSelect={onSelect} onAdd={onAdd} onRemove={onRemove} />,
+    <Watchlist
+      items={[watchQuote('AAPL')]}
+      onSelect={onSelect}
+      onAdd={onAdd}
+      onRemove={onRemove}
+    />,
   )
-  await userEvent.click(screen.getByRole('button', { name: 'AAPL' }))
+  await userEvent.click(screen.getByRole('button', { name: /^AAPL/ }))
   expect(onSelect).toHaveBeenCalledWith('AAPL')
   await userEvent.click(screen.getByRole('button', { name: 'remove AAPL' }))
   expect(onRemove).toHaveBeenCalledWith('AAPL')
@@ -109,6 +124,27 @@ test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async (
   expect(onAdd).toHaveBeenCalledWith('MSFT')
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
   expect(onAdd).toHaveBeenCalledTimes(1)
+})
+
+test('Watchlist rows show the last price and a colored day change', () => {
+  render(
+    <Watchlist
+      items={[
+        watchQuote('UP'),
+        watchQuote('DOWN', { last_close: 90, change: -10, change_pct: -0.1 }),
+        watchQuote('BARE', { last_close: null, change: null, change_pct: null, as_of: null }),
+      ]}
+      onSelect={vi.fn()}
+      onAdd={vi.fn()}
+      onRemove={vi.fn()}
+    />,
+  )
+  expect(screen.getByText('110.00')).toBeInTheDocument()
+  expect(screen.getByText('+10%')).toBeInTheDocument()
+  expect(screen.getByText('-10%')).toBeInTheDocument()
+  // an unpriced company still lists, with a dash and no change chip
+  expect(screen.getByText('BARE')).toBeInTheDocument()
+  expect(screen.getByText('—')).toBeInTheDocument()
 })
 
 test('Watchlist shows empty state', () => {

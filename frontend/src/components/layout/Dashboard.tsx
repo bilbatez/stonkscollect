@@ -17,7 +17,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import LogoutIcon from '@mui/icons-material/Logout'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
-import { addWatch, getSectors, getWatchlist, loadCompanyData, removeWatch } from '../../api'
+import { addWatch, getSectors, getWatchlistQuotes, loadCompanyData, removeWatch } from '../../api'
 import { CompareView } from '../pages/CompareView'
 import { AllStocks } from '../pages/AllStocks'
 import { CompanyView } from '../pages/CompanyView'
@@ -27,7 +27,7 @@ import { Screener } from '../pages/Screener'
 import { Skeleton } from '../shared/Skeleton'
 import { ThemeToggle, type Theme } from '../shared/ThemeToggle'
 import { Watchlist } from '../layout/Watchlist'
-import type { Company, CompanyData, SectorStats } from '../../types'
+import type { CompanyData, SectorStats, WatchQuote } from '../../types'
 
 type Page = 'home' | 'compare' | 'screen' | 'movers' | 'sectors'
 
@@ -46,14 +46,14 @@ export function Dashboard({
   theme: Theme
   onToggleTheme: () => void
 }) {
-  const [items, setItems] = useState<Company[]>([])
+  const [items, setItems] = useState<WatchQuote[]>([])
   const [page, setPage] = useState<Page>('home')
   const [tab, setTab] = useState(0)
   const [detail, setDetail] = useState<Detail>({ kind: 'none' })
   const [sectors, setSectors] = useState<SectorStats[]>([])
 
   const refreshWatchlist = useCallback(async () => {
-    setItems(await getWatchlist())
+    setItems(await getWatchlistQuotes())
   }, [])
 
   // Load the watchlist once on mount (async fetch, not a synchronous cascade).
