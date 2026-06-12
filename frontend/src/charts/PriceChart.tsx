@@ -32,18 +32,16 @@ export default function PriceChart({ prices }: { prices: PricePoint[] }) {
           data: prices.map((p) => p.close),
         }
 
-    const zoomStart = prices.length > 90
-      ? Math.round((1 - 90 / prices.length) * 100)
-      : 0
-
+    // The visible window is chosen by the range presets upstream; the zoom
+    // tools always start showing everything they were given.
     chart.setOption({
       tooltip: { trigger: 'axis' },
       grid: { bottom: 60 },
       xAxis: { type: 'category', data: dates },
       yAxis: { type: 'value', scale: true },
       dataZoom: [
-        { type: 'inside', xAxisIndex: 0, start: zoomStart, end: 100 },
-        { type: 'slider', xAxisIndex: 0, start: zoomStart, end: 100, height: 20, bottom: 8 },
+        { type: 'inside', xAxisIndex: 0, start: 0, end: 100 },
+        { type: 'slider', xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: 8 },
       ],
       series: [series],
     })

@@ -20,9 +20,11 @@ import { NewsFeed } from '../panels/NewsFeed'
 import { NotePanel } from '../panels/NotePanel'
 import { PeersPanel } from '../panels/PeersPanel'
 import { PeriodToggle } from '../shared/PeriodToggle'
+import { RangeToggle } from '../shared/RangeToggle'
 import { RatiosPanel } from '../panels/RatiosPanel'
 import { Skeleton } from '../shared/Skeleton'
 import { StatementTable } from '../panels/StatementTable'
+import { pricesForRange, type RangePreset } from '../../chartData'
 import type { CompanyData, Period } from '../../types'
 
 const PriceChart = lazy(() => import('../../charts/PriceChart'))
@@ -43,11 +45,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
   const [chartPeriod, setChartPeriod] = useState<Period>('annual')
+  const [priceRange, setPriceRange] = useState<RangePreset>('1Y')
   // prices arrive oldest-first from the API (ORDER BY date ASC); last element is newest
   const latestPriceDate = data.prices.at(-1)?.date ?? null
   const c = data.company
   const quote = computeQuote(data.prices)
   const keyStats = computeKeyStats(data, quote)
+  const rangedPrices = pricesForRange(data.prices, priceRange)
   return (
     <Card variant="outlined" component="article">
       <CardContent>
@@ -94,11 +98,12 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
         </Section>
 
         <Section title="Price">
+          <RangeToggle value={priceRange} onChange={setPriceRange} />
           <Suspense fallback={<Skeleton label="Loading chart…" />}>
-            <PriceChart prices={data.prices} />
+            <PriceChart prices={rangedPrices} />
           </Suspense>
           <Suspense fallback={null}>
-            <GrahamChart prices={data.prices} facts={data.facts} ratios={data.ratios} />
+            <GrahamChart prices={rangedPrices} facts={data.facts} ratios={data.ratios} />
           </Suspense>
         </Section>
         <Section title="Income">

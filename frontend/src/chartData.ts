@@ -127,3 +127,32 @@ export function ratioChartData(ratios: Ratio[], period: 'annual' | 'quarterly'):
     }))
   return { categories, series }
 }
+
+/** Price-chart range presets, Yahoo-style. */
+export type RangePreset = '1M' | '6M' | 'YTD' | '1Y' | '5Y' | 'MAX'
+
+export const RANGE_PRESETS: readonly RangePreset[] = ['1M', '6M', 'YTD', '1Y', '5Y', 'MAX']
+
+const RANGE_MONTHS: Record<Exclude<RangePreset, 'YTD' | 'MAX'>, number> = {
+  '1M': 1,
+  '6M': 6,
+  '1Y': 12,
+  '5Y': 60,
+}
+
+/** Bars within `preset`, anchored on the latest stored price date (data is
+ *  latest-and-stored — anchoring on the wall clock would empty short ranges
+ *  whenever collection lags). */
+export function pricesForRange(prices: PricePoint[], preset: RangePreset): PricePoint[] {
+  if (preset === 'MAX' || prices.length === 0) return prices
+  const anchor = prices.reduce((max, p) => (p.date > max ? p.date : max), prices[0].date)
+  const start =
+    preset === 'YTD' ? `${anchor.slice(0, 4)}-01-01` : monthsBefore(anchor, RANGE_MONTHS[preset])
+  return prices.filter((p) => p.date >= start)
+}
+
+function monthsBefore(date: string, months: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - months)
+  return d.toISOString().slice(0, 10)
+}

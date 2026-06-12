@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { grahamChartData, incomeChartData, ratioChartData } from './chartData'
+import { grahamChartData, incomeChartData, pricesForRange, ratioChartData } from './chartData'
 import type { FinancialFact, PricePoint, Ratio } from './types'
 
 const fact = (
@@ -178,4 +178,38 @@ test('grahamChartData skips prices with no applicable graham period', () => {
   expect(d).not.toBeNull()
   // 2021-01-01 dropped; only 2 price points remain
   expect(d!.dates).toEqual(['2022-12-31', '2023-12-31'])
+})
+
+// --- pricesForRange ---
+
+function rangeBar(date: string): PricePoint {
+  return { company_id: 1, date, open: null, high: null, low: null, close: 1, volume: null, source: 'yahoo' }
+}
+
+test('pricesForRange windows by preset anchored on the latest price date', () => {
+  const prices = [
+    rangeBar('2018-06-01'),
+    rangeBar('2023-11-15'),
+    rangeBar('2024-01-05'),
+    rangeBar('2024-02-20'),
+    rangeBar('2024-03-01'),
+  ]
+  expect(pricesForRange(prices, 'MAX')).toHaveLength(5)
+  expect(pricesForRange(prices, '1M').map((p) => p.date)).toEqual(['2024-02-20', '2024-03-01'])
+  expect(pricesForRange(prices, '6M').map((p) => p.date)).toEqual([
+    '2023-11-15', '2024-01-05', '2024-02-20', '2024-03-01',
+  ])
+  // YTD: only 2024 bars
+  expect(pricesForRange(prices, 'YTD').map((p) => p.date)).toEqual([
+    '2024-01-05', '2024-02-20', '2024-03-01',
+  ])
+  expect(pricesForRange(prices, '1Y')).toHaveLength(4)
+  expect(pricesForRange(prices, '5Y')).toHaveLength(4) // 2018 bar is older than 5y
+})
+
+test('pricesForRange handles empty input and unordered dates', () => {
+  expect(pricesForRange([], '1M')).toEqual([])
+  // anchor is the max date even when bars arrive unordered
+  const shuffled = [rangeBar('2024-03-01'), rangeBar('2020-01-01')]
+  expect(pricesForRange(shuffled, '1Y').map((p) => p.date)).toEqual(['2024-03-01'])
 })

@@ -11,6 +11,7 @@ import { QuoteHeader } from './panels/QuoteHeader'
 import { NewsFeed } from './panels/NewsFeed'
 import { NotePanel } from './panels/NotePanel'
 import { PeersPanel } from './panels/PeersPanel'
+import { RangeToggle } from './shared/RangeToggle'
 import { RatiosPanel } from './panels/RatiosPanel'
 import { SectorOverview } from './pages/SectorOverview'
 import { StatementTable } from './panels/StatementTable'
@@ -434,4 +435,23 @@ test('KeyStatsPanel dashes missing values and tolerates a null quote', () => {
     />,
   )
   expect(screen.getAllByText('—').length).toBe(16)
+})
+
+// --- RangeToggle ---
+
+test('RangeToggle renders all presets and reports a new selection', async () => {
+  const onChange = vi.fn()
+  render(<RangeToggle value="1Y" onChange={onChange} />)
+  for (const preset of ['1M', '6M', 'YTD', '1Y', '5Y', 'MAX']) {
+    expect(screen.getByRole('button', { name: preset })).toBeInTheDocument()
+  }
+  await userEvent.click(screen.getByRole('button', { name: '6M' }))
+  expect(onChange).toHaveBeenCalledWith('6M')
+})
+
+test('RangeToggle ignores re-clicking the active preset', async () => {
+  const onChange = vi.fn()
+  render(<RangeToggle value="1Y" onChange={onChange} />)
+  await userEvent.click(screen.getByRole('button', { name: '1Y' }))
+  expect(onChange).not.toHaveBeenCalled()
 })
