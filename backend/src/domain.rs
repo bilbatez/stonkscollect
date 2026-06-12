@@ -4,6 +4,15 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+/// A point-in-time share count (e.g. from an SEC filing's DEI cover page).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ShareCount {
+    pub company_id: i64,
+    pub as_of: NaiveDate,
+    pub shares: f64,
+    pub source: String,
+}
+
 /// Share count for a period, preferring the income-statement weighted figure,
 /// then the balance-sheet figure, then the DEI cover-page figure.
 pub(crate) fn share_count(items: &BTreeMap<&str, f64>) -> Option<f64> {

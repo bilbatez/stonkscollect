@@ -126,6 +126,14 @@
         "label": "ignored",
         "units": { "USD": [ { "end": "2023-09-30", "val": 777, "fp": "FY" } ] }
       }
+    },
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "units": { "shares": [ { "end": "2023-09-30", "val": 15550061000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
+      "EntityPublicFloat": {
+        "units": { "USD": [ { "end": "2023-03-31", "val": 2591165000000, "fp": "Q2", "form": "10-K", "filed": "2023-11-02" } ] }
+      }
     }
   }
 }

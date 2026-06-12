@@ -6,7 +6,7 @@ use futures::StreamExt;
 
 use crate::collectors::edgar::CompanyRef;
 use crate::collectors::{FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget};
-use crate::domain::{Company, CompanyProfile, FinancialFact, GrahamScore, NewCompany};
+use crate::domain::{Company, CompanyProfile, FinancialFact, GrahamScore, NewCompany, ShareCount};
 use crate::{graham, ratios};
 use crate::reconcile::reconcile;
 use crate::store::{Store, StoreError};
@@ -206,6 +206,21 @@ mod tests {
         let revenue = stored.iter().find(|f| f.line_item == "Revenue").unwrap();
         assert_eq!(revenue.value, 100.0); // canonical = EDGAR
         assert_eq!(store.get_discrepancies(id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn persist_facts_populates_shares_outstanding_from_dei_facts() {
+        let (store, id, _d) = store_with_company().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let mut dei = fact(id, "edgar", "SharesOutstandingDei", 15_550_061_000.0);
+        dei.statement = StatementKind::Balance;
+        persist_facts(&store, &[dei, fact(id, "edgar", "Revenue", 100.0)], 0.05, now)
+            .await
+            .unwrap();
+        let shares = store.latest_shares(id).await.unwrap().unwrap();
+        assert_eq!(shares.shares, 15_550_061_000.0);
+        assert_eq!(shares.as_of, NaiveDate::from_ymd_opt(2023, 12, 31).unwrap());
+        assert_eq!(shares.source, "edgar");
     }
 
     #[tokio::test]

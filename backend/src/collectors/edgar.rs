@@ -154,6 +154,17 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
     ),
 ];
 
+/// XBRL dei (cover-page) concept -> (statement, normalized line item).
+/// The dei taxonomy sits beside us-gaap in the same companyfacts document.
+const DEI_CONCEPTS: &[(&str, StatementKind, &str)] = &[
+    (
+        "EntityCommonStockSharesOutstanding",
+        StatementKind::Balance,
+        "SharesOutstandingDei",
+    ),
+    ("EntityPublicFloat", StatementKind::Balance, "PublicFloat"),
+];
+
 /// A company identity from SEC's ticker directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompanyRef {
@@ -287,55 +298,70 @@ fn parse_companyfacts(
     let mut deduped: BTreeMap<(&'static str, &'static str, NaiveDate), (String, FinancialFact)> =
         BTreeMap::new();
 
-    for (concept, statement, line_item) in CONCEPTS {
-        let Some(units) = doc["facts"]["us-gaap"][concept]["units"].as_object() else {
-            continue;
-        };
-        let entry_array = units.get("USD").or_else(|| units.values().next());
-        let Some(entries) = entry_array.and_then(|a| a.as_array()) else {
-            continue;
-        };
-        for entry in entries {
-            let Some(fp) = entry["fp"].as_str() else {
+    for (taxonomy, concepts) in [("us-gaap", CONCEPTS), ("dei", DEI_CONCEPTS)] {
+        for (concept, statement, line_item) in concepts {
+            let Some(units) = doc["facts"][taxonomy][concept]["units"].as_object() else {
                 continue;
             };
-            let Some(period_type) = period_type_from_fp(fp) else {
+            let entry_array = units.get("USD").or_else(|| units.values().next());
+            let Some(entries) = entry_array.and_then(|a| a.as_array()) else {
                 continue;
             };
-            let Some(end_str) = entry["end"].as_str() else {
-                continue;
-            };
-            let Ok(period_end) = NaiveDate::parse_from_str(end_str, ISO_DATE) else {
-                continue;
-            };
-            let Some(value) = entry["val"].as_f64() else {
-                continue;
-            };
-            let filed = entry["filed"].as_str().unwrap_or("").to_string();
-            let key = (*line_item, period_type.as_str(), period_end);
-            // Only replace an existing entry if this filing is at least as recent.
-            if deduped.get(&key).is_some_and(|(prev, _)| filed < *prev) {
-                continue;
+            for entry in entries {
+                merge_latest_filing(&mut deduped, entry, company_id, *statement, line_item, now);
             }
-            deduped.insert(
-                key,
-                (
-                    filed,
-                    FinancialFact {
-                        company_id,
-                        statement: *statement,
-                        line_item: (*line_item).to_string(),
-                        period_type,
-                        period_end,
-                        value,
-                        source: "edgar".to_string(),
-                        fetched_at: now,
-                    },
-                ),
-            );
         }
     }
     Ok(deduped.into_values().map(|(_, fact)| fact).collect())
+}
+
+/// Fold one companyfacts entry into `deduped`, keeping the latest filing per
+/// (line item, period type, period end). Malformed entries are skipped.
+fn merge_latest_filing(
+    deduped: &mut BTreeMap<(&'static str, &'static str, NaiveDate), (String, FinancialFact)>,
+    entry: &Value,
+    company_id: i64,
+    statement: StatementKind,
+    line_item: &'static str,
+    now: DateTime<Utc>,
+) {
+    let Some(fp) = entry["fp"].as_str() else {
+        return;
+    };
+    let Some(period_type) = period_type_from_fp(fp) else {
+        return;
+    };
+    let Some(end_str) = entry["end"].as_str() else {
+        return;
+    };
+    let Ok(period_end) = NaiveDate::parse_from_str(end_str, ISO_DATE) else {
+        return;
+    };
+    let Some(value) = entry["val"].as_f64() else {
+        return;
+    };
+    let filed = entry["filed"].as_str().unwrap_or("").to_string();
+    let key = (line_item, period_type.as_str(), period_end);
+    // Only replace an existing entry if this filing is at least as recent.
+    if deduped.get(&key).is_some_and(|(prev, _)| filed < *prev) {
+        return;
+    }
+    deduped.insert(
+        key,
+        (
+            filed,
+            FinancialFact {
+                company_id,
+                statement,
+                line_item: line_item.to_string(),
+                period_type,
+                period_end,
+                value,
+                source: "edgar".to_string(),
+                fetched_at: now,
+            },
+        ),
+    );
 }
 
 #[cfg(test)]
@@ -450,6 +476,22 @@ mod tests {
         assert_eq!(find(&facts, "Inventories", PeriodType::Annual, fy23).value, 6331000000.0);
         assert_eq!(find(&facts, "RetainedEarnings", PeriodType::Annual, fy23).value, -214966000000.0);
         assert_eq!(find(&facts, "SharesOutstandingBalance", PeriodType::Annual, fy23).value, 15552752000.0);
+    }
+
+    #[test]
+    fn parse_captures_dei_shares_and_public_float() {
+        let facts = parse_companyfacts(7, FIXTURE, now()).unwrap();
+        let fy23 = NaiveDate::from_ymd_opt(2023, 9, 30).unwrap();
+        let shares = find(&facts, "SharesOutstandingDei", PeriodType::Annual, fy23);
+        assert_eq!(shares.value, 15550061000.0);
+        assert_eq!(shares.statement, StatementKind::Balance);
+        let float = find(
+            &facts,
+            "PublicFloat",
+            PeriodType::Quarterly,
+            NaiveDate::from_ymd_opt(2023, 3, 31).unwrap(),
+        );
+        assert_eq!(float.value, 2591165000000.0);
     }
 
     #[test]

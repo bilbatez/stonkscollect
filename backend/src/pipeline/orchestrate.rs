@@ -162,6 +162,22 @@ pub async fn persist_facts(
     store
         .save_reconciled(&result.canonical, &result.discrepancies)
         .await?;
+    store.save_shares(&dei_share_counts(&result.canonical)).await?;
     Ok((result.canonical.len(), result.discrepancies.len()))
+}
+
+/// Extract DEI cover-page share counts from canonical facts, so the
+/// `shares_outstanding` history fills in alongside the facts table.
+fn dei_share_counts(facts: &[FinancialFact]) -> Vec<ShareCount> {
+    facts
+        .iter()
+        .filter(|f| f.line_item == "SharesOutstandingDei")
+        .map(|f| ShareCount {
+            company_id: f.company_id,
+            as_of: f.period_end,
+            shares: f.value,
+            source: f.source.clone(),
+        })
+        .collect()
 }
 

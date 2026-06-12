@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth;
 use crate::domain::{
     CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewsItem, PricePoint, Ratio,
+    ShareCount,
 };
 use crate::graham;
 use crate::store::{Store, StoreError};
@@ -176,9 +177,11 @@ struct CompanySummary {
     company: Company,
     ratios: Vec<Ratio>,
     graham: Option<GrahamScore>,
+    shares: Option<ShareCount>,
 }
 
-/// One round trip for the dashboard header: company + ratios + Graham score.
+/// One round trip for the dashboard header: company + ratios + Graham score
+/// + latest known share count.
 async fn summary(
     State(store): State<Arc<Store>>,
     Path(ticker): Path<String>,
@@ -187,7 +190,8 @@ async fn summary(
     let company = resolve(&store, &ticker).await?;
     let ratios = store.get_ratios(company.id, None).await.map_err(internal)?;
     let graham = store.get_graham_score(company.id).await.map_err(internal)?;
-    Ok(Json(CompanySummary { company, ratios, graham }))
+    let shares = store.latest_shares(company.id).await.map_err(internal)?;
+    Ok(Json(CompanySummary { company, ratios, graham, shares }))
 }
 
 async fn screen(
@@ -762,11 +766,27 @@ mod tests {
         assert_eq!(json["total"], 0);
 
         // aggregate summary
-        let (status, json) = get(store, &t, "/api/companies/AAPL/summary").await;
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/summary").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["company"]["ticker"], "AAPL");
         assert_eq!(json["graham"]["score"], 6);
         assert!(json["ratios"].is_array());
+        assert!(json["shares"].is_null()); // none collected yet
+
+        // once a share count exists, the summary carries the latest one
+        let id = store.get_company("AAPL").await.unwrap().unwrap().id;
+        store
+            .save_shares(&[crate::domain::ShareCount {
+                company_id: id,
+                as_of: chrono::NaiveDate::from_ymd_opt(2023, 9, 30).unwrap(),
+                shares: 15_550_061_000.0,
+                source: "edgar".into(),
+            }])
+            .await
+            .unwrap();
+        let (_s, json) = get(store, &t, "/api/companies/AAPL/summary").await;
+        assert_eq!(json["shares"]["shares"], 15_550_061_000.0);
+        assert_eq!(json["shares"]["as_of"], "2023-09-30");
     }
 
     #[tokio::test]

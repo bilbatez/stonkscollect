@@ -91,6 +91,43 @@ impl Store {
         Ok(())
     }
 
+    /// Upsert many share counts in one transaction, keyed by
+    /// `(company_id, as_of, source)`.
+    pub async fn save_shares(&self, counts: &[ShareCount]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for c in counts {
+            sqlx::query(SHARES_UPSERT_SQL)
+                .bind(c.company_id)
+                .bind(c.as_of)
+                .bind(c.shares)
+                .bind(&c.source)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The most recent share count for a company, if any was collected.
+    pub async fn latest_shares(&self, company_id: i64) -> Result<Option<ShareCount>> {
+        let row = sqlx::query(
+            "SELECT company_id,as_of,shares,source FROM shares_outstanding \
+             WHERE company_id=? ORDER BY as_of DESC LIMIT 1",
+        )
+        .bind(company_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(ShareCount {
+                company_id: r.try_get("company_id")?,
+                as_of: r.try_get("as_of")?,
+                shares: r.try_get("shares")?,
+                source: r.try_get("source")?,
+            })
+        })
+        .transpose()
+    }
+
     /// Insert or update a financial fact (keyed by its natural composite key).
     pub async fn upsert_fact(&self, f: &FinancialFact) -> Result<()> {
         sqlx::query(FACT_UPSERT_SQL)

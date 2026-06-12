@@ -100,6 +100,10 @@ const PRICE_UPSERT_SQL: &str = "INSERT INTO prices (company_id,date,open,high,lo
 const NEWS_INSERT_SQL: &str = "INSERT OR IGNORE INTO news \
      (company_id,title,description,url,source,published_at,dedup_hash) VALUES (?,?,?,?,?,?,?)";
 
+const SHARES_UPSERT_SQL: &str = "INSERT INTO shares_outstanding (company_id,as_of,shares,source) \
+     VALUES (?,?,?,?) \
+     ON CONFLICT(company_id,as_of,source) DO UPDATE SET shares=excluded.shares";
+
 const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,period_type,metric,value,computed_at) \
      VALUES (?,?,?,?,?,?) \
      ON CONFLICT(company_id,period_end,period_type,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
@@ -950,6 +954,45 @@ mod tests {
         let (rows, _) = store.screen(false, false, 0, None, None, None, None, None, None, Some("ticker"), Some("desc"), 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         assert_eq!(rows[1].0.ticker, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn save_shares_upserts_by_company_date_source() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let count = |shares: f64| ShareCount {
+            company_id: id,
+            as_of: NaiveDate::from_ymd_opt(2023, 9, 30).unwrap(),
+            shares,
+            source: "edgar".into(),
+        };
+        store.save_shares(&[count(100.0)]).await.unwrap();
+        // same (company, as_of, source) updates in place
+        store.save_shares(&[count(110.0)]).await.unwrap();
+        let latest = store.latest_shares(id).await.unwrap().unwrap();
+        assert_eq!(latest.shares, 110.0);
+        assert_eq!(latest.as_of, NaiveDate::from_ymd_opt(2023, 9, 30).unwrap());
+        assert_eq!(latest.clone(), latest);
+        assert!(format!("{latest:?}").contains("edgar"));
+    }
+
+    #[tokio::test]
+    async fn latest_shares_returns_newest_or_none() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        assert_eq!(store.latest_shares(id).await.unwrap(), None);
+        for (d, n) in [("2022-09-30", 90.0), ("2023-09-30", 80.0)] {
+            store
+                .save_shares(&[ShareCount {
+                    company_id: id,
+                    as_of: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    shares: n,
+                    source: "edgar".into(),
+                }])
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.latest_shares(id).await.unwrap().unwrap().shares, 80.0);
     }
 
     #[tokio::test]
