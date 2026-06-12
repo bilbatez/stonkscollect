@@ -1,0 +1,12 @@
+[
+  {
+    "symbol": "AAPL",
+    "companyName": "Apple Inc.",
+    "exchangeShortName": "NASDAQ",
+    "sector": "Technology",
+    "industry": "Consumer Electronics",
+    "website": "https://www.apple.com",
+    "description": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide.",
+    "fullTimeEmployees": "164000"
+  }
+]

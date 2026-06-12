@@ -455,6 +455,7 @@ mod tests {
                 website: Some("https://x.com".into()),
                 description: Some("makes software".into()),
                 exchange: None,
+                employees: Some(42),
             })
         }
     }

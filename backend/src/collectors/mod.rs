@@ -32,6 +32,12 @@ pub(crate) fn nonempty(v: &Value) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+/// An employee count that sources report as either a JSON number (Yahoo) or a
+/// string (FMP).
+pub(crate) fn employee_count(v: &Value) -> Option<i64> {
+    v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
 /// Identifies a company across sources: EDGAR keys on CIK, vendors on ticker.
 #[derive(Debug, Clone)]
 pub struct SourceTarget {

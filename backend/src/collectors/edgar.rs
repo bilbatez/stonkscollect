@@ -248,6 +248,7 @@ fn parse_submissions_profile(json: &str) -> Result<CompanyProfile, CollectorErro
         sector: None,
         website: nonempty(&doc["website"]),
         description: nonempty(&doc["description"]),
+        employees: None,
     })
 }
 

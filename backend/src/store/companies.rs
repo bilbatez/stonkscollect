@@ -1,5 +1,4 @@
 use super::*;
-use sqlx::Row;
 
 impl Store {
     /// Insert a company, returning its new id.
@@ -65,13 +64,15 @@ impl Store {
         sqlx::query(
             "UPDATE companies SET \
              sector=COALESCE(?,sector), industry=COALESCE(?,industry), exchange=COALESCE(?,exchange), \
-             website=COALESCE(?,website), description=COALESCE(?,description) WHERE id=?",
+             website=COALESCE(?,website), description=COALESCE(?,description), \
+             employees=COALESCE(?,employees) WHERE id=?",
         )
         .bind(&p.sector)
         .bind(&p.industry)
         .bind(&p.exchange)
         .bind(&p.website)
         .bind(&p.description)
+        .bind(p.employees)
         .bind(company_id)
         .execute(&self.pool)
         .await?;
@@ -80,50 +81,16 @@ impl Store {
 
     /// Fetch a company by ticker.
     pub async fn get_company(&self, ticker: &str) -> Result<Option<Company>> {
-        let row = sqlx::query(
-            "SELECT id,cik,ticker,name,exchange,sector,industry,description,website FROM companies WHERE ticker=?",
-        )
-        .bind(ticker)
-        .fetch_optional(&self.pool)
-        .await?;
-        match row {
-            Some(r) => Ok(Some(Company {
-                id: r.try_get("id")?,
-                cik: r.try_get("cik")?,
-                ticker: r.try_get("ticker")?,
-                name: r.try_get("name")?,
-                exchange: r.try_get("exchange")?,
-                sector: r.try_get("sector")?,
-                industry: r.try_get("industry")?,
-                description: r.try_get("description")?,
-                website: r.try_get("website")?,
-            })),
-            None => Ok(None),
-        }
+        let sql = format!("SELECT {SELECT_COMPANY_COLS} FROM companies c WHERE c.ticker=?");
+        let row = sqlx::query(&sql).bind(ticker).fetch_optional(&self.pool).await?;
+        row.map(|r| company_from_row(&r)).transpose()
     }
 
     /// List every company, ordered by ticker (for bulk collection).
     pub async fn all_companies(&self) -> Result<Vec<Company>> {
-        let rows = sqlx::query(
-            "SELECT id,cik,ticker,name,exchange,sector,industry,description,website FROM companies ORDER BY ticker",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(Company {
-                    id: r.try_get("id")?,
-                    cik: r.try_get("cik")?,
-                    ticker: r.try_get("ticker")?,
-                    name: r.try_get("name")?,
-                    exchange: r.try_get("exchange")?,
-                    sector: r.try_get("sector")?,
-                    industry: r.try_get("industry")?,
-                    description: r.try_get("description")?,
-                    website: r.try_get("website")?,
-                })
-            })
-            .collect()
+        let sql = format!("SELECT {SELECT_COMPANY_COLS} FROM companies c ORDER BY c.ticker");
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        rows.iter().map(company_from_row).collect()
     }
 
     /// Companies due for collection: never collected, or whose last collection
@@ -138,25 +105,8 @@ impl Store {
              WHERE s.last_collected_at IS NULL OR s.last_collected_at < ? \
              ORDER BY c.ticker"
         );
-        let rows = sqlx::query(&sql)
-        .bind(cutoff)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(Company {
-                    id: r.try_get("id")?,
-                    cik: r.try_get("cik")?,
-                    ticker: r.try_get("ticker")?,
-                    name: r.try_get("name")?,
-                    exchange: r.try_get("exchange")?,
-                    sector: r.try_get("sector")?,
-                    industry: r.try_get("industry")?,
-                    description: r.try_get("description")?,
-                    website: r.try_get("website")?,
-                })
-            })
-            .collect()
+        let rows = sqlx::query(&sql).bind(cutoff).fetch_all(&self.pool).await?;
+        rows.iter().map(company_from_row).collect()
     }
 
     /// Record that a company was just collected (upsert).

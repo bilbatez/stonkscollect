@@ -15,7 +15,8 @@ use serde_json::Value;
 use async_trait::async_trait;
 
 use crate::collectors::{
-    nonempty, parse_json, CollectorError, HttpClient, PriceSource, ProfileSource, SourceTarget,
+    employee_count, nonempty, parse_json, CollectorError, HttpClient, PriceSource, ProfileSource,
+    SourceTarget,
 };
 use crate::domain::{CompanyProfile, PricePoint};
 
@@ -202,6 +203,7 @@ fn parse_asset_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
         exchange: None,
         website: nonempty(&p["website"]),
         description: nonempty(&p["longBusinessSummary"]),
+        employees: employee_count(&p["fullTimeEmployees"]),
     })
 }
 
@@ -221,6 +223,7 @@ mod tests {
         assert_eq!(p.website.as_deref(), Some("https://www.vulcanmaterials.com"));
         assert!(p.description.unwrap().starts_with("Vulcan Materials Company produces"));
         assert_eq!(p.exchange, None);
+        assert_eq!(p.employees, Some(10961));
     }
 
     #[test]

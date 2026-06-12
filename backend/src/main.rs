@@ -310,16 +310,26 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
     }
 }
 
-/// Enrich company profiles from EDGAR (industry/exchange) + Yahoo (description/
-/// website/sector). Keyless; idempotent (COALESCE update).
+/// Enrich company profiles from EDGAR (industry/exchange), FMP when a key is
+/// configured (employees/exchange), and Yahoo (description/website/sector).
+/// Idempotent (COALESCE update).
 async fn enrich(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
     let mk = || Arc::new(RateLimiter::new(delay));
     let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
     let yahoo = YahooProfileCollector::new(http_client(&cfg.user_agent, &mk()));
-    // EDGAR first (canonical industry/exchange), Yahoo overlays prose/website/sector.
-    let profile_sources: Vec<&dyn ProfileSource> = vec![&edgar, &yahoo];
+    let fmp = cfg
+        .fmp_api_key
+        .clone()
+        .map(|key| FmpCollector::new(http_client(&cfg.user_agent, &mk()), key));
+    // EDGAR first (canonical industry/exchange), FMP fills headcount, Yahoo
+    // overlays prose/website/sector last.
+    let mut profile_sources: Vec<&dyn ProfileSource> = vec![&edgar];
+    if let Some(fmp) = &fmp {
+        profile_sources.push(fmp);
+    }
+    profile_sources.push(&yahoo);
 
     if bulk {
         let s = pipeline::enrich_all(store, &profile_sources, cfg.collect_concurrency, &CliProgress)

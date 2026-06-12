@@ -6,10 +6,11 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 
 use crate::collectors::{
-    parse_json, period_type_from_fp, CollectorError, FactSource, HttpClient, PriceSource,
-    SourceTarget,
+    employee_count, nonempty, parse_json, period_type_from_fp, CollectorError, FactSource,
+    HttpClient, PriceSource, ProfileSource, SourceTarget,
 };
-use crate::domain::{FinancialFact, PricePoint, Ratio, StatementKind};
+use crate::domain::{CompanyProfile, FinancialFact, PricePoint, Ratio, StatementKind};
+use serde_json::Value;
 
 const BASE: &str = "https://financialmodelingprep.com/api/v3";
 const SOURCE: &str = "fmp";
@@ -35,6 +36,10 @@ impl<H: HttpClient> FmpCollector<H> {
 
     pub fn ratios_url(symbol: &str, api_key: &str) -> String {
         format!("{BASE}/ratios/{symbol}?apikey={api_key}")
+    }
+
+    pub fn profile_url(symbol: &str, api_key: &str) -> String {
+        format!("{BASE}/profile/{symbol}?apikey={api_key}")
     }
 
     pub async fn collect_prices(
@@ -89,6 +94,21 @@ impl<H: HttpClient> FactSource for FmpCollector<H> {
         now: DateTime<Utc>,
     ) -> Result<Vec<FinancialFact>, CollectorError> {
         self.collect_income(company_id, &target.symbol, now).await
+    }
+}
+
+#[async_trait(?Send)]
+impl<H: HttpClient> ProfileSource for FmpCollector<H> {
+    fn name(&self) -> &'static str {
+        "fmp"
+    }
+
+    async fn fetch_profile(&self, target: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
+        let body = self
+            .http
+            .get_text(&Self::profile_url(&target.symbol, &self.api_key))
+            .await?;
+        parse_profile(&body)
     }
 }
 
@@ -195,6 +215,21 @@ fn parse_income(
     Ok(facts)
 }
 
+/// Parse FMP's `/profile/{symbol}` response (a one-element array). Missing or
+/// empty fields become `None`; an empty array yields a blank profile.
+fn parse_profile(json: &str) -> Result<CompanyProfile, CollectorError> {
+    let doc: Value = parse_json(json)?;
+    let p = &doc[0];
+    Ok(CompanyProfile {
+        sector: nonempty(&p["sector"]),
+        industry: nonempty(&p["industry"]),
+        exchange: nonempty(&p["exchangeShortName"]),
+        website: nonempty(&p["website"]),
+        description: nonempty(&p["description"]),
+        employees: employee_count(&p["fullTimeEmployees"]),
+    })
+}
+
 #[derive(Deserialize)]
 struct RatioRow {
     date: NaiveDate,
@@ -245,6 +280,7 @@ mod tests {
     const PRICES: &str = include_str!("../../tests/fixtures/fmp_prices.json");
     const INCOME: &str = include_str!("../../tests/fixtures/fmp_income.json");
     const RATIOS: &str = include_str!("../../tests/fixtures/fmp_ratios.json");
+    const PROFILE: &str = include_str!("../../tests/fixtures/fmp_profile.json");
 
     #[test]
     fn url_builders_include_symbol_and_key() {
@@ -316,6 +352,38 @@ mod tests {
     #[test]
     fn parse_income_invalid_json_errors() {
         assert!(matches!(parse_income(7, "nope", now()).unwrap_err(), CollectorError::Parse(_)));
+    }
+
+    #[test]
+    fn parse_profile_maps_fields_including_string_employees() {
+        let p = parse_profile(PROFILE).unwrap();
+        assert_eq!(p.sector.as_deref(), Some("Technology"));
+        assert_eq!(p.industry.as_deref(), Some("Consumer Electronics"));
+        assert_eq!(p.exchange.as_deref(), Some("NASDAQ"));
+        assert_eq!(p.website.as_deref(), Some("https://www.apple.com"));
+        assert!(p.description.unwrap().starts_with("Apple Inc."));
+        // FMP reports fullTimeEmployees as a string
+        assert_eq!(p.employees, Some(164000));
+    }
+
+    #[test]
+    fn parse_profile_empty_array_is_blank() {
+        assert_eq!(parse_profile("[]").unwrap(), CompanyProfile::default());
+    }
+
+    #[test]
+    fn parse_profile_invalid_json_errors() {
+        assert!(matches!(parse_profile("nope").unwrap_err(), CollectorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn fetch_profile_hits_profile_endpoint() {
+        let c = FmpCollector::new(FakeHttp::new(PROFILE), "KEY".into());
+        let target = SourceTarget { cik: "320193".into(), symbol: "AAPL".into() };
+        let p = c.fetch_profile(&target).await.unwrap();
+        assert_eq!(p.employees, Some(164000));
+        assert_eq!(ProfileSource::name(&c), "fmp");
+        assert!(c.http.url().unwrap().contains("/profile/AAPL?apikey=KEY"));
     }
 
     #[test]

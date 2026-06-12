@@ -58,6 +58,7 @@ fn company_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Company> {
         industry: r.try_get("industry")?,
         description: r.try_get("description")?,
         website: r.try_get("website")?,
+        employees: r.try_get("employees")?,
     })
 }
 
@@ -115,7 +116,7 @@ const DB_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DB_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 const SELECT_COMPANY_COLS: &str =
-    "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website";
+    "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website,c.employees";
 
 const SELECT_GRAHAM_COLS: &str =
     "g.company_id,g.score,g.passes_defensive,g.graham_number,\
@@ -472,6 +473,7 @@ mod tests {
                     exchange: None, // keep existing NASDAQ
                     website: Some("https://x.com".into()),
                     description: Some("makes things".into()),
+                    employees: Some(10961),
                 },
             )
             .await
@@ -482,6 +484,7 @@ mod tests {
         assert_eq!(c.exchange.as_deref(), Some("NASDAQ")); // kept (update was None)
         assert_eq!(c.website.as_deref(), Some("https://x.com"));
         assert_eq!(c.description.as_deref(), Some("makes things"));
+        assert_eq!(c.employees, Some(10961));
 
         // a partial second update only touches description
         store

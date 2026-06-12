@@ -102,24 +102,7 @@ impl Store {
              FROM watchlists w JOIN companies c ON c.id = w.company_id \
              WHERE w.user_id=? ORDER BY c.ticker"
         );
-        let rows = sqlx::query(&sql)
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                Ok(Company {
-                    id: r.try_get("id")?,
-                    cik: r.try_get("cik")?,
-                    ticker: r.try_get("ticker")?,
-                    name: r.try_get("name")?,
-                    exchange: r.try_get("exchange")?,
-                    sector: r.try_get("sector")?,
-                    industry: r.try_get("industry")?,
-                    description: r.try_get("description")?,
-                    website: r.try_get("website")?,
-                })
-            })
-            .collect()
+        let rows = sqlx::query(&sql).bind(user_id).fetch_all(&self.pool).await?;
+        rows.iter().map(company_from_row).collect()
     }
 }

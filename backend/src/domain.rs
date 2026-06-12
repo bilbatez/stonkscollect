@@ -101,6 +101,8 @@ pub struct Company {
     pub description: Option<String>,
     /// Official company website.
     pub website: Option<String>,
+    /// Full-time headcount, when a vendor profile reports it.
+    pub employees: Option<i64>,
 }
 
 /// A partial company-profile enrichment update (from EDGAR + Yahoo). Only the
@@ -112,6 +114,7 @@ pub struct CompanyProfile {
     pub exchange: Option<String>,
     pub website: Option<String>,
     pub description: Option<String>,
+    pub employees: Option<i64>,
 }
 
 impl CompanyProfile {
@@ -132,6 +135,9 @@ impl CompanyProfile {
         }
         if other.description.is_some() {
             self.description = other.description;
+        }
+        if other.employees.is_some() {
+            self.employees = other.employees;
         }
         self
     }
@@ -294,6 +300,7 @@ mod tests {
             industry: None,
             description: None,
             website: None,
+            employees: None,
         };
         assert_eq!(c.clone(), c);
         assert!(format!("{c:?}").contains("AAPL"));
@@ -311,6 +318,7 @@ mod tests {
             industry: Some("Building Materials".into()),
             website: Some("https://x.com".into()),
             description: Some("makes things".into()),
+            employees: Some(10961),
             ..Default::default()
         };
         let merged = edgar.overlay(yahoo);
@@ -319,5 +327,10 @@ mod tests {
         assert_eq!(merged.sector.as_deref(), Some("Basic Materials"));
         assert_eq!(merged.website.as_deref(), Some("https://x.com"));
         assert_eq!(merged.description.as_deref(), Some("makes things"));
+        assert_eq!(merged.employees, Some(10961));
+
+        // a later source without a headcount keeps the earlier one
+        let kept = merged.overlay(CompanyProfile::default());
+        assert_eq!(kept.employees, Some(10961));
     }
 }
