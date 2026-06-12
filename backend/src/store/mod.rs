@@ -83,9 +83,14 @@ const FACT_UPSERT_SQL: &str = "INSERT INTO financial_facts \
      ON CONFLICT(company_id,statement,line_item,period_type,period_end,source) \
      DO UPDATE SET value=excluded.value, fetched_at=excluded.fetched_at";
 
-const DISCREPANCY_INSERT_SQL: &str = "INSERT INTO discrepancies \
+// `period` binds as '' for None: the unique key needs a NOT NULL period
+// (SQLite treats NULLs as distinct), and re-flagging updates in place.
+const DISCREPANCY_UPSERT_SQL: &str = "INSERT INTO discrepancies \
      (company_id,field,period,source_a,value_a,source_b,value_b,pct_diff,flagged_at) \
-     VALUES (?,?,?,?,?,?,?,?,?)";
+     VALUES (?,?,?,?,?,?,?,?,?) \
+     ON CONFLICT(company_id,field,period,source_a,source_b) DO UPDATE SET \
+     value_a=excluded.value_a, value_b=excluded.value_b, \
+     pct_diff=excluded.pct_diff, flagged_at=excluded.flagged_at";
 
 const COMPANY_UPSERT_SQL: &str = "INSERT INTO companies (cik,ticker,name,exchange,sector,industry) \
      VALUES (?,?,?,?,?,?) \
@@ -740,6 +745,36 @@ mod tests {
         assert_eq!(list[0].pct_diff, 0.1);
         assert_eq!(list[0].period, Some("2023-12-31".into()));
         assert!(format!("{:?}", list[0].clone()).contains("Revenue"));
+    }
+
+    #[tokio::test]
+    async fn reflagging_a_discrepancy_updates_instead_of_duplicating() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let disc = |value_b: f64, hour: u32| Discrepancy {
+            company_id: id,
+            field: "Revenue".into(),
+            period: Some("2023".into()),
+            source_a: "edgar".into(),
+            value_a: 100.0,
+            source_b: "fmp".into(),
+            value_b,
+            pct_diff: (value_b - 100.0) / 100.0,
+            flagged_at: Utc.with_ymd_and_hms(2024, 1, 1, hour, 0, 0).unwrap(),
+        };
+        store.save_reconciled(&[], &[disc(110.0, 1)]).await.unwrap();
+        store.save_reconciled(&[], &[disc(130.0, 2)]).await.unwrap();
+
+        let list = store.get_discrepancies(id).await.unwrap();
+        assert_eq!(list.len(), 1, "same key updates in place");
+        assert_eq!(list[0].value_b, 130.0);
+        assert_eq!(list[0].flagged_at, Utc.with_ymd_and_hms(2024, 1, 1, 2, 0, 0).unwrap());
+
+        // a different period is a distinct row
+        let mut other = disc(120.0, 3);
+        other.period = Some("2022".into());
+        store.save_reconciled(&[], &[other]).await.unwrap();
+        assert_eq!(store.get_discrepancies(id).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

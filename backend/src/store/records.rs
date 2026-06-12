@@ -319,24 +319,20 @@ impl Store {
         rows.into_iter().map(|r| ratio_from_row(&r)).collect()
     }
 
-    /// Insert a flagged discrepancy, returning its new id.
+    /// Insert or refresh a flagged discrepancy, returning its row id.
     pub async fn insert_discrepancy(&self, d: &Discrepancy) -> Result<i64> {
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO discrepancies \
-             (company_id,field,period,source_a,value_a,source_b,value_b,pct_diff,flagged_at) \
-             VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
-        )
-        .bind(d.company_id)
-        .bind(&d.field)
-        .bind(&d.period)
-        .bind(&d.source_a)
-        .bind(d.value_a)
-        .bind(&d.source_b)
-        .bind(d.value_b)
-        .bind(d.pct_diff)
-        .bind(d.flagged_at)
-        .fetch_one(&self.pool)
-        .await?;
+        let id: i64 = sqlx::query_scalar(&format!("{DISCREPANCY_UPSERT_SQL} RETURNING id"))
+            .bind(d.company_id)
+            .bind(&d.field)
+            .bind(d.period.as_deref().unwrap_or(""))
+            .bind(&d.source_a)
+            .bind(d.value_a)
+            .bind(&d.source_b)
+            .bind(d.value_b)
+            .bind(d.pct_diff)
+            .bind(d.flagged_at)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(id)
     }
 
@@ -362,10 +358,10 @@ impl Store {
                 .await?;
         }
         for d in discrepancies {
-            sqlx::query(DISCREPANCY_INSERT_SQL)
+            sqlx::query(DISCREPANCY_UPSERT_SQL)
                 .bind(d.company_id)
                 .bind(&d.field)
-                .bind(&d.period)
+                .bind(d.period.as_deref().unwrap_or(""))
                 .bind(&d.source_a)
                 .bind(d.value_a)
                 .bind(&d.source_b)
@@ -390,10 +386,12 @@ impl Store {
         .await?;
         rows.into_iter()
             .map(|r| {
+                // '' is the stored spelling of "no period" (NOT NULL unique key).
+                let period: String = r.try_get("period")?;
                 Ok(Discrepancy {
                     company_id: r.try_get("company_id")?,
                     field: r.try_get("field")?,
-                    period: r.try_get("period")?,
+                    period: (!period.is_empty()).then_some(period),
                     source_a: r.try_get("source_a")?,
                     value_a: r.try_get("value_a")?,
                     source_b: r.try_get("source_b")?,
