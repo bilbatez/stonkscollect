@@ -4,6 +4,7 @@ import { test, expect } from '@playwright/test'
 test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await page.route('**/auth/login', (route) => route.fulfill({ json: { token: 'test-token' } }))
   await page.route('**/api/watchlist', (route) => route.fulfill({ json: [] }))
+  await page.route('**/api/watchlist/quotes', (route) => route.fulfill({ json: [] }))
   // Paginated All Stocks directory (the default home tab).
   await page.route(/\/api\/companies\?/, (route) =>
     route.fulfill({
@@ -19,8 +20,15 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
     }),
   )
   const base = '**/api/companies/AAPL'
-  await page.route(base, (route) =>
-    route.fulfill({ json: { id: 1, cik: '', ticker: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', sector: null, industry: null } }),
+  await page.route(`${base}/summary`, (route) =>
+    route.fulfill({
+      json: {
+        company: { id: 1, cik: '', ticker: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', sector: null, industry: null },
+        ratios: [],
+        graham: null,
+        shares: null,
+      },
+    }),
   )
   await page.route(`${base}/prices`, (route) =>
     route.fulfill({ json: [{ company_id: 1, date: '2024-01-02', close: 185, volume: 1, source: 'fmp' }] }),
@@ -30,7 +38,6 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
       json: [{ company_id: 1, statement: 'income', line_item: 'Revenue', period_type: 'annual', period_end: '2023-12-31', value: 383285000000, source: 'edgar', fetched_at: '2024-01-01T00:00:00Z' }],
     }),
   )
-  await page.route(`${base}/ratios`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/news`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/discrepancies`, (route) => route.fulfill({ json: [] }))
   await page.route(`${base}/peers`, (route) => route.fulfill({ json: [] }))

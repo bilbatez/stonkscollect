@@ -31,9 +31,12 @@ responses are JSON. Wrapped with `tower-http` middleware: 64 KiB body limit
 | GET | `/api/companies/:ticker/news` | ✓ | headlines |
 | GET | `/api/companies/:ticker/discrepancies` | ✓ | flagged mismatches |
 | GET | `/api/companies/:ticker/graham` | ✓ | live full Graham assessment (criteria + numbers) |
-| GET | `/api/companies/:ticker/summary` | ✓ | `{company, ratios, graham}` in one round trip |
+| GET | `/api/companies/:ticker/summary` | ✓ | `{company, ratios, graham, shares}` in one round trip |
+| GET | `/api/companies/:ticker/errors` | ✓ | recent per-source collection failures |
 | GET | `/api/screen?defensive=&net_net=&min_score=&limit=&offset=` | ✓ | ranked screener → `{rows:[{company,score}], total}` |
+| GET | `/api/movers?limit=` | ✓ | `{gainers, losers, most_active}` by latest daily change |
 | GET | `/api/watchlist` / POST `/api/watchlist` / DELETE `/api/watchlist/:ticker` | ✓ | per-user watchlist |
+| GET | `/api/watchlist/quotes` | ✓ | watchlist rows with last close + day change |
 | GET | `/api/runs` | ✓ | recent collection runs (observability) |
 
 Pagination responses use `{ rows, total }`; ratios/facts return all period types
