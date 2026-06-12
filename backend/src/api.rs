@@ -78,6 +78,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         .route("/api/watchlist", get(watchlist).post(watch_add))
+        .route("/api/watchlist/quotes", get(watchlist_quotes))
         .route("/api/watchlist/:ticker", delete(watch_remove))
         .route("/api/companies", get(companies))
         .route("/api/companies/:ticker", get(company))
@@ -400,6 +401,14 @@ async fn me(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<Me> {
 
 async fn watchlist(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<Vec<Company>> {
     Ok(Json(store.list_watch(user.user_id).await.map_err(internal)?))
+}
+
+/// The watchlist with each company's latest daily quote (price + change).
+async fn watchlist_quotes(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+) -> ApiResult<Vec<crate::domain::WatchQuote>> {
+    Ok(Json(store.watch_quotes(user.user_id).await.map_err(internal)?))
 }
 
 async fn watch_add(
@@ -890,6 +899,85 @@ mod tests {
             assert!(!tickers.contains(&"AAPL".to_string()), "{bucket}");
             assert!(!tickers.contains(&"ZERO".to_string()), "{bucket}");
         }
+    }
+
+    #[tokio::test]
+    async fn watchlist_quotes_carry_day_change_and_tolerate_unpriced() {
+        let (store, _d, t) = seeded().await; // AAPL: one price day (no change computable)
+        store
+            .insert_company(&NewCompany {
+                cik: "2".into(),
+                ticker: "BARE".into(),
+                name: "Bare Co".into(),
+                exchange: None,
+                sector: None,
+                industry: None,
+            })
+            .await
+            .unwrap();
+        let moved = store
+            .insert_company(&NewCompany {
+                cik: "3".into(),
+                ticker: "MOVE".into(),
+                name: "Move Co".into(),
+                exchange: None,
+                sector: None,
+                industry: None,
+            })
+            .await
+            .unwrap();
+        store
+            .save_prices(&[
+                PricePoint {
+                    company_id: moved,
+                    date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 50.0,
+                    volume: None,
+                    source: "yahoo".into(),
+                },
+                PricePoint {
+                    company_id: moved,
+                    date: NaiveDate::from_ymd_opt(2024, 2, 2).unwrap(),
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 55.0,
+                    volume: Some(10),
+                    source: "yahoo".into(),
+                },
+            ])
+            .await
+            .unwrap();
+        for ticker in ["AAPL", "BARE", "MOVE"] {
+            let body = serde_json::json!({ "ticker": ticker });
+            let (status, _) = send(
+                store.clone(),
+                req("POST", "/api/watchlist", Some(&t), Some(body)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NO_CONTENT);
+        }
+
+        let (status, json) = get(store, &t, "/api/watchlist/quotes").await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = json.as_array().unwrap();
+        assert_eq!(rows.len(), 3); // ordered by ticker: AAPL, BARE, MOVE
+        // AAPL has a last close but only one priced day -> no change fields
+        assert_eq!(rows[0]["company"]["ticker"], "AAPL");
+        assert_eq!(rows[0]["last_close"], 185.0);
+        assert!(rows[0]["change_pct"].is_null());
+        // BARE has no prices at all but still appears
+        assert_eq!(rows[1]["company"]["ticker"], "BARE");
+        assert!(rows[1]["last_close"].is_null());
+        // MOVE: +10% day change
+        assert_eq!(rows[2]["company"]["ticker"], "MOVE");
+        assert_eq!(rows[2]["last_close"], 55.0);
+        assert_eq!(rows[2]["change"], 5.0);
+        assert!((rows[2]["change_pct"].as_f64().unwrap() - 0.1).abs() < 1e-9);
+        assert_eq!(rows[2]["as_of"], "2024-02-02");
     }
 
     #[tokio::test]

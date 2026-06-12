@@ -1,6 +1,23 @@
 use super::*;
 use sqlx::Row;
 
+/// One row per (company, trading day): the preferred source's close + volume
+/// (`daily.day_rank` = 1 is the latest day). Shared by movers and watchlist
+/// quotes.
+const DAILY_CLOSES_CTE: &str = "ranked AS (
+         SELECT company_id, date, close, volume,
+                ROW_NUMBER() OVER (
+                    PARTITION BY company_id, date
+                    ORDER BY CASE source WHEN 'yahoo' THEN 0 WHEN 'fmp' THEN 1 ELSE 2 END, source
+                ) AS src_rank
+         FROM prices
+     ),
+     daily AS (
+         SELECT company_id, date, close, volume,
+                ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY date DESC) AS day_rank
+         FROM ranked WHERE src_rank = 1
+     )";
+
 /// Screener filters + paging. `Default` matches everything, first page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenFilter {
@@ -166,19 +183,7 @@ impl Store {
     /// excluded (no change is computable).
     pub async fn day_changes(&self) -> Result<Vec<MoverRow>> {
         let sql = format!(
-            "WITH ranked AS (
-                 SELECT company_id, date, close, volume,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY company_id, date
-                            ORDER BY CASE source WHEN 'yahoo' THEN 0 WHEN 'fmp' THEN 1 ELSE 2 END, source
-                        ) AS src_rank
-                 FROM prices
-             ),
-             daily AS (
-                 SELECT company_id, date, close, volume,
-                        ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY date DESC) AS day_rank
-                 FROM ranked WHERE src_rank = 1
-             )
+            "WITH {DAILY_CLOSES_CTE}
              SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
                     last.volume AS volume, prev.close AS prev_close
              FROM daily last
@@ -197,6 +202,44 @@ impl Store {
                     last_close,
                     change: last_close - prev_close,
                     change_pct: (last_close - prev_close) / prev_close,
+                    volume: r.try_get("volume")?,
+                    as_of: r.try_get("as_of")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The user's watchlist, each row carrying the company's latest quote when
+    /// prices exist (LEFT JOINs: an unpriced company still appears).
+    pub async fn watch_quotes(&self, user_id: i64) -> Result<Vec<WatchQuote>> {
+        let sql = format!(
+            "WITH {DAILY_CLOSES_CTE}
+             SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
+                    last.volume AS volume, prev.close AS prev_close
+             FROM watchlists w
+             JOIN companies c ON c.id = w.company_id
+             LEFT JOIN daily last ON last.company_id = c.id AND last.day_rank = 1
+             LEFT JOIN daily prev ON prev.company_id = c.id AND prev.day_rank = 2
+             WHERE w.user_id = ?
+             ORDER BY c.ticker"
+        );
+        let rows = sqlx::query(&sql).bind(user_id).fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                let last_close: Option<f64> = r.try_get("last_close")?;
+                let prev_close: Option<f64> = r.try_get("prev_close")?;
+                let change = match (last_close, prev_close) {
+                    (Some(last), Some(prev)) if prev != 0.0 => Some(last - prev),
+                    _ => None,
+                };
+                Ok(WatchQuote {
+                    company: company_from_row(r)?,
+                    last_close,
+                    change,
+                    change_pct: match (change, prev_close) {
+                        (Some(c), Some(prev)) => Some(c / prev),
+                        _ => None,
+                    },
                     volume: r.try_get("volume")?,
                     as_of: r.try_get("as_of")?,
                 })

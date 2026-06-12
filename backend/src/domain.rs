@@ -39,6 +39,17 @@ pub fn select_movers(rows: Vec<MoverRow>, limit: usize) -> Movers {
     }
 }
 
+/// A watchlist row with the company's latest daily quote, when prices exist.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WatchQuote {
+    pub company: Company,
+    pub last_close: Option<f64>,
+    pub change: Option<f64>,
+    pub change_pct: Option<f64>,
+    pub volume: Option<i64>,
+    pub as_of: Option<NaiveDate>,
+}
+
 /// A recorded per-source collection failure for a company.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SourceError {
