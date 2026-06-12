@@ -1,30 +1,22 @@
 use super::*;
 
-/// Collect every company in the store (the full US universe once bootstrapped),
-/// sleeping `delay` between companies to stay polite to upstream APIs.
+/// Collect every company in the store (the full US universe once bootstrapped).
 ///
 /// A failure on one company is recorded in `summary.failed` and skipped — one
 /// bad company never aborts a full pass.
 ///
-/// When `cutoff` is `Some`, only companies not collected since `cutoff` are
+/// When `options.cutoff` is `Some`, only companies not collected since then are
 /// processed (incremental); successful collections are timestamped.
 ///
-/// Up to `concurrency` companies are fetched at once; politeness is enforced by
-/// the shared rate limiter in the HTTP client, not a per-company sleep.
-#[allow(clippy::too_many_arguments)]
+/// Up to `options.concurrency` companies are fetched at once; politeness is
+/// enforced by the shared rate limiter in the HTTP client, not a sleep.
 pub async fn collect_all(
     store: &Store,
-    sources: &[&dyn FactSource],
-    price_sources: &[&dyn PriceSource],
-    news_sources: &[&dyn NewsSource],
-    threshold: f64,
-    now: DateTime<Utc>,
-    concurrency: usize,
-    cutoff: Option<DateTime<Utc>>,
-    min_revenue: f64,
+    sources: &CollectSources<'_>,
+    options: &CollectOptions,
     progress: &dyn CollectProgress,
 ) -> Result<CollectSummary, StoreError> {
-    let companies = match cutoff {
+    let companies = match options.cutoff {
         Some(c) => store.companies_due(c).await?,
         None => store.all_companies().await?,
     };
@@ -37,40 +29,32 @@ pub async fn collect_all(
         .map(|company| {
             let counter = &counter;
             async move {
-                let target = target_of(&company);
-                let result = ingest(store, sources, company.id, &target, threshold, now).await;
-                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                match result {
+                let done_so_far = || counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                match collect_company(store, sources, options, &company).await {
                     Ok(report) => {
-                        // Best-effort: prices first (so Graham sees a price), then
-                        // news, timestamp + per-company metric recompute.
-                        let _ = collect_prices_for(store, price_sources, company.id, &target, now).await;
-                        let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
-                        let _ = store.mark_collected(company.id, now).await;
-                        let _ = recompute_metrics(store, company.id, min_revenue, now).await;
-                        progress.company_done(done, total, &company.ticker, true);
-                        Ok((report.facts_written, report.discrepancies_written, report.source_errors.len()))
+                        progress.company_done(done_so_far(), total, &company.ticker, true);
+                        Ok(report)
                     }
                     Err(e) => {
                         tracing::warn!("collect failed for {}: {e}", company.ticker);
-                        progress.company_done(done, total, &company.ticker, false);
+                        progress.company_done(done_so_far(), total, &company.ticker, false);
                         Err(())
                     }
                 }
             }
         })
-        .buffer_unordered(concurrency.max(1))
+        .buffer_unordered(options.concurrency.max(1))
         .collect::<Vec<_>>()
         .await;
 
     let mut summary = CollectSummary::default();
     for outcome in outcomes {
         match outcome {
-            Ok((facts, disc, errs)) => {
+            Ok(report) => {
                 summary.companies += 1;
-                summary.facts_written += facts;
-                summary.discrepancies_written += disc;
-                summary.source_errors += errs;
+                summary.facts_written += report.facts_written;
+                summary.discrepancies_written += report.discrepancies_written;
+                summary.source_errors += report.source_errors.len();
             }
             Err(()) => summary.failed += 1,
         }
@@ -78,35 +62,39 @@ pub async fn collect_all(
     Ok(summary)
 }
 
-/// Run [`ingest`] for each known ticker. Unknown tickers (not yet bootstrapped)
-/// are skipped. Returns the per-ticker reports.
-#[allow(clippy::too_many_arguments)]
+/// One company's full collect: facts ingest, then best-effort prices (first,
+/// so Graham sees a price), news, collection timestamp, and metric recompute.
+async fn collect_company(
+    store: &Store,
+    sources: &CollectSources<'_>,
+    options: &CollectOptions,
+    company: &Company,
+) -> Result<IngestReport, StoreError> {
+    let target = target_of(company);
+    let report =
+        ingest(store, sources.facts, company.id, &target, options.threshold, options.now).await?;
+    let _ = collect_prices_for(store, sources.prices, company.id, &target, options.now).await;
+    let _ = collect_news_for(store, sources.news, company.id, &target, options.now).await;
+    let _ = store.mark_collected(company.id, options.now).await;
+    let _ = recompute_metrics(store, company.id, options.min_revenue, options.now).await;
+    Ok(report)
+}
+
+/// Run a full collect for each known ticker. Unknown tickers (not yet
+/// bootstrapped) are skipped. Returns the per-ticker reports.
 pub async fn collect_tickers(
     store: &Store,
-    sources: &[&dyn FactSource],
-    price_sources: &[&dyn PriceSource],
-    news_sources: &[&dyn NewsSource],
+    sources: &CollectSources<'_>,
     tickers: &[String],
-    threshold: f64,
-    now: DateTime<Utc>,
-    min_revenue: f64,
+    options: &CollectOptions,
 ) -> Result<Vec<(String, IngestReport)>, StoreError> {
     let mut outcomes = Vec::new();
     for ticker in tickers {
         let Some(company) = store.get_company(ticker).await? else {
             continue;
         };
-        let target = SourceTarget {
-            cik: company.cik.clone(),
-            symbol: company.ticker.clone(),
-        };
-        match ingest(store, sources, company.id, &target, threshold, now).await {
-            Ok(report) => {
-                let _ = collect_prices_for(store, price_sources, company.id, &target, now).await;
-                let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
-                let _ = recompute_metrics(store, company.id, min_revenue, now).await;
-                outcomes.push((ticker.clone(), report));
-            }
+        match collect_company(store, sources, options, &company).await {
+            Ok(report) => outcomes.push((ticker.clone(), report)),
             Err(e) => tracing::warn!("collect failed for {ticker}: {e}"),
         }
     }

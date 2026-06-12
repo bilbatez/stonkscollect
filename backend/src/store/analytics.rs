@@ -1,6 +1,44 @@
 use super::*;
 use sqlx::Row;
 
+/// Screener filters + paging. `Default` matches everything, first page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenFilter {
+    pub defensive_only: bool,
+    pub net_net_only: bool,
+    pub min_score: i64,
+    pub sector: Option<String>,
+    pub min_pe: Option<f64>,
+    pub max_pe: Option<f64>,
+    pub min_roe: Option<f64>,
+    pub max_de: Option<f64>,
+    pub min_margin: Option<f64>,
+    pub sort_by: Option<String>,
+    pub sort_dir: Option<String>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+impl Default for ScreenFilter {
+    fn default() -> Self {
+        Self {
+            defensive_only: false,
+            net_net_only: false,
+            min_score: 0,
+            sector: None,
+            min_pe: None,
+            max_pe: None,
+            min_roe: None,
+            max_de: None,
+            min_margin: None,
+            sort_by: None,
+            sort_dir: None,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
 impl Store {
     // --- Graham scores / screener ---
 
@@ -66,41 +104,24 @@ impl Store {
         }
     }
 
-    /// Screen companies by Graham score. Returns the page plus the total number
-    /// of matches (for pagination). `defensive_only`/`net_net_only`/`sector` and ratio
-    /// range filters are optional. `sort_by`/`sort_dir` control ordering (whitelisted).
-    #[allow(clippy::too_many_arguments)]
-    pub async fn screen(
-        &self,
-        defensive_only: bool,
-        net_net_only: bool,
-        min_score: i64,
-        sector: Option<&str>,
-        min_pe: Option<f64>,
-        max_pe: Option<f64>,
-        min_roe: Option<f64>,
-        max_de: Option<f64>,
-        min_margin: Option<f64>,
-        sort_by: Option<&str>,
-        sort_dir: Option<&str>,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<(Company, GrahamScore)>, i64)> {
+    /// Screen companies by Graham score per `filter`. Returns the page plus the
+    /// total number of matches (for pagination).
+    pub async fn screen(&self, filter: &ScreenFilter) -> Result<(Vec<(Company, GrahamScore)>, i64)> {
         let mut ratio_q = ScreenQueryBuilder::new();
-        ratio_q.add_ratio_filter("pe", min_pe, max_pe);
-        ratio_q.add_ratio_filter("roe", min_roe, None);
-        ratio_q.add_ratio_filter("debt_to_equity", None, max_de);
-        ratio_q.add_ratio_filter("net_margin", min_margin, None);
+        ratio_q.add_ratio_filter("pe", filter.min_pe, filter.max_pe);
+        ratio_q.add_ratio_filter("roe", filter.min_roe, None);
+        ratio_q.add_ratio_filter("debt_to_equity", None, filter.max_de);
+        ratio_q.add_ratio_filter("net_margin", filter.min_margin, None);
 
         let base_joins = " FROM graham_scores g JOIN companies c ON c.id = g.company_id";
         let mut where_clause = String::from(" WHERE g.score >= ?");
-        if defensive_only {
+        if filter.defensive_only {
             where_clause.push_str(" AND g.passes_defensive = 1");
         }
-        if net_net_only {
+        if filter.net_net_only {
             where_clause.push_str(" AND g.net_net = 1");
         }
-        if sector.is_some() {
+        if filter.sector.is_some() {
             where_clause.push_str(" AND c.sector = ?");
         }
         let from_clause = format!(
@@ -108,26 +129,30 @@ impl Store {
             ratio_q.extra_joins, ratio_q.extra_conditions
         );
         let count_sql = format!("SELECT COUNT(*){from_clause}");
-        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(min_score);
-        if let Some(s) = sector {
+        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(filter.min_score);
+        if let Some(s) = &filter.sector {
             count_q = count_q.bind(s);
         }
         for v in &ratio_q.binds {
             count_q = count_q.bind(*v);
         }
         let total = count_q.fetch_one(&self.pool).await?;
-        let order_by = screen_sort_expr(sort_by, sort_dir);
+        let order_by = screen_sort_expr(filter.sort_by.as_deref(), filter.sort_dir.as_deref());
         let sql = format!(
             "SELECT {SELECT_COMPANY_COLS}, {SELECT_GRAHAM_COLS}{from_clause} ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
-        let mut query = sqlx::query(&sql).bind(min_score);
-        if let Some(s) = sector {
+        let mut query = sqlx::query(&sql).bind(filter.min_score);
+        if let Some(s) = &filter.sector {
             query = query.bind(s);
         }
         for v in &ratio_q.binds {
             query = query.bind(*v);
         }
-        let rows = query.bind(limit).bind(offset).fetch_all(&self.pool).await?;
+        let rows = query
+            .bind(filter.limit)
+            .bind(filter.offset)
+            .fetch_all(&self.pool)
+            .await?;
         let page = rows
             .iter()
             .map(|r| Ok((company_from_row(r)?, Self::graham_score_from_row(r)?)))

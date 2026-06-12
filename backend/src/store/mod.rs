@@ -273,6 +273,8 @@ mod companies;
 mod records;
 mod runs;
 
+pub use analytics::ScreenFilter;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,23 +826,30 @@ mod tests {
         assert_eq!(store.get_graham_score(aapl).await.unwrap().unwrap().score, 8);
 
         // screen: all (min 0) -> AAPL(8) before MSFT(4); total reflects all matches
-        let (all, total) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let (all, total) = store.screen(&ScreenFilter::default()).await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(total, 2);
         assert_eq!(all[0].0.ticker, "AAPL");
         // defensive only -> just AAPL
-        let (def, def_total) = store.screen(true, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let defensive = ScreenFilter { defensive_only: true, ..Default::default() };
+        let (def, def_total) = store.screen(&defensive).await.unwrap();
         assert_eq!(def.len(), 1);
         assert_eq!(def_total, 1);
         assert_eq!(def[0].0.ticker, "AAPL");
         // min_score filter
-        assert_eq!(store.screen(false, false, 5, None, None, None, None, None, None, None, None, 10, 0).await.unwrap().0.len(), 1);
+        let scored = ScreenFilter { min_score: 5, ..Default::default() };
+        assert_eq!(store.screen(&scored).await.unwrap().0.len(), 1);
         // net-net filter (none set) -> empty
-        assert_eq!(store.screen(false, true, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap().1, 0);
+        let net_net = ScreenFilter { net_net_only: true, ..Default::default() };
+        assert_eq!(store.screen(&net_net).await.unwrap().1, 0);
         // offset paginates: skip the first of two
-        let (page2, _) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 1).await.unwrap();
+        let paged = ScreenFilter { offset: 1, ..Default::default() };
+        let (page2, _) = store.screen(&paged).await.unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].0.ticker, "MSFT");
+        // the filter itself is plain data
+        assert_eq!(paged.clone(), paged);
+        assert!(format!("{paged:?}").contains("offset: 1"));
     }
 
     #[tokio::test]
@@ -985,11 +994,16 @@ mod tests {
         store.save_graham_score(&g(msft_id, 5)).await.unwrap();
 
         // default (no sort_by) -> score DESC (both equal), tie-breaks by ticker -> AAPL, MSFT
-        let (rows, _) = store.screen(false, false, 0, None, None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let (rows, _) = store.screen(&ScreenFilter::default()).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
 
         // sort by ticker desc -> MSFT first
-        let (rows, _) = store.screen(false, false, 0, None, None, None, None, None, None, Some("ticker"), Some("desc"), 10, 0).await.unwrap();
+        let by_ticker_desc = ScreenFilter {
+            sort_by: Some("ticker".into()),
+            sort_dir: Some("desc".into()),
+            ..Default::default()
+        };
+        let (rows, _) = store.screen(&by_ticker_desc).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         assert_eq!(rows[1].0.ticker, "AAPL");
     }
@@ -1261,15 +1275,17 @@ mod tests {
                 net_net: false, computed_at: now,
             }).await.unwrap();
         }
+        let in_sector =
+            |s: &str| ScreenFilter { sector: Some(s.to_string()), ..Default::default() };
         // sector=Technology -> only AAPL
-        let (rows, total) = store.screen(false, false, 0, Some("Technology"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let (rows, total) = store.screen(&in_sector("Technology")).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows[0].0.ticker, "AAPL");
         // sector=Healthcare -> only MSFT
-        let (rows, _) = store.screen(false, false, 0, Some("Healthcare"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let (rows, _) = store.screen(&in_sector("Healthcare")).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         // sector=Unknown -> empty
-        let (_, total) = store.screen(false, false, 0, Some("Unknown"), None, None, None, None, None, None, None, 10, 0).await.unwrap();
+        let (_, total) = store.screen(&in_sector("Unknown")).await.unwrap();
         assert_eq!(total, 0);
     }
 

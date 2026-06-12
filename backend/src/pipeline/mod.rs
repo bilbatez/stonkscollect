@@ -27,6 +27,28 @@ impl CollectProgress for NoProgress {
     fn company_done(&self, _done: usize, _total: usize, _ticker: &str, _ok: bool) {}
 }
 
+/// The source set a collect pass draws from.
+pub struct CollectSources<'a> {
+    pub facts: &'a [&'a dyn FactSource],
+    pub prices: &'a [&'a dyn PriceSource],
+    pub news: &'a [&'a dyn NewsSource],
+}
+
+/// Knobs for a collect pass.
+#[derive(Debug, Clone, Copy)]
+pub struct CollectOptions {
+    /// Relative difference above which cross-source values are flagged.
+    pub threshold: f64,
+    /// The pass's clock (injected for determinism).
+    pub now: DateTime<Utc>,
+    /// Companies fetched concurrently (bulk passes).
+    pub concurrency: usize,
+    /// Skip companies collected since this instant (bulk passes; None = all).
+    pub cutoff: Option<DateTime<Utc>>,
+    /// Graham "adequate size" revenue floor for the per-company recompute.
+    pub min_revenue: f64,
+}
+
 /// Aggregate totals from collecting many companies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CollectSummary {
@@ -176,6 +198,22 @@ mod tests {
         (store, id, dir)
     }
 
+    /// Collect sources with only fact sources populated.
+    fn facts_only<'a>(facts: &'a [&'a dyn FactSource]) -> CollectSources<'a> {
+        CollectSources { facts, prices: &[], news: &[] }
+    }
+
+    /// Standard test options: 5% threshold, concurrency 2, no cutoff.
+    fn opts(now: DateTime<Utc>) -> CollectOptions {
+        CollectOptions {
+            threshold: 0.05,
+            now,
+            concurrency: 2,
+            cutoff: None,
+            min_revenue: 500_000_000.0,
+        }
+    }
+
     fn fact(company_id: i64, source: &str, item: &str, value: f64) -> FinancialFact {
         FinancialFact {
             company_id,
@@ -304,7 +342,7 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
 
-        let summary = collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
+        let summary = collect_all(&store, &facts_only(&sources), &opts(fixed_now()), &NoProgress)
             .await
             .unwrap();
 
@@ -325,13 +363,18 @@ mod tests {
         let edgar = EdgarCollector::new(FakeHttp::new(EDGAR));
         let sources: [&dyn FactSource; 1] = [&edgar];
         let now = fixed_now();
-        let cutoff = Some(now - ChronoDuration::hours(1));
+        let incremental =
+            CollectOptions { cutoff: Some(now - ChronoDuration::hours(1)), ..opts(now) };
 
         // First pass: never collected -> due -> collected (marked at `now`).
-        let s1 = collect_all(&store, &sources, &[], &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
+        let s1 = collect_all(&store, &facts_only(&sources), &incremental, &NoProgress)
+            .await
+            .unwrap();
         assert_eq!(s1.companies, 1);
         // Second pass, same cutoff: collected at `now` (>= cutoff) -> skipped.
-        let s2 = collect_all(&store, &sources, &[], &[], 0.05, now, 2, cutoff, 500_000_000.0, &NoProgress).await.unwrap();
+        let s2 = collect_all(&store, &facts_only(&sources), &incremental, &NoProgress)
+            .await
+            .unwrap();
         assert_eq!(s2.companies, 0);
     }
 
@@ -340,7 +383,7 @@ mod tests {
         let (store, _id, _d) = store_with_company().await; // 1 company (AAPL)
         assert_eq!(BadCompanyIdSource.name(), "bad");
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let summary = collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &NoProgress)
+        let summary = collect_all(&store, &facts_only(&sources), &opts(fixed_now()), &NoProgress)
             .await
             .unwrap(); // pass did NOT abort
         assert_eq!(summary.companies, 0);
@@ -381,10 +424,9 @@ mod tests {
         let sources: [&dyn FactSource; 1] = [&edgar];
         let p = CountProgress::default();
 
-        let summary =
-            collect_all(&store, &sources, &[], &[], 0.05, fixed_now(), 2, None, 500_000_000.0, &p)
-                .await
-                .unwrap();
+        let summary = collect_all(&store, &facts_only(&sources), &opts(fixed_now()), &p)
+            .await
+            .unwrap();
 
         assert_eq!(p.start_calls.load(SeqCst), 1); // start fired once
         assert_eq!(p.started_total.load(SeqCst), 2); // with the full count
@@ -531,7 +573,12 @@ mod tests {
         assert_eq!(GoodPriceSource.name(), "good");
         assert_eq!(GoodNewsSource.name(), "goodnews");
 
-        collect_tickers(&store, &sources, &price_sources, &news_sources, &["AAPL".to_string()], 0.05, fixed_now(), 500_000_000.0)
+        let all_sources = CollectSources {
+            facts: &sources,
+            prices: &price_sources,
+            news: &news_sources,
+        };
+        collect_tickers(&store, &all_sources, &["AAPL".to_string()], &opts(fixed_now()))
             .await
             .unwrap();
 
@@ -553,18 +600,10 @@ mod tests {
     async fn collect_tickers_skips_a_failing_company() {
         let (store, _id, _d) = store_with_company().await; // AAPL exists
         let sources: [&dyn FactSource; 1] = [&BadCompanyIdSource];
-        let outcomes = collect_tickers(
-            &store,
-            &sources,
-            &[],
-            &[],
-            &["AAPL".to_string()],
-            0.05,
-            fixed_now(),
-            500_000_000.0,
-        )
-        .await
-        .unwrap(); // did NOT abort
+        let outcomes =
+            collect_tickers(&store, &facts_only(&sources), &["AAPL".to_string()], &opts(fixed_now()))
+                .await
+                .unwrap(); // did NOT abort
         assert!(outcomes.is_empty()); // the failing company was skipped
     }
 
@@ -582,13 +621,9 @@ mod tests {
 
         let outcomes = collect_tickers(
             &store,
-            &sources,
-            &[],
-            &[],
+            &facts_only(&sources),
             &["AAPL".to_string(), "UNKNOWN".to_string()],
-            0.05,
-            fixed_now(),
-            500_000_000.0,
+            &opts(fixed_now()),
         )
         .await
         .unwrap();

@@ -17,7 +17,7 @@ use crate::domain::{
     ShareCount,
 };
 use crate::graham;
-use crate::store::{Store, StoreError};
+use crate::store::{ScreenFilter, Store, StoreError};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, String)>;
 type ApiError = (StatusCode, String);
@@ -200,28 +200,31 @@ async fn screen(
     Query(p): Query<ScreenParams>,
     _user: AuthUser,
 ) -> ApiResult<Page<ScreenRow>> {
-    let (rows, total) = store
-        .screen(
-            p.defensive.unwrap_or(false),
-            p.net_net.unwrap_or(false),
-            p.min_score.unwrap_or(0),
-            p.sector.as_deref(),
-            p.min_pe,
-            p.max_pe,
-            p.min_roe,
-            p.max_de,
-            p.min_margin,
-            p.sort_by.as_deref(),
-            p.sort_dir.as_deref(),
-            p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
-            p.offset.unwrap_or(0),
-        )
-        .await
-        .map_err(internal)?;
+    let (rows, total) = store.screen(&p.into()).await.map_err(internal)?;
     Ok(Json(Page {
         rows: rows.into_iter().map(|(company, score)| ScreenRow { company, score }).collect(),
         total,
     }))
+}
+
+impl From<ScreenParams> for ScreenFilter {
+    fn from(p: ScreenParams) -> Self {
+        ScreenFilter {
+            defensive_only: p.defensive.unwrap_or(false),
+            net_net_only: p.net_net.unwrap_or(false),
+            min_score: p.min_score.unwrap_or(0),
+            sector: p.sector,
+            min_pe: p.min_pe,
+            max_pe: p.max_pe,
+            min_roe: p.min_roe,
+            max_de: p.max_de,
+            min_margin: p.min_margin,
+            sort_by: p.sort_by,
+            sort_dir: p.sort_dir,
+            limit: p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
+            offset: p.offset.unwrap_or(0),
+        }
+    }
 }
 
 async fn sectors(

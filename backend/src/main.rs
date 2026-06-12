@@ -229,40 +229,37 @@ async fn collect_fundamentals(
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
+    // News is handled by the dedicated News tier in serve.
+    let collect_sources =
+        pipeline::CollectSources { facts: sources, prices: price_sources, news: &[] };
+    let options = collect_options(cfg, now, cutoff);
     // Prices, ratios + Graham scores are recomputed per company inside collect_*
     // (only for companies actually collected this pass), not the whole universe.
     if cfg.collect_all {
-        pipeline::collect_all(
-            store,
-            sources,
-            price_sources,
-            &[], // news handled by the dedicated News tier in serve
-            cfg.reconcile_threshold,
-            now,
-            cfg.collect_concurrency,
-            cutoff,
-            cfg.graham_min_revenue,
-            &pipeline::NoProgress,
-        )
-        .await
+        pipeline::collect_all(store, &collect_sources, &options, &pipeline::NoProgress).await
     } else {
-        let outcomes = pipeline::collect_tickers(
-            store,
-            sources,
-            price_sources,
-            &[],
-            &cfg.tickers,
-            cfg.reconcile_threshold,
-            now,
-            cfg.graham_min_revenue,
-        )
-        .await?;
+        let outcomes =
+            pipeline::collect_tickers(store, &collect_sources, &cfg.tickers, &options).await?;
         let mut s = pipeline::CollectSummary::default();
         for (_t, r) in &outcomes {
             s.companies += 1;
             s.facts_written += r.facts_written;
         }
         Ok(s)
+    }
+}
+
+fn collect_options(
+    cfg: &Config,
+    now: chrono::DateTime<chrono::Utc>,
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+) -> pipeline::CollectOptions {
+    pipeline::CollectOptions {
+        threshold: cfg.reconcile_threshold,
+        now,
+        concurrency: cfg.collect_concurrency,
+        cutoff,
+        min_revenue: cfg.graham_min_revenue,
     }
 }
 
@@ -415,41 +412,27 @@ async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all
     }
 
     let now = chrono::Utc::now();
+    let collect_sources = pipeline::CollectSources {
+        facts: &sources,
+        prices: &price_sources,
+        news: &news_sources,
+    };
+    // One-shot CLI always collects (no freshness cutoff).
+    let options = collect_options(cfg, now, None);
     // collect_* collect prices then recompute ratios + Graham per collected company.
     if bulk {
-        // One-shot CLI always collects (no freshness cutoff).
-        let s = pipeline::collect_all(
-            store,
-            &sources,
-            &price_sources,
-            &news_sources,
-            cfg.reconcile_threshold,
-            now,
-            cfg.collect_concurrency,
-            None,
-            cfg.graham_min_revenue,
-            &CliProgress,
-        )
-        .await
-        .expect("collect all");
+        let s = pipeline::collect_all(store, &collect_sources, &options, &CliProgress)
+            .await
+            .expect("collect all");
         report_bulk("collect", Ok(s));
     } else {
         if tickers.is_empty() {
             tickers = cfg.tickers.clone();
         }
         tickers.iter_mut().for_each(|t| *t = t.to_uppercase());
-        let outcomes = pipeline::collect_tickers(
-            store,
-            &sources,
-            &price_sources,
-            &news_sources,
-            &tickers,
-            cfg.reconcile_threshold,
-            now,
-            cfg.graham_min_revenue,
-        )
-        .await
-        .expect("collect tickers");
+        let outcomes = pipeline::collect_tickers(store, &collect_sources, &tickers, &options)
+            .await
+            .expect("collect tickers");
         for (ticker, report) in outcomes {
             tracing::info!(
                 "{ticker}: {} facts, {} discrepancies, {} source errors",
