@@ -9,7 +9,7 @@ pub mod scrape;
 pub mod yahoo;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -49,10 +49,15 @@ pub struct SourceTarget {
 #[async_trait(?Send)]
 pub trait PriceSource {
     fn name(&self) -> &'static str;
+    /// Fetch daily bars up to `now`. When `since` is given, only bars from that
+    /// date on are needed (incremental refresh); otherwise the source returns
+    /// its full history window.
     async fn fetch_prices(
         &self,
         company_id: i64,
         target: &SourceTarget,
+        now: DateTime<Utc>,
+        since: Option<NaiveDate>,
     ) -> Result<Vec<PricePoint>, CollectorError>;
 }
 

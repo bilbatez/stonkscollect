@@ -26,8 +26,13 @@ impl<H: HttpClient> FmpCollector<H> {
         Self { http, api_key }
     }
 
-    pub fn prices_url(symbol: &str, api_key: &str) -> String {
-        format!("{BASE}/historical-price-full/{symbol}?apikey={api_key}")
+    /// Historical-prices URL; `since` narrows the window for incremental refresh.
+    pub fn prices_url(symbol: &str, api_key: &str, since: Option<NaiveDate>) -> String {
+        let base = format!("{BASE}/historical-price-full/{symbol}?apikey={api_key}");
+        match since {
+            Some(from) => format!("{base}&from={from}"),
+            None => base,
+        }
     }
 
     pub fn income_url(symbol: &str, api_key: &str) -> String {
@@ -46,10 +51,11 @@ impl<H: HttpClient> FmpCollector<H> {
         &self,
         company_id: i64,
         symbol: &str,
+        since: Option<NaiveDate>,
     ) -> Result<Vec<PricePoint>, CollectorError> {
         let body = self
             .http
-            .get_text(&Self::prices_url(symbol, &self.api_key))
+            .get_text(&Self::prices_url(symbol, &self.api_key, since))
             .await?;
         parse_prices(company_id, &body)
     }
@@ -122,8 +128,10 @@ impl<H: HttpClient> PriceSource for FmpCollector<H> {
         &self,
         company_id: i64,
         target: &SourceTarget,
+        _now: DateTime<Utc>,
+        since: Option<NaiveDate>,
     ) -> Result<Vec<PricePoint>, CollectorError> {
-        self.collect_prices(company_id, &target.symbol).await
+        self.collect_prices(company_id, &target.symbol, since).await
     }
 }
 
@@ -285,11 +293,20 @@ mod tests {
     #[test]
     fn url_builders_include_symbol_and_key() {
         assert_eq!(
-            FmpCollector::<FakeHttp>::prices_url("AAPL", "KEY"),
+            FmpCollector::<FakeHttp>::prices_url("AAPL", "KEY", None),
             "https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?apikey=KEY"
         );
         assert!(FmpCollector::<FakeHttp>::income_url("AAPL", "KEY").contains("income-statement/AAPL"));
         assert!(FmpCollector::<FakeHttp>::ratios_url("AAPL", "KEY").ends_with("apikey=KEY"));
+    }
+
+    #[test]
+    fn prices_url_includes_from_when_since_given() {
+        let since = NaiveDate::from_ymd_opt(2024, 2, 23).unwrap();
+        assert_eq!(
+            FmpCollector::<FakeHttp>::prices_url("AAPL", "KEY", Some(since)),
+            "https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?apikey=KEY&from=2024-02-23"
+        );
     }
 
     #[test]
@@ -406,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn collect_prices_fetches_then_parses() {
         let c = FmpCollector::new(FakeHttp::new(PRICES), "KEY".into());
-        let prices = c.collect_prices(7, "AAPL").await.unwrap();
+        let prices = c.collect_prices(7, "AAPL", None).await.unwrap();
         assert_eq!(prices.len(), 2);
         assert!(c.http.url().unwrap().contains("AAPL"));
     }

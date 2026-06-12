@@ -44,7 +44,7 @@ pub async fn collect_all(
                     Ok(report) => {
                         // Best-effort: prices first (so Graham sees a price), then
                         // news, timestamp + per-company metric recompute.
-                        let _ = collect_prices_for(store, price_sources, company.id, &target).await;
+                        let _ = collect_prices_for(store, price_sources, company.id, &target, now).await;
                         let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
                         let _ = store.mark_collected(company.id, now).await;
                         let _ = recompute_metrics(store, company.id, min_revenue, now).await;
@@ -102,7 +102,7 @@ pub async fn collect_tickers(
         };
         match ingest(store, sources, company.id, &target, threshold, now).await {
             Ok(report) => {
-                let _ = collect_prices_for(store, price_sources, company.id, &target).await;
+                let _ = collect_prices_for(store, price_sources, company.id, &target, now).await;
                 let _ = collect_news_for(store, news_sources, company.id, &target, now).await;
                 let _ = recompute_metrics(store, company.id, min_revenue, now).await;
                 outcomes.push((ticker.clone(), report));

@@ -8,7 +8,7 @@
 
 use std::sync::Mutex;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -68,12 +68,16 @@ impl<H: HttpClient> YahooCollector<H> {
     /// ~20 years of trading days.
     const HISTORY_DAYS: i64 = 365 * 20;
 
-    /// Daily-chart URL for ~20y up to `now`. Uses explicit period1/period2 epochs
+    /// Daily-chart URL up to `now`, starting at `since` when given (incremental
+    /// refresh) or ~20y back otherwise. Uses explicit period1/period2 epochs
     /// (with `interval=1d`) rather than `range=max`, which Yahoo downsamples to
     /// monthly for long spans.
-    pub fn chart_url(symbol: &str, now: DateTime<Utc>) -> String {
+    pub fn chart_url(symbol: &str, now: DateTime<Utc>, since: Option<NaiveDate>) -> String {
         let period2 = now.timestamp();
-        let period1 = (now - Duration::days(Self::HISTORY_DAYS)).timestamp();
+        let period1 = match since.and_then(|d| d.and_hms_opt(0, 0, 0)) {
+            Some(midnight) => midnight.and_utc().timestamp(),
+            None => (now - Duration::days(Self::HISTORY_DAYS)).timestamp(),
+        };
         format!(
             "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&period1={period1}&period2={period2}",
             symbol.to_uppercase()
@@ -84,8 +88,10 @@ impl<H: HttpClient> YahooCollector<H> {
         &self,
         company_id: i64,
         symbol: &str,
+        now: DateTime<Utc>,
+        since: Option<NaiveDate>,
     ) -> Result<Vec<PricePoint>, CollectorError> {
-        let body = self.http.get_text(&Self::chart_url(symbol, Utc::now())).await?;
+        let body = self.http.get_text(&Self::chart_url(symbol, now, since)).await?;
         parse_chart_json(company_id, &body)
     }
 }
@@ -100,8 +106,10 @@ impl<H: HttpClient> PriceSource for YahooCollector<H> {
         &self,
         company_id: i64,
         target: &SourceTarget,
+        now: DateTime<Utc>,
+        since: Option<NaiveDate>,
     ) -> Result<Vec<PricePoint>, CollectorError> {
-        self.collect_prices(company_id, &target.symbol).await
+        self.collect_prices(company_id, &target.symbol, now, since).await
     }
 }
 
@@ -274,7 +282,7 @@ mod tests {
     #[test]
     fn chart_url_uppercases_symbol_and_spans_20y() {
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let url = YahooCollector::<FakeHttp>::chart_url("vmc", now);
+        let url = YahooCollector::<FakeHttp>::chart_url("vmc", now, None);
         assert!(url.starts_with("https://query1.finance.yahoo.com/v8/finance/chart/VMC?interval=1d&period1="));
         assert!(url.contains(&format!("period2={}", now.timestamp())));
         let p1: i64 = url.split("period1=").nth(1).unwrap().split('&').next().unwrap().parse().unwrap();
@@ -321,11 +329,21 @@ mod tests {
         assert!(matches!(parse_chart_json(1, "nope").unwrap_err(), CollectorError::Parse(_)));
     }
 
+    #[test]
+    fn chart_url_starts_at_since_when_given() {
+        let now = Utc.with_ymd_and_hms(2024, 3, 1, 12, 0, 0).unwrap();
+        let since = NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
+        let url = YahooCollector::<FakeHttp>::chart_url("aapl", now, Some(since));
+        let midnight = since.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
+        assert!(url.contains(&format!("period1={midnight}")), "{url}");
+        assert!(url.contains(&format!("period2={}", now.timestamp())));
+    }
+
     #[tokio::test]
     async fn fetch_prices_hits_endpoint_then_parses() {
         let c = YahooCollector::new(FakeHttp::new(FIXTURE));
         let target = SourceTarget { cik: "x".into(), symbol: "VMC".into() };
-        let p = c.fetch_prices(3, &target).await.unwrap();
+        let p = c.fetch_prices(3, &target, Utc::now(), None).await.unwrap();
         assert_eq!(p.len(), 2);
         assert_eq!(c.name(), "yahoo");
         assert!(c.http.url().unwrap().contains("/chart/VMC"));

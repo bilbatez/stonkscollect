@@ -999,6 +999,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_price_date_is_per_source() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        assert_eq!(store.latest_price_date(id, "fmp").await.unwrap(), None);
+        for (d, src) in [("2024-03-01", "fmp"), ("2024-04-01", "yahoo"), ("2024-02-01", "yahoo")] {
+            store
+                .upsert_price(&PricePoint {
+                    company_id: id,
+                    date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 1.0,
+                    volume: None,
+                    source: src.into(),
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            store.latest_price_date(id, "fmp").await.unwrap(),
+            NaiveDate::from_ymd_opt(2024, 3, 1)
+        );
+        assert_eq!(
+            store.latest_price_date(id, "yahoo").await.unwrap(),
+            NaiveDate::from_ymd_opt(2024, 4, 1)
+        );
+    }
+
+    #[tokio::test]
     async fn latest_price_returns_newest() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();

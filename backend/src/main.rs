@@ -262,17 +262,17 @@ async fn collect_prices(
     store: &Store,
     cfg: &Config,
     sources: &[&dyn PriceSource],
-    _now: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
     delay: std::time::Duration,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     if cfg.collect_all {
-        return pipeline::collect_prices_all(store, sources, delay).await;
+        return pipeline::collect_prices_all(store, sources, now, delay).await;
     }
     let mut s = pipeline::CollectSummary::default();
     for ticker in &cfg.tickers {
         if let Some(c) = store.get_company(ticker).await? {
             let t = SourceTarget { cik: c.cik.clone(), symbol: c.ticker.clone() };
-            s.facts_written += pipeline::collect_prices_for(store, sources, c.id, &t).await?;
+            s.facts_written += pipeline::collect_prices_for(store, sources, c.id, &t, now).await?;
             s.companies += 1;
         }
     }

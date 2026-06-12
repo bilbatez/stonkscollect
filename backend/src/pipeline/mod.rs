@@ -75,6 +75,8 @@ mod tests {
             &self,
             _id: i64,
             _t: &SourceTarget,
+            _now: DateTime<Utc>,
+            _since: Option<NaiveDate>,
         ) -> Result<Vec<PricePoint>, CollectorError> {
             Ok(vec![PricePoint {
                 company_id: 9_999_999,
@@ -402,6 +404,8 @@ mod tests {
             &self,
             id: i64,
             _t: &SourceTarget,
+            _now: DateTime<Utc>,
+            _since: Option<NaiveDate>,
         ) -> Result<Vec<PricePoint>, CollectorError> {
             Ok(vec![PricePoint {
                 company_id: id,
@@ -619,6 +623,59 @@ mod tests {
         SourceTarget { cik: "320193".into(), symbol: "AAPL".into() }
     }
 
+    /// A price source that records the `since` window it was asked for.
+    #[derive(Default)]
+    struct SinceRecorder {
+        seen: std::sync::Mutex<Vec<Option<NaiveDate>>>,
+    }
+    #[async_trait(?Send)]
+    impl PriceSource for SinceRecorder {
+        fn name(&self) -> &'static str {
+            "rec"
+        }
+        async fn fetch_prices(
+            &self,
+            _id: i64,
+            _t: &SourceTarget,
+            _now: DateTime<Utc>,
+            since: Option<NaiveDate>,
+        ) -> Result<Vec<PricePoint>, CollectorError> {
+            self.seen.lock().unwrap().push(since);
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_prices_for_requests_since_last_stored_minus_overlap() {
+        let (store, id, _d) = store_with_company().await;
+        let rec = SinceRecorder::default();
+        assert_eq!(PriceSource::name(&rec), "rec");
+        let sources: [&dyn PriceSource; 1] = [&rec];
+
+        // nothing stored yet -> full backfill (no since)
+        collect_prices_for(&store, &sources, id, &target(), fixed_now()).await.unwrap();
+
+        // with a stored price, the next fetch starts 7 days before it (overlap
+        // absorbs upstream revisions of recent bars)
+        store
+            .upsert_price(&PricePoint {
+                company_id: id,
+                date: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+                open: None,
+                high: None,
+                low: None,
+                close: 1.0,
+                volume: None,
+                source: "rec".into(),
+            })
+            .await
+            .unwrap();
+        collect_prices_for(&store, &sources, id, &target(), fixed_now()).await.unwrap();
+
+        let seen = rec.seen.lock().unwrap();
+        assert_eq!(*seen, vec![None, NaiveDate::from_ymd_opt(2024, 2, 23)]);
+    }
+
     #[tokio::test]
     async fn collect_prices_for_persists_and_skips_bad_source() {
         let (store, id, _d) = store_with_company().await;
@@ -626,7 +683,7 @@ mod tests {
         let bad = FmpCollector::new(FakeHttp::new("nope"), "K".into()); // parse error -> warn
         assert_eq!(PriceSource::name(&good), "fmp");
         let sources: [&dyn PriceSource; 2] = [&good, &bad];
-        let n = collect_prices_for(&store, &sources, id, &target()).await.unwrap();
+        let n = collect_prices_for(&store, &sources, id, &target(), fixed_now()).await.unwrap();
         assert_eq!(n, 2);
         assert_eq!(store.get_prices(id).await.unwrap().len(), 2);
     }
@@ -660,13 +717,13 @@ mod tests {
         let (store, id, _d) = store_with_company().await;
         let good = FmpCollector::new(FakeHttp::new(FMP_PRICES), "K".into());
         let ok_sources: [&dyn PriceSource; 1] = [&good];
-        let s = collect_prices_all(&store, &ok_sources, Duration::ZERO).await.unwrap();
+        let s = collect_prices_all(&store, &ok_sources, fixed_now(), Duration::ZERO).await.unwrap();
         assert_eq!(s.companies, 1);
         assert!(!store.get_prices(id).await.unwrap().is_empty());
 
         assert_eq!(BadPriceSource.name(), "badp");
         let bad_sources: [&dyn PriceSource; 1] = [&BadPriceSource];
-        let s2 = collect_prices_all(&store, &bad_sources, Duration::ZERO).await.unwrap();
+        let s2 = collect_prices_all(&store, &bad_sources, fixed_now(), Duration::ZERO).await.unwrap();
         assert_eq!(s2.failed, 1);
     }
 

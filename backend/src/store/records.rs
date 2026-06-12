@@ -71,6 +71,23 @@ impl Store {
             .collect()
     }
 
+    /// The most recent stored price date for `(company, source)` — the resume
+    /// point for incremental price collection.
+    pub async fn latest_price_date(
+        &self,
+        company_id: i64,
+        source: &str,
+    ) -> Result<Option<chrono::NaiveDate>> {
+        let date = sqlx::query_scalar(
+            "SELECT MAX(date) FROM prices WHERE company_id=? AND source=?",
+        )
+        .bind(company_id)
+        .bind(source)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(date)
+    }
+
     /// Upsert many prices in one transaction.
     pub async fn save_prices(&self, prices: &[PricePoint]) -> Result<()> {
         let mut tx = self.pool.begin().await?;

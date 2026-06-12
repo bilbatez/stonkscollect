@@ -44,16 +44,27 @@ pub(crate) fn target_of(c: &Company) -> SourceTarget {
     }
 }
 
+/// Days re-fetched before the last stored price, so upstream revisions of
+/// recent bars (splits, late corrections) are picked up by the overlap.
+const PRICE_REFRESH_OVERLAP_DAYS: i64 = 7;
+
 /// Gather prices from all sources for one company (best-effort) and persist.
+/// Each source is asked only for bars since its last stored date (minus a
+/// small overlap); a source with no stored prices backfills its full window.
 pub async fn collect_prices_for(
     store: &Store,
     sources: &[&dyn PriceSource],
     company_id: i64,
     target: &SourceTarget,
+    now: DateTime<Utc>,
 ) -> Result<usize, StoreError> {
     let mut all = Vec::new();
     for s in sources {
-        match s.fetch_prices(company_id, target).await {
+        let since = store
+            .latest_price_date(company_id, s.name())
+            .await?
+            .map(|last| last - chrono::Duration::days(PRICE_REFRESH_OVERLAP_DAYS));
+        match s.fetch_prices(company_id, target, now, since).await {
             Ok(p) => all.extend(p),
             // Best-effort: a missing/delisted ticker (e.g. Yahoo 404) is expected
             // across a 10k-company run, so log at debug, not warn.
@@ -100,6 +111,7 @@ pub async fn recompute_ratios(
 pub async fn collect_prices_all(
     store: &Store,
     sources: &[&dyn PriceSource],
+    now: DateTime<Utc>,
     delay: std::time::Duration,
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
@@ -108,7 +120,7 @@ pub async fn collect_prices_all(
         if i > 0 {
             tokio::time::sleep(delay).await;
         }
-        match collect_prices_for(store, sources, c.id, &target_of(c)).await {
+        match collect_prices_for(store, sources, c.id, &target_of(c), now).await {
             Ok(n) => {
                 s.companies += 1;
                 s.facts_written += n;
