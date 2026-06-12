@@ -208,8 +208,8 @@ async fn scheduler_loop(store: &Arc<Store>, cfg: &Config) {
                 Tier::Fundamentals => {
                     collect_fundamentals(store, cfg, &fact_sources, &price_sources, fired).await
                 }
-                Tier::Price => collect_prices(store, cfg, &price_sources, fired, delay).await,
-                Tier::News => collect_news(store, cfg, &news_sources, fired, delay).await,
+                Tier::Price => collect_prices(store, cfg, &price_sources, fired).await,
+                Tier::News => collect_news(store, cfg, &news_sources, fired).await,
             }
         })
         .await;
@@ -270,10 +270,9 @@ async fn collect_prices(
     cfg: &Config,
     sources: &[&dyn PriceSource],
     now: chrono::DateTime<chrono::Utc>,
-    delay: std::time::Duration,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     if cfg.collect_all {
-        return pipeline::collect_prices_all(store, sources, now, delay).await;
+        return pipeline::collect_prices_all(store, sources, now, cfg.collect_concurrency).await;
     }
     let mut s = pipeline::CollectSummary::default();
     for ticker in &cfg.tickers {
@@ -291,10 +290,9 @@ async fn collect_news(
     cfg: &Config,
     sources: &[&dyn NewsSource],
     now: chrono::DateTime<chrono::Utc>,
-    delay: std::time::Duration,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     if cfg.collect_all {
-        return pipeline::collect_news_all(store, sources, now, delay).await;
+        return pipeline::collect_news_all(store, sources, now, cfg.collect_concurrency).await;
     }
     let mut s = pipeline::CollectSummary::default();
     for ticker in &cfg.tickers {

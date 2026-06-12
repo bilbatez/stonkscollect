@@ -57,7 +57,6 @@ mod tests {
     use crate::testutil::{fixed_now, FakeHttp};
     use async_trait::async_trait;
     use chrono::{Duration as ChronoDuration, NaiveDate, TimeZone};
-    use std::time::Duration;
 
     const EDGAR: &str = include_str!("../../tests/fixtures/edgar_companyfacts.json");
     const FMP_INCOME: &str = include_str!("../../tests/fixtures/fmp_income.json");
@@ -767,13 +766,13 @@ mod tests {
         let (store, id, _d) = store_with_company().await;
         let good = FmpCollector::new(FakeHttp::new(FMP_PRICES), "K".into());
         let ok_sources: [&dyn PriceSource; 1] = [&good];
-        let s = collect_prices_all(&store, &ok_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        let s = collect_prices_all(&store, &ok_sources, fixed_now(), 4).await.unwrap();
         assert_eq!(s.companies, 1);
         assert!(!store.get_prices(id).await.unwrap().is_empty());
 
         assert_eq!(BadPriceSource.name(), "badp");
         let bad_sources: [&dyn PriceSource; 1] = [&BadPriceSource];
-        let s2 = collect_prices_all(&store, &bad_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        let s2 = collect_prices_all(&store, &bad_sources, fixed_now(), 4).await.unwrap();
         assert_eq!(s2.failed, 1);
     }
 
@@ -782,13 +781,13 @@ mod tests {
         let (store, id, _d) = store_with_company().await;
         let good = FinnhubCollector::new(FakeHttp::new(NEWS_FINNHUB), "K".into());
         let ok_sources: [&dyn NewsSource; 1] = [&good];
-        let s = collect_news_all(&store, &ok_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        let s = collect_news_all(&store, &ok_sources, fixed_now(), 4).await.unwrap();
         assert_eq!(s.companies, 1);
         assert!(!store.get_news(id).await.unwrap().is_empty());
 
         assert_eq!(BadNewsSource.name(), "badn");
         let bad_sources: [&dyn NewsSource; 1] = [&BadNewsSource];
-        let s2 = collect_news_all(&store, &bad_sources, fixed_now(), Duration::ZERO).await.unwrap();
+        let s2 = collect_news_all(&store, &bad_sources, fixed_now(), 4).await.unwrap();
         assert_eq!(s2.failed, 1);
     }
 

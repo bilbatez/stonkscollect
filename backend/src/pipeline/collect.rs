@@ -107,58 +107,61 @@ pub async fn recompute_ratios(
     Ok(computed.len())
 }
 
-/// Collect prices for every company (throttled, per-company isolation).
+/// Collect prices for every company (parallel, per-company isolation;
+/// politeness comes from each client's shared per-host rate limiter).
 pub async fn collect_prices_all(
     store: &Store,
     sources: &[&dyn PriceSource],
     now: DateTime<Utc>,
-    delay: std::time::Duration,
+    concurrency: usize,
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
-    let mut s = CollectSummary::default();
-    for (i, c) in companies.iter().enumerate() {
-        if i > 0 {
-            tokio::time::sleep(delay).await;
-        }
-        match collect_prices_for(store, sources, c.id, &target_of(c), now).await {
-            Ok(n) => {
-                s.companies += 1;
-                s.facts_written += n;
-            }
-            Err(e) => {
-                tracing::warn!("prices failed for {}: {e}", c.ticker);
-                s.failed += 1;
-            }
-        }
-    }
-    Ok(s)
+    let outcomes = futures::stream::iter(companies)
+        .map(|c| async move {
+            collect_prices_for(store, sources, c.id, &target_of(&c), now)
+                .await
+                .map_err(|e| tracing::warn!("prices failed for {}: {e}", c.ticker))
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+    Ok(summarize(outcomes))
 }
 
-/// Collect news for every company (throttled, per-company isolation).
+/// Collect news for every company (parallel, per-company isolation;
+/// politeness comes from each client's shared per-host rate limiter).
 pub async fn collect_news_all(
     store: &Store,
     sources: &[&dyn NewsSource],
     now: DateTime<Utc>,
-    delay: std::time::Duration,
+    concurrency: usize,
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
+    let outcomes = futures::stream::iter(companies)
+        .map(|c| async move {
+            collect_news_for(store, sources, c.id, &target_of(&c), now)
+                .await
+                .map_err(|e| tracing::warn!("news failed for {}: {e}", c.ticker))
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+    Ok(summarize(outcomes))
+}
+
+/// Fold per-company outcomes (items written, or a logged failure) into totals.
+fn summarize(outcomes: Vec<Result<usize, ()>>) -> CollectSummary {
     let mut s = CollectSummary::default();
-    for (i, c) in companies.iter().enumerate() {
-        if i > 0 {
-            tokio::time::sleep(delay).await;
-        }
-        match collect_news_for(store, sources, c.id, &target_of(c), now).await {
-            Ok(n) => {
+    for outcome in outcomes {
+        match outcome {
+            Ok(written) => {
                 s.companies += 1;
-                s.facts_written += n;
+                s.facts_written += written;
             }
-            Err(e) => {
-                tracing::warn!("news failed for {}: {e}", c.ticker);
-                s.failed += 1;
-            }
+            Err(()) => s.failed += 1,
         }
     }
-    Ok(s)
+    s
 }
 
 /// Recompute ratios for every company from stored facts.
