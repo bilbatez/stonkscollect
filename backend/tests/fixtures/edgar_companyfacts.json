@@ -68,6 +68,9 @@
       "GrossProfit": {
         "units": { "USD": [ { "end": "2023-09-30", "val": 169148000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
       },
+      "CostOfGoodsAndServicesSold": {
+        "units": { "USD": [ { "end": "2023-09-30", "val": 214137000000, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
+      },
       "EarningsPerShareDiluted": {
         "units": { "USD/shares": [ { "end": "2023-09-30", "val": 6.13, "fp": "FY", "form": "10-K", "filed": "2023-11-02" } ] }
       },

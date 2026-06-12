@@ -147,6 +147,14 @@ struct IncomeRow {
     revenue: Option<f64>,
     #[serde(rename = "netIncome")]
     net_income: Option<f64>,
+    #[serde(rename = "grossProfit")]
+    gross_profit: Option<f64>,
+    #[serde(rename = "operatingIncome")]
+    operating_income: Option<f64>,
+    eps: Option<f64>,
+    #[serde(rename = "costOfRevenue")]
+    cost_of_revenue: Option<f64>,
+    ebitda: Option<f64>,
 }
 
 fn parse_income(
@@ -160,7 +168,16 @@ fn parse_income(
         let Some(period_type) = period_type_from_fp(&row.period) else {
             continue;
         };
-        for (item, value) in [("Revenue", row.revenue), ("NetIncome", row.net_income)] {
+        // Line-item names match EDGAR's, so reconcile cross-checks them.
+        for (item, value) in [
+            ("Revenue", row.revenue),
+            ("NetIncome", row.net_income),
+            ("GrossProfit", row.gross_profit),
+            ("OperatingIncome", row.operating_income),
+            ("Eps", row.eps),
+            ("CostOfRevenue", row.cost_of_revenue),
+            ("Ebitda", row.ebitda),
+        ] {
             if let Some(value) = value {
                 facts.push(FinancialFact {
                     company_id,
@@ -261,8 +278,8 @@ mod tests {
     #[test]
     fn parse_income_maps_present_fields_and_skips_unknown_period() {
         let facts = parse_income(7, INCOME, now()).unwrap();
-        // FY revenue + FY netIncome + Q3 revenue + 2022 FY netIncome = 4; TTM row skipped.
-        assert_eq!(facts.len(), 4);
+        // FY 2023 (7 items) + Q3 revenue + 2022 FY netIncome = 9; TTM row skipped.
+        assert_eq!(facts.len(), 9);
         assert!(facts
             .iter()
             .all(|f| f.statement == StatementKind::Income && f.source == "fmp"));
@@ -273,6 +290,27 @@ mod tests {
         assert_eq!(q3_rev.value, 81797000000.0);
         // TTM row (value 1/2) excluded
         assert!(facts.iter().all(|f| f.value != 1.0 && f.value != 2.0));
+    }
+
+    #[test]
+    fn parse_income_maps_extended_line_items() {
+        let facts = parse_income(7, INCOME, now()).unwrap();
+        let fy23 = NaiveDate::from_ymd_opt(2023, 9, 30).unwrap();
+        let fy = |item: &str| {
+            facts
+                .iter()
+                .find(|f| {
+                    f.line_item == item
+                        && f.period_type == PeriodType::Annual
+                        && f.period_end == fy23
+                })
+                .unwrap_or_else(|| panic!("{item} missing"))
+        };
+        assert_eq!(fy("GrossProfit").value, 169148000000.0);
+        assert_eq!(fy("OperatingIncome").value, 114301000000.0);
+        assert_eq!(fy("Eps").value, 6.13);
+        assert_eq!(fy("CostOfRevenue").value, 214137000000.0);
+        assert_eq!(fy("Ebitda").value, 125820000000.0);
     }
 
     #[test]
@@ -309,7 +347,7 @@ mod tests {
     async fn collect_income_fetches_then_parses() {
         let c = FmpCollector::new(FakeHttp::new(INCOME), "KEY".into());
         let facts = c.collect_income(7, "AAPL", now()).await.unwrap();
-        assert_eq!(facts.len(), 4);
+        assert_eq!(facts.len(), 9);
     }
 
     #[tokio::test]

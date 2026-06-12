@@ -59,6 +59,12 @@ const CONCEPTS: &[(&str, StatementKind, &str)] = &[
     ("LongTermDebtNoncurrent", StatementKind::Balance, "LongTermDebt"),
     ("LongTermDebt", StatementKind::Balance, "LongTermDebt"),
     ("GrossProfit", StatementKind::Income, "GrossProfit"),
+    ("CostOfRevenue", StatementKind::Income, "CostOfRevenue"),
+    (
+        "CostOfGoodsAndServicesSold",
+        StatementKind::Income,
+        "CostOfRevenue",
+    ),
     ("OperatingIncomeLoss", StatementKind::Income, "OperatingIncome"),
     ("EarningsPerShareDiluted", StatementKind::Income, "Eps"),
     ("EarningsPerShareBasic", StatementKind::Income, "Eps"),
@@ -475,6 +481,7 @@ mod tests {
         assert_eq!(find(&facts, "Goodwill", PeriodType::Annual, fy23).value, 0.0);
         assert_eq!(find(&facts, "Inventories", PeriodType::Annual, fy23).value, 6331000000.0);
         assert_eq!(find(&facts, "RetainedEarnings", PeriodType::Annual, fy23).value, -214966000000.0);
+        assert_eq!(find(&facts, "CostOfRevenue", PeriodType::Annual, fy23).value, 214137000000.0);
         assert_eq!(find(&facts, "SharesOutstandingBalance", PeriodType::Annual, fy23).value, 15552752000.0);
     }
 
