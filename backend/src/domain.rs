@@ -4,6 +4,41 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
+/// One company's latest daily price move.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct MoverRow {
+    pub company: Company,
+    pub last_close: f64,
+    pub change: f64,
+    pub change_pct: f64,
+    pub volume: Option<i64>,
+    pub as_of: NaiveDate,
+}
+
+/// Market-movers buckets for the dashboard.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Movers {
+    pub gainers: Vec<MoverRow>,
+    pub losers: Vec<MoverRow>,
+    pub most_active: Vec<MoverRow>,
+}
+
+/// Rank raw day-change rows into gainers / losers / most-active buckets of at
+/// most `limit` rows each. Missing volume sorts last for "most active".
+pub fn select_movers(rows: Vec<MoverRow>, limit: usize) -> Movers {
+    let top_by = |key: fn(&MoverRow, &MoverRow) -> std::cmp::Ordering| {
+        let mut sorted = rows.clone();
+        sorted.sort_by(key);
+        sorted.truncate(limit);
+        sorted
+    };
+    Movers {
+        gainers: top_by(|a, b| b.change_pct.total_cmp(&a.change_pct)),
+        losers: top_by(|a, b| a.change_pct.total_cmp(&b.change_pct)),
+        most_active: top_by(|a, b| b.volume.unwrap_or(0).cmp(&a.volume.unwrap_or(0))),
+    }
+}
+
 /// A recorded per-source collection failure for a company.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SourceError {
@@ -294,6 +329,58 @@ mod tests {
         };
         assert_eq!(r.clone(), r);
         assert!(format!("{r:?}").contains("pe"));
+    }
+
+    fn mover(ticker: &str, change_pct: f64, volume: Option<i64>) -> MoverRow {
+        MoverRow {
+            company: Company {
+                id: 1,
+                cik: "1".into(),
+                ticker: ticker.into(),
+                name: ticker.into(),
+                exchange: None,
+                sector: None,
+                industry: None,
+                description: None,
+                website: None,
+                employees: None,
+            },
+            last_close: 100.0 * (1.0 + change_pct),
+            change: 100.0 * change_pct,
+            change_pct,
+            volume,
+            as_of: chrono::NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+        }
+    }
+
+    #[test]
+    fn select_movers_buckets_gainers_losers_and_most_active() {
+        let rows = vec![
+            mover("UP2", 0.02, Some(100)),
+            mover("DOWN", -0.05, Some(900)),
+            mover("UP9", 0.09, None),
+            mover("FLAT", 0.0, Some(500)),
+        ];
+        let m = select_movers(rows, 2);
+        let tickers = |list: &[MoverRow]| -> Vec<String> {
+            list.iter().map(|r| r.company.ticker.clone()).collect()
+        };
+        assert_eq!(tickers(&m.gainers), ["UP9", "UP2"]);
+        assert_eq!(tickers(&m.losers), ["DOWN", "FLAT"]);
+        // most active by volume; a missing volume sorts last
+        assert_eq!(tickers(&m.most_active), ["DOWN", "FLAT"]);
+        assert_eq!(m.clone(), m);
+        assert!(format!("{m:?}").contains("UP9"));
+    }
+
+    #[test]
+    fn select_movers_handles_short_lists() {
+        let m = select_movers(vec![mover("ONLY", 0.01, Some(1))], 10);
+        assert_eq!(m.gainers.len(), 1);
+        assert_eq!(m.losers.len(), 1);
+        assert_eq!(m.most_active.len(), 1);
+        let empty = select_movers(Vec::new(), 10);
+        assert!(empty.gainers.is_empty());
     }
 
     #[test]

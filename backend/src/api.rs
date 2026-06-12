@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth;
 use crate::domain::{
-    CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, NewsItem, PricePoint, Ratio,
-    ShareCount,
+    select_movers, CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, Movers,
+    NewsItem, PricePoint, Ratio, ShareCount,
 };
 use crate::graham;
 use crate::store::{ScreenFilter, Store, StoreError};
@@ -30,6 +30,8 @@ const PEERS_LIMIT: i64 = 20;
 const SESSION_TTL_DAYS: i64 = 30;
 /// Number of recent collection runs surfaced by `/api/runs`.
 const RECENT_RUNS_LIMIT: i64 = 50;
+/// Default rows per movers bucket (gainers / losers / most active).
+const MOVERS_LIMIT: usize = 10;
 
 /// Authenticated user, extracted from a `Authorization: Bearer <token>` header.
 pub struct AuthUser {
@@ -91,6 +93,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/note", get(get_note).put(save_note).delete(delete_note))
         .route("/api/screen", get(screen))
         .route("/api/sectors", get(sectors))
+        .route("/api/movers", get(movers))
         .route("/api/runs", get(runs))
 }
 
@@ -232,6 +235,21 @@ async fn sectors(
     _user: AuthUser,
 ) -> ApiResult<Vec<crate::domain::SectorStats>> {
     Ok(Json(store.get_sectors().await.map_err(internal)?))
+}
+
+#[derive(Deserialize)]
+struct MoversParams {
+    limit: Option<usize>,
+}
+
+/// Market movers: top gainers / losers / most-active by the latest daily move.
+async fn movers(
+    State(store): State<Arc<Store>>,
+    Query(p): Query<MoversParams>,
+    _user: AuthUser,
+) -> ApiResult<Movers> {
+    let rows = store.day_changes().await.map_err(internal)?;
+    Ok(Json(select_movers(rows, p.limit.unwrap_or(MOVERS_LIMIT))))
 }
 
 #[derive(Serialize)]
@@ -802,6 +820,76 @@ mod tests {
         let (_s, json) = get(store, &t, "/api/companies/AAPL/summary").await;
         assert_eq!(json["shares"]["shares"], 15_550_061_000.0);
         assert_eq!(json["shares"]["as_of"], "2023-09-30");
+    }
+
+    #[tokio::test]
+    async fn movers_endpoint_ranks_gainers_losers_and_most_active() {
+        // seeded() AAPL has a single price day -> excluded (no previous close).
+        let (store, _d, t) = seeded().await;
+        let day1 = NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2024, 2, 2).unwrap();
+        let mut ids = std::collections::HashMap::new();
+        for ticker in ["UP", "DOWN", "ZERO"] {
+            let id = store
+                .insert_company(&NewCompany {
+                    cik: ticker.into(),
+                    ticker: ticker.into(),
+                    name: ticker.into(),
+                    exchange: None,
+                    sector: None,
+                    industry: None,
+                })
+                .await
+                .unwrap();
+            ids.insert(ticker, id);
+        }
+        let price = |id, date, close: f64, volume, source: &str| PricePoint {
+            company_id: id,
+            date,
+            open: None,
+            high: None,
+            low: None,
+            close,
+            volume,
+            source: source.into(),
+        };
+        store
+            .save_prices(&[
+                price(ids["UP"], day1, 100.0, None, "yahoo"),
+                price(ids["UP"], day2, 110.0, Some(50), "yahoo"),
+                price(ids["DOWN"], day1, 100.0, None, "yahoo"),
+                price(ids["DOWN"], day2, 80.0, Some(900), "yahoo"),
+                // an fmp row on the same date must lose to yahoo's
+                price(ids["DOWN"], day2, 9_999.0, Some(1), "fmp"),
+                // zero previous close -> excluded (change % undefined)
+                price(ids["ZERO"], day1, 0.0, None, "yahoo"),
+                price(ids["ZERO"], day2, 5.0, Some(7), "yahoo"),
+            ])
+            .await
+            .unwrap();
+
+        let (status, json) = get(store, &t, "/api/movers?limit=2").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["gainers"][0]["company"]["ticker"], "UP");
+        assert_eq!(json["gainers"][0]["last_close"], 110.0);
+        assert_eq!(json["gainers"][0]["change"], 10.0);
+        assert!((json["gainers"][0]["change_pct"].as_f64().unwrap() - 0.1).abs() < 1e-9);
+        assert_eq!(json["gainers"][0]["as_of"], "2024-02-02");
+        assert_eq!(json["losers"][0]["company"]["ticker"], "DOWN");
+        assert_eq!(json["losers"][0]["last_close"], 80.0); // yahoo, not fmp's 9999
+        assert_eq!(json["most_active"][0]["company"]["ticker"], "DOWN");
+        assert_eq!(json["most_active"][0]["volume"], 900);
+        // AAPL (single day) and ZERO are excluded everywhere
+        for bucket in ["gainers", "losers", "most_active"] {
+            let tickers: Vec<_> = json[bucket]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["company"]["ticker"].as_str().unwrap().to_string())
+                .collect();
+            assert!(!tickers.contains(&"AAPL".to_string()), "{bucket}");
+            assert!(!tickers.contains(&"ZERO".to_string()), "{bucket}");
+        }
     }
 
     #[tokio::test]

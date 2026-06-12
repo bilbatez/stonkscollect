@@ -1148,6 +1148,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn day_changes_errors_when_store_is_closed() {
+        let (store, _d) = temp_store().await;
+        store.close().await;
+        assert!(store.day_changes().await.is_err());
+    }
+
+    #[tokio::test]
     async fn http_validators_roundtrip_and_overwrite() {
         let (store, _d) = temp_store().await;
         assert_eq!(store.http_validators("https://u").await.unwrap(), None);

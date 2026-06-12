@@ -160,6 +160,50 @@ impl Store {
         Ok((page, total))
     }
 
+    /// Every company's latest daily move: last close vs the previous distinct
+    /// trading day, deduped per date by source preference (yahoo > fmp > other).
+    /// Companies with fewer than two priced days or a zero previous close are
+    /// excluded (no change is computable).
+    pub async fn day_changes(&self) -> Result<Vec<MoverRow>> {
+        let sql = format!(
+            "WITH ranked AS (
+                 SELECT company_id, date, close, volume,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY company_id, date
+                            ORDER BY CASE source WHEN 'yahoo' THEN 0 WHEN 'fmp' THEN 1 ELSE 2 END, source
+                        ) AS src_rank
+                 FROM prices
+             ),
+             daily AS (
+                 SELECT company_id, date, close, volume,
+                        ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY date DESC) AS day_rank
+                 FROM ranked WHERE src_rank = 1
+             )
+             SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
+                    last.volume AS volume, prev.close AS prev_close
+             FROM daily last
+             JOIN daily prev ON prev.company_id = last.company_id AND prev.day_rank = 2
+             JOIN companies c ON c.id = last.company_id
+             WHERE last.day_rank = 1 AND prev.close <> 0.0
+             ORDER BY c.ticker"
+        );
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                let last_close: f64 = r.try_get("last_close")?;
+                let prev_close: f64 = r.try_get("prev_close")?;
+                Ok(MoverRow {
+                    company: company_from_row(r)?,
+                    last_close,
+                    change: last_close - prev_close,
+                    change_pct: (last_close - prev_close) / prev_close,
+                    volume: r.try_get("volume")?,
+                    as_of: r.try_get("as_of")?,
+                })
+            })
+            .collect()
+    }
+
     /// Sector-level aggregates for the overview page, ordered by avg_score desc.
     /// Companies with no sector are excluded.
     pub async fn get_sectors(&self) -> Result<Vec<crate::domain::SectorStats>> {
