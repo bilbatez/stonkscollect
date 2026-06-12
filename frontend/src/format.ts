@@ -62,6 +62,17 @@ export function formatCurrency(value: number): string {
   return `${sign}$${abs.toLocaleString('en-US')}`
 }
 
+/** Compact plain quantity: 15.81B / 164.00K shares-style numbers (no $). */
+export function formatCompact(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+  if (abs >= 1_000_000_000) return `${sign}${(abs / 1_000_000_000).toFixed(2)}B`
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(2)}K`
+  return `${sign}${abs.toLocaleString('en-US')}`
+}
+
 /** Turn a snake_case / PascalCase key into a spaced, capitalized fallback label. */
 function titleize(key: string): string {
   return key

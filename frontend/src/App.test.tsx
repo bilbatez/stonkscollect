@@ -43,6 +43,7 @@ function data(ticker: string): CompanyData {
     },
     peers: [],
     note: { body: null },
+    shares: null,
   }
 }
 

@@ -120,6 +120,16 @@ test('computeQuote derives change, day range, 52-week range, and 3-month volume'
   expect(q.avgVolume3m).toBe(250) // (300 + 200) / 2; September is outside 3 months
 })
 
+test('computeQuote normalizes bars whose optional OHLC keys are absent', () => {
+  const sparse = { company_id: 1, date: '2024-01-02', close: 9, source: 'fmp' } as PricePoint
+  const q = computeQuote([sparse])!
+  expect(q.dayHigh).toBeNull()
+  expect(q.dayLow).toBeNull()
+  expect(q.volume).toBeNull()
+  expect(q.avgVolume3m).toBeNull()
+  expect(q.week52High).toBe(9)
+})
+
 test('computeQuote leaves change null when the previous close is zero', () => {
   const q = computeQuote([bar('2024-01-01', 0), bar('2024-01-02', 5)])!
   expect(q.change).toBeNull()

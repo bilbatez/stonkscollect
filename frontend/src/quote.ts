@@ -79,7 +79,7 @@ export function computeQuote(prices: PricePoint[]): Quote | null {
   const volumes = daily
     .filter((p) => p.date >= isoDaysBefore(last.date, THREE_MONTHS_DAYS))
     .map((p) => p.volume)
-    .filter((v): v is number => v !== null)
+    .filter((v): v is number => v !== null && v !== undefined)
 
   return {
     last: last.close,
@@ -87,9 +87,10 @@ export function computeQuote(prices: PricePoint[]): Quote | null {
     change,
     changePct: change !== null && prev ? change / prev.close : null,
     asOf: last.date,
-    dayHigh: last.high,
-    dayLow: last.low,
-    volume: last.volume,
+    // optional OHLC keys may be absent entirely — normalize to null
+    dayHigh: last.high ?? null,
+    dayLow: last.low ?? null,
+    volume: last.volume ?? null,
     week52High: Math.max(...highs),
     week52Low: Math.min(...lows),
     avgVolume3m:

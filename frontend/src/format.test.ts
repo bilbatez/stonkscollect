@@ -2,6 +2,7 @@ import { expect, test, vi } from 'vitest'
 import {
   calcGrowth,
   downloadCsv,
+  formatCompact,
   formatCurrency,
   formatDateTime,
   formatMetric,
@@ -29,6 +30,16 @@ test('formatCurrency scales to B/M and handles small + negative values', () => {
   expect(formatCurrency(Infinity)).toBe('—')
   expect(formatCurrency(-Infinity)).toBe('—')
   expect(formatCurrency(NaN)).toBe('—')
+})
+
+test('formatCompact scales plain quantities and dashes invalid input', () => {
+  expect(formatCompact(15_812_547_000)).toBe('15.81B')
+  expect(formatCompact(164_000)).toBe('164.00K')
+  expect(formatCompact(2_500)).toBe('2.50K')
+  expect(formatCompact(950)).toBe('950')
+  expect(formatCompact(-1_500_000)).toBe('-1.50M')
+  expect(formatCompact(null)).toBe('—')
+  expect(formatCompact(NaN)).toBe('—')
 })
 
 test('freshness classifies by age and missing dates', () => {

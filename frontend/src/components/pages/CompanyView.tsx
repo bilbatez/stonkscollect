@@ -9,10 +9,13 @@ import {
   Typography,
 } from '@mui/material'
 import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../../format'
+import { computeKeyStats, computeQuote } from '../../quote'
 import { DiscrepancyPanel } from '../panels/DiscrepancyPanel'
 import { FreshnessBadge } from '../shared/FreshnessBadge'
 import { GrahamScorecard } from '../panels/GrahamScorecard'
+import { KeyStatsPanel } from '../panels/KeyStatsPanel'
 import { MetricsSummary } from '../panels/MetricsSummary'
+import { QuoteHeader } from '../panels/QuoteHeader'
 import { NewsFeed } from '../panels/NewsFeed'
 import { NotePanel } from '../panels/NotePanel'
 import { PeersPanel } from '../panels/PeersPanel'
@@ -43,6 +46,8 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
   // prices arrive oldest-first from the API (ORDER BY date ASC); last element is newest
   const latestPriceDate = data.prices.at(-1)?.date ?? null
   const c = data.company
+  const quote = computeQuote(data.prices)
+  const keyStats = computeKeyStats(data, quote)
   return (
     <Card variant="outlined" component="article">
       <CardContent>
@@ -80,7 +85,13 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
           </Link>
         </Stack>
 
+        <QuoteHeader quote={quote} />
+
         <MetricsSummary ratios={data.ratios} graham={data.graham} />
+
+        <Section title="Key statistics">
+          <KeyStatsPanel stats={keyStats} quote={quote} />
+        </Section>
 
         <Section title="Price">
           <Suspense fallback={<Skeleton label="Loading chart…" />}>

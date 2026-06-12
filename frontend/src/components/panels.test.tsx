@@ -5,7 +5,9 @@ import * as format from '../format'
 import * as api from '../api'
 import { DiscrepancyPanel } from './panels/DiscrepancyPanel'
 import { FreshnessBadge } from './shared/FreshnessBadge'
+import { KeyStatsPanel } from './panels/KeyStatsPanel'
 import { MetricsSummary } from './panels/MetricsSummary'
+import { QuoteHeader } from './panels/QuoteHeader'
 import { NewsFeed } from './panels/NewsFeed'
 import { NotePanel } from './panels/NotePanel'
 import { PeersPanel } from './panels/PeersPanel'
@@ -348,4 +350,88 @@ test('SectorOverview calls onSelect with top_ticker on click', async () => {
 test('SectorOverview shows empty state when no sectors', () => {
   render(<SectorOverview sectors={[]} onSelect={vi.fn()} />)
   expect(screen.getByText(/no sector data/i)).toBeInTheDocument()
+})
+
+// --- QuoteHeader ---
+
+test('QuoteHeader shows price, positive change, and as-of date', () => {
+  render(
+    <QuoteHeader
+      quote={{
+        last: 110, prevClose: 100, change: 10, changePct: 0.1, asOf: '2024-03-01',
+        dayHigh: 112, dayLow: 104, volume: 200, week52High: 120, week52Low: 80, avgVolume3m: 250,
+      }}
+    />,
+  )
+  expect(screen.getByLabelText('last price')).toHaveTextContent('110.00')
+  expect(screen.getByLabelText('day change')).toHaveTextContent('+10.00 (+10%)')
+  expect(screen.getByText(/at close, Mar 2024/)).toBeInTheDocument()
+})
+
+test('QuoteHeader colors a negative change and hides change when unknown', () => {
+  render(
+    <QuoteHeader
+      quote={{
+        last: 90, prevClose: 100, change: -10, changePct: -0.1, asOf: '2024-03-01',
+        dayHigh: null, dayLow: null, volume: null, week52High: 90, week52Low: 90, avgVolume3m: null,
+      }}
+    />,
+  )
+  expect(screen.getByLabelText('day change')).toHaveTextContent('-10.00 (-10%)')
+
+  const { container } = render(
+    <QuoteHeader
+      quote={{
+        last: 50, prevClose: null, change: null, changePct: null, asOf: '2024-03-01',
+        dayHigh: null, dayLow: null, volume: null, week52High: 50, week52Low: 50, avgVolume3m: null,
+      }}
+    />,
+  )
+  expect(container.textContent).not.toContain('(')
+})
+
+test('QuoteHeader renders nothing without a quote', () => {
+  const { container } = render(<QuoteHeader quote={null} />)
+  expect(container.firstChild).toBeNull()
+})
+
+// --- KeyStatsPanel ---
+
+test('KeyStatsPanel formats every populated statistic', () => {
+  render(
+    <KeyStatsPanel
+      stats={{
+        marketCap: 1_700_000_000_000, sharesOutstanding: 15_812_547_000, publicFloat: 2_591_165_000_000,
+        eps: 6.13, dividendRate: 0.94, dividendYield: 0.005, pe: 28.5, pb: 45.2,
+        payoutRatio: 0.15, freeCashFlow: 99_584_000_000, bookValuePerShare: 3.95, employees: 164_000,
+      }}
+      quote={{
+        last: 110, prevClose: 100, change: 10, changePct: 0.1, asOf: '2024-03-01',
+        dayHigh: 112, dayLow: 104, volume: 58_414_460, week52High: 199.62, week52Low: 124.17, avgVolume3m: 60_000_000,
+      }}
+    />,
+  )
+  expect(screen.getByText('Market cap')).toBeInTheDocument()
+  expect(screen.getByText('$1700.0B')).toBeInTheDocument()
+  expect(screen.getByText('15.81B')).toBeInTheDocument() // shares outstanding
+  expect(screen.getByText('124.17 – 199.62')).toBeInTheDocument() // 52-week range
+  expect(screen.getByText('104.00 – 112.00')).toBeInTheDocument() // day range
+  expect(screen.getByText('58.41M')).toBeInTheDocument() // volume
+  expect(screen.getByText('6.13')).toBeInTheDocument() // EPS
+  expect(screen.getByText('1%')).toBeInTheDocument() // dividend yield rounded
+  expect(screen.getByText('164.00K')).toBeInTheDocument() // employees
+})
+
+test('KeyStatsPanel dashes missing values and tolerates a null quote', () => {
+  render(
+    <KeyStatsPanel
+      stats={{
+        marketCap: null, sharesOutstanding: null, publicFloat: null, eps: null,
+        dividendRate: null, dividendYield: null, pe: null, pb: null,
+        payoutRatio: null, freeCashFlow: null, bookValuePerShare: null, employees: null,
+      }}
+      quote={null}
+    />,
+  )
+  expect(screen.getAllByText('—').length).toBe(16)
 })
