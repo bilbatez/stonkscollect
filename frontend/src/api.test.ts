@@ -3,11 +3,13 @@ import {
   addWatch,
   clearToken,
   deleteNote,
+  getMovers,
   getNote,
   getPeers,
   getSectors,
   getToken,
   getWatchlist,
+  getWatchlistQuotes,
   listCompanies,
   loadCompanyData,
   login,
@@ -106,20 +108,37 @@ test('a mutation throws on a non-ok response instead of silently succeeding', as
   await expect(addWatch('AAPL')).rejects.toThrow(/500/)
 })
 
-test('loadCompanyData fetches and assembles all sections', async () => {
+test('loadCompanyData fetches the summary and assembles all sections', async () => {
   const company = { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null }
-  let i = 0
-  const bodies: unknown[] = [
-    company, [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }],
-    [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] }, [], { body: null },
-  ]
-  mockFetch(() => ({ json: async () => bodies[i++] }))
+  const summary = {
+    company,
+    ratios: [{ metric: 'roe' }],
+    graham: null,
+    shares: { company_id: 1, as_of: '2023-09-30', shares: 100, source: 'edgar' },
+  }
+  const byPath: Record<string, unknown> = {
+    '/api/companies/AAPL/summary': summary,
+    '/api/companies/AAPL/prices': [{ close: 1 }],
+    '/api/companies/AAPL/facts': [{ line_item: 'Revenue' }],
+    '/api/companies/AAPL/news': [{ title: 'Hi' }],
+    '/api/companies/AAPL/discrepancies': [{ field: 'Revenue' }],
+    '/api/companies/AAPL/graham': { score: 5, criteria: [] },
+    '/api/companies/AAPL/peers': [],
+    '/api/companies/AAPL/note': { body: null },
+  }
+  mockFetch((url) => ({ json: async () => byPath[url] }))
   const data = await loadCompanyData('AAPL')
   expect(data.company.ticker).toBe('AAPL')
   expect(data.prices).toHaveLength(1)
   expect(data.ratios[0].metric).toBe('roe')
+  expect(data.shares?.shares).toBe(100)
   expect(data.graham.score).toBe(5)
-  expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/graham')
+  const urls = calls.map((c) => c.url)
+  expect(urls).toContain('/api/companies/AAPL/summary')
+  expect(urls).toContain('/api/companies/AAPL/graham')
+  // the summary replaces the bare company and ratios fetches
+  expect(urls).not.toContain('/api/companies/AAPL')
+  expect(urls).not.toContain('/api/companies/AAPL/ratios')
 })
 
 test('listCompanies builds query strings with optional search and sort', async () => {
@@ -159,20 +178,43 @@ test('screen builds the query string from filters and defaults', async () => {
 })
 
 test('loadCompanyData includes peers and note', async () => {
-  let i = 0
-  const bodies: unknown[] = [
-    { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null },
-    [{ close: 1 }], [{ line_item: 'Revenue' }], [{ metric: 'roe' }],
-    [{ title: 'Hi' }], [{ field: 'Revenue' }], { score: 5, criteria: [] },
-    [{ company: { ticker: 'MSFT' }, score: null }],
-    { body: 'my note' },
-  ]
-  mockFetch(() => ({ json: async () => bodies[i++] }))
+  const summary = {
+    company: { id: 1, ticker: 'AAPL', name: 'Apple', cik: '', exchange: null, sector: null, industry: null },
+    ratios: [],
+    graham: null,
+    shares: null,
+  }
+  mockFetch((url) => ({
+    json: async () => {
+      if (url.endsWith('/summary')) return summary
+      if (url.endsWith('/peers')) return [{ company: { ticker: 'MSFT' }, score: null }]
+      if (url.endsWith('/note')) return { body: 'my note' }
+      if (url.endsWith('/graham')) return { score: 5, criteria: [] }
+      return []
+    },
+  }))
   const data = await loadCompanyData('AAPL')
   expect(data.peers[0].company.ticker).toBe('MSFT')
   expect(data.note.body).toBe('my note')
+  expect(data.shares).toBeNull()
   expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/peers')
   expect(calls.map((c) => c.url)).toContain('/api/companies/AAPL/note')
+})
+
+test('getMovers and getWatchlistQuotes hit their endpoints', async () => {
+  mockFetch((url) => ({
+    json: async () =>
+      url.startsWith('/api/movers')
+        ? { gainers: [], losers: [], most_active: [] }
+        : [],
+  }))
+  const movers = await getMovers(5)
+  expect(calls[0].url).toBe('/api/movers?limit=5')
+  expect(movers.gainers).toEqual([])
+  await getMovers()
+  expect(calls[1].url).toBe('/api/movers?limit=10')
+  await getWatchlistQuotes()
+  expect(calls[2].url).toBe('/api/watchlist/quotes')
 })
 
 test('getPeers, getNote, saveNote, deleteNote hit the right endpoints', async () => {

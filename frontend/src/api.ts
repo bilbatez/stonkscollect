@@ -2,18 +2,20 @@ import type {
   Company,
   CompanyData,
   CompanyRow,
+  CompanySummary,
   Discrepancy,
   FinancialFact,
   GrahamAssessment,
+  Movers,
   NewsItem,
   Note,
   Page,
   PeerRow,
   PricePoint,
-  Ratio,
   ScreenFilters,
   ScreenRow,
   SectorStats,
+  WatchQuote,
 } from './types'
 
 const TOKEN_KEY = 'stonks_token'
@@ -111,22 +113,43 @@ export async function removeWatch(ticker: string): Promise<void> {
 
 // --- Company data ---
 
-/** Fetch a company and all of its records in parallel. */
+/** Fetch a company and all of its records in parallel. The summary endpoint
+ *  supplies the company, ratios, and latest share count in one round trip. */
 export async function loadCompanyData(ticker: string): Promise<CompanyData> {
   const base = `/api/companies/${ticker}`
-  const [company, prices, facts, ratios, news, discrepancies, graham, peers, note] =
+  const [summary, prices, facts, news, discrepancies, graham, peers, note] =
     await Promise.all([
-      getJson<Company>(base),
+      getJson<CompanySummary>(`${base}/summary`),
       getJson<PricePoint[]>(`${base}/prices`),
       getJson<FinancialFact[]>(`${base}/facts`),
-      getJson<Ratio[]>(`${base}/ratios`),
       getJson<NewsItem[]>(`${base}/news`),
       getJson<Discrepancy[]>(`${base}/discrepancies`),
       getJson<GrahamAssessment>(`${base}/graham`),
       getJson<PeerRow[]>(`${base}/peers`),
       getJson<Note>(`${base}/note`),
     ])
-  return { company, prices, facts, ratios, news, discrepancies, graham, peers, note }
+  return {
+    company: summary.company,
+    ratios: summary.ratios,
+    shares: summary.shares,
+    prices,
+    facts,
+    news,
+    discrepancies,
+    graham,
+    peers,
+    note,
+  }
+}
+
+/** Market movers: top gainers / losers / most active by latest daily change. */
+export function getMovers(limit = 10): Promise<Movers> {
+  return getJson<Movers>(`/api/movers?limit=${limit}`)
+}
+
+/** The watchlist with each company's latest daily quote. */
+export function getWatchlistQuotes(): Promise<WatchQuote[]> {
+  return getJson<WatchQuote[]>('/api/watchlist/quotes')
 }
 
 /** Paginated, optionally-searched directory of all companies + their scores. */

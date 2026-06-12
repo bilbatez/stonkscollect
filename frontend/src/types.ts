@@ -143,6 +143,44 @@ export interface SectorStats {
   top_ticker: string | null
 }
 
+export interface ShareCount {
+  company_id: number
+  as_of: string
+  shares: number
+  source: string
+}
+
+export interface CompanySummary {
+  company: Company
+  ratios: Ratio[]
+  graham: GrahamScore | null
+  shares: ShareCount | null
+}
+
+export interface MoverRow {
+  company: Company
+  last_close: number
+  change: number
+  change_pct: number
+  volume: number | null
+  as_of: string
+}
+
+export interface Movers {
+  gainers: MoverRow[]
+  losers: MoverRow[]
+  most_active: MoverRow[]
+}
+
+export interface WatchQuote {
+  company: Company
+  last_close: number | null
+  change: number | null
+  change_pct: number | null
+  volume: number | null
+  as_of: string | null
+}
+
 export interface CompanyData {
   company: Company
   prices: PricePoint[]
@@ -153,4 +191,5 @@ export interface CompanyData {
   graham: GrahamAssessment
   peers: PeerRow[]
   note: Note
+  shares: ShareCount | null
 }
