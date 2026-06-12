@@ -8,6 +8,7 @@ export interface Company {
   industry: string | null
   description: string | null
   website: string | null
+  employees?: number | null
 }
 
 export interface PricePoint {

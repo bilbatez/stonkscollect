@@ -65,7 +65,9 @@ shutdown on SIGTERM). Multi-user: signup/login (argon2 + bearer sessions),
 per-user watchlists; `/api/screen` ranks Graham defensive passers.
 
 **Remaining:** segment/ownership/guidance ingestion (not in EDGAR companyfacts —
-needs a paid feed); HTTP conditional GET (ETag) on top of the freshness skip.
+needs a paid feed). HTTP conditional GET (ETag, `http_cache` table), incremental
+price fetch, per-source error persistence (`/api/companies/:ticker/errors`), and
+the weekly Parquet tier are implemented.
 
 ## Run / test / build
 

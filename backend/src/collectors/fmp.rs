@@ -357,13 +357,13 @@ mod tests {
                         && f.period_type == PeriodType::Annual
                         && f.period_end == fy23
                 })
-                .unwrap_or_else(|| panic!("{item} missing"))
+                .map(|f| f.value)
         };
-        assert_eq!(fy("GrossProfit").value, 169148000000.0);
-        assert_eq!(fy("OperatingIncome").value, 114301000000.0);
-        assert_eq!(fy("Eps").value, 6.13);
-        assert_eq!(fy("CostOfRevenue").value, 214137000000.0);
-        assert_eq!(fy("Ebitda").value, 125820000000.0);
+        assert_eq!(fy("GrossProfit"), Some(169148000000.0));
+        assert_eq!(fy("OperatingIncome"), Some(114301000000.0));
+        assert_eq!(fy("Eps"), Some(6.13));
+        assert_eq!(fy("CostOfRevenue"), Some(214137000000.0));
+        assert_eq!(fy("Ebitda"), Some(125820000000.0));
     }
 
     #[test]

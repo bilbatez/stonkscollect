@@ -35,30 +35,31 @@ and are exhaustively unit-tested.
 Collectors are decoupled from the pipeline by three traits in `collectors/mod.rs`:
 
 ```rust
-trait FactSource  { fn name() -> &str; async fn fetch_facts(company_id, target, now)  -> Vec<FinancialFact>; }
-trait PriceSource { fn name() -> &str; async fn fetch_prices(company_id, target)       -> Vec<PricePoint>;    }
-trait NewsSource  { fn name() -> &str; async fn fetch_news(company_id, target, now)    -> Vec<NewsItem>;      }
+trait FactSource  { fn name() -> &str; async fn fetch_facts(company_id, target, now)         -> Vec<FinancialFact>; }
+trait PriceSource { fn name() -> &str; async fn fetch_prices(company_id, target, now, since) -> Vec<PricePoint>;    }
+trait NewsSource  { fn name() -> &str; async fn fetch_news(company_id, target, now)          -> Vec<NewsItem>;      }
 ```
 
-The pipeline takes `&[&dyn FactSource]`, `&[&dyn PriceSource]`, `&[&dyn NewsSource]`
-— it aggregates from a heterogeneous, open-ended set of sources without knowing
+The pipeline takes them bundled as `CollectSources { facts, prices, news }`
+(with the pass's knobs in `CollectOptions`) — it aggregates from a heterogeneous, open-ended set of sources without knowing
 their concrete types. Adding a source = implement a trait + register it in
 `main.rs`. Implementors:
 
 | Source | Traits | Keyless? |
 |--------|--------|----------|
-| `EdgarCollector` | FactSource | yes (needs a contact User-Agent) |
+| `EdgarCollector` | FactSource + ProfileSource | yes (needs a contact User-Agent) |
 | `YahooCollector` | PriceSource | yes |
 | `YahooNewsCollector` | NewsSource | yes |
-| `FmpCollector` | FactSource + PriceSource | needs `FMP_API_KEY` |
+| `FmpCollector` | FactSource + PriceSource + ProfileSource | needs `FMP_API_KEY` |
 | `FinnhubCollector` | NewsSource | needs `FINNHUB_API_KEY` |
 | `ScrapeCollector` | FactSource | yes (targeted runs only) |
 
 ## Dependency-injection seams (for deterministic tests)
 
-- **HTTP** — every collector holds an `HttpClient` (trait, `get_text(url)`). The
-  real impl is `http.rs` (`ReqwestClient`, coverage-excluded glue); tests use
-  `testutil::FakeHttp` which returns a fixture string and records the URL.
+- **HTTP** — every collector holds an `HttpClient` (trait, `get_text(url)` plus
+  `get_text_with_validators` for conditional GETs). The real impl is `http.rs`
+  (`ReqwestClient`, coverage-excluded glue); tests use `testutil::FakeHttp` which
+  returns a fixture string, records the URL, and has a 304 mode.
 - **Clock** — `now: DateTime<Utc>` is passed in (never `Utc::now()` inside pure
   code), so time-dependent logic (rate limiter, retry, login throttle, freshness,
   Graham windows) is deterministic.
@@ -71,15 +72,17 @@ their concrete types. Adding a source = implement a trait + register it in
 
 ```
 for each company (up to COLLECT_CONCURRENCY in parallel):
-  1. ingest():   each FactSource.fetch_facts()  → reconcile() → persist canonical facts + discrepancies
-  2. collect_prices_for():  each PriceSource     → save_prices()
+  1. ingest():   each FactSource.fetch_facts()  → supplement quiet sources from stored facts
+                 → reconcile() → persist canonical facts + discrepancies + source_errors
+  2. collect_prices_for():  each PriceSource     → save_prices()  (incremental: since last stored date − 7d)
   3. collect_news_for():    each NewsSource      → save_news()  (deduped by headline hash)
   4. recompute_metrics():   ratios::compute()  +  graham::assess()  → save
   5. mark_collected(now)    (for the incremental freshness skip)
 ```
 
-`ingest` is best-effort per source: a failing source is recorded in the report's
-`source_errors`, never aborts the company; a failing company is counted in
+`ingest` is best-effort per source: a failing source is recorded in the report
+and the `source_errors` table (served at `/api/companies/:ticker/errors`), never
+aborts the company; a failing company is counted in
 `summary.failed`, never aborts the pass.
 
 ## Reconciliation

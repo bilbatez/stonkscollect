@@ -660,6 +660,7 @@ mod tests {
 
         // First run: EDGAR reports Revenue 100 and it becomes canonical.
         let edgar = StaticSource { source: "edgar", facts: vec![fact(id, "edgar", "Revenue", 100.0)] };
+        assert_eq!(edgar.name(), "edgar");
         let sources: [&dyn FactSource; 1] = [&edgar];
         ingest(&store, &sources, id, &target(), 0.05, now).await.unwrap();
 

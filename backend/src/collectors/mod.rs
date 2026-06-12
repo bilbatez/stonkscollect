@@ -149,3 +149,29 @@ pub trait HttpClient {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::Validators;
+
+    /// A transport that only implements the plain fetch, so conditional
+    /// requests fall through to the trait default.
+    struct PlainHttp;
+    impl HttpClient for PlainHttp {
+        async fn get_text(&self, _url: &str) -> Result<String, CollectorError> {
+            Ok("body".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn default_conditional_fetch_ignores_validators_and_always_fetches() {
+        let known = Validators { etag: Some("\"e\"".into()), last_modified: None };
+        let outcome = PlainHttp.get_text_with_validators("https://u", &known).await.unwrap();
+        assert_eq!(
+            outcome,
+            FetchOutcome::Modified { body: "body".into(), validators: Validators::default() }
+        );
+        assert!(format!("{outcome:?}").contains("body"));
+    }
+}
