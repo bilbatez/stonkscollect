@@ -164,6 +164,29 @@ fn summarize(outcomes: Vec<Result<usize, ()>>) -> CollectSummary {
     s
 }
 
+/// Export every company's stored prices as one Parquet file per ticker under
+/// `dir` (created if missing). Per-company failures are counted, not fatal.
+pub async fn export_all_parquet(
+    store: &Store,
+    dir: &std::path::Path,
+) -> Result<CollectSummary, StoreError> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| StoreError::Other(format!("create {}: {e}", dir.display())))?;
+    let companies = store.all_companies().await?;
+    let mut s = CollectSummary::default();
+    for c in &companies {
+        let filename = format!("{}.parquet", c.ticker.replace('/', "-"));
+        match store.export_prices_parquet(c.id, &dir.join(filename)).await {
+            Ok(()) => s.companies += 1,
+            Err(e) => {
+                tracing::warn!("parquet export failed for {}: {e}", c.ticker);
+                s.failed += 1;
+            }
+        }
+    }
+    Ok(s)
+}
+
 /// Recompute ratios for every company from stored facts.
 pub async fn recompute_ratios_all(
     store: &Store,

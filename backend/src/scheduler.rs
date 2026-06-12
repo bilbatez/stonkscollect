@@ -19,12 +19,14 @@ pub enum Tier {
     News,
     /// Weekly (plus event-driven on new filings, handled elsewhere).
     Fundamentals,
+    /// Weekly Parquet export of stored prices (analytics/backup snapshot).
+    Parquet,
 }
 
 impl Tier {
     /// All tiers, for registering jobs.
-    pub fn all() -> [Tier; 3] {
-        [Tier::Price, Tier::News, Tier::Fundamentals]
+    pub fn all() -> [Tier; 4] {
+        [Tier::Price, Tier::News, Tier::Fundamentals, Tier::Parquet]
     }
 
     /// 6-field cron expression (sec min hour dom mon dow), UTC.
@@ -33,6 +35,7 @@ impl Tier {
             Tier::Price => "0 0 21 * * *",
             Tier::News => "0 0 0,6,12,18 * * *",
             Tier::Fundamentals => "0 0 6 * * Mon",
+            Tier::Parquet => "0 0 3 * * Sun",
         }
     }
 
@@ -42,6 +45,7 @@ impl Tier {
             Tier::Price => "price",
             Tier::News => "news",
             Tier::Fundamentals => "fundamentals",
+            Tier::Parquet => "parquet",
         }
     }
 
@@ -108,8 +112,9 @@ mod tests {
         assert_eq!(Tier::Price.cron(), "0 0 21 * * *");
         assert_eq!(Tier::News.cron(), "0 0 0,6,12,18 * * *");
         assert_eq!(Tier::Fundamentals.cron(), "0 0 6 * * Mon");
+        assert_eq!(Tier::Parquet.cron(), "0 0 3 * * Sun");
         let labels: Vec<_> = Tier::all().iter().map(|t| t.label()).collect();
-        assert_eq!(labels, ["price", "news", "fundamentals"]);
+        assert_eq!(labels, ["price", "news", "fundamentals", "parquet"]);
     }
 
     #[test]
@@ -121,6 +126,8 @@ mod tests {
             Tier::Fundamentals.next_after(at(2024, 1, 1, 0)),
             Some(at(2024, 1, 1, 6))
         );
+        // 2024-01-07 is the following Sunday.
+        assert_eq!(Tier::Parquet.next_after(at(2024, 1, 1, 0)), Some(at(2024, 1, 7, 3)));
     }
 
 

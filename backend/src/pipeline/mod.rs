@@ -792,6 +792,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_all_parquet_writes_one_file_per_company() {
+        let (store, id, dir) = store_with_company().await;
+        store
+            .save_prices(&[PricePoint {
+                company_id: id,
+                date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
+                close: 1.0,
+                volume: None,
+                source: "fmp".into(),
+            }])
+            .await
+            .unwrap();
+        let out = dir.path().join("parquet");
+        let s = export_all_parquet(&store, &out).await.unwrap();
+        assert_eq!(s.companies, 1);
+        assert_eq!(s.failed, 0);
+        assert!(out.join("AAPL.parquet").is_file());
+
+        // a per-company failure (target occupied by a directory) is counted,
+        // not fatal
+        std::fs::remove_file(out.join("AAPL.parquet")).unwrap();
+        std::fs::create_dir(out.join("AAPL.parquet")).unwrap();
+        let s = export_all_parquet(&store, &out).await.unwrap();
+        assert_eq!(s.failed, 1);
+
+        // an uncreatable export dir is a hard error
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, "file in the way").unwrap();
+        assert!(export_all_parquet(&store, &blocked).await.is_err());
+    }
+
+    #[tokio::test]
     async fn recompute_graham_persists_a_score() {
         let (store, id, _d) = store_with_company().await;
         store

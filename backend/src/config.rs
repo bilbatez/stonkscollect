@@ -22,6 +22,8 @@ pub struct Config {
     pub reconcile_threshold: f64,
     /// Graham "adequate size" revenue floor.
     pub graham_min_revenue: f64,
+    /// Directory the weekly Parquet price export writes into.
+    pub parquet_dir: std::path::PathBuf,
 }
 
 impl Config {
@@ -52,6 +54,9 @@ impl Config {
             graham_min_revenue: get("GRAHAM_MIN_REVENUE")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(crate::graham::DEFAULT_MIN_REVENUE),
+            parquet_dir: get("PARQUET_DIR")
+                .unwrap_or_else(|| "/data/parquet".to_string())
+                .into(),
         }
     }
 }
@@ -95,6 +100,7 @@ mod tests {
             ("COLLECT_CONCURRENCY", "10"),
             ("RECONCILE_THRESHOLD", "0.1"),
             ("GRAHAM_MIN_REVENUE", "1000000000"),
+            ("PARQUET_DIR", "/tmp/pq"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
         assert_eq!(cfg.port, 9000);
@@ -108,6 +114,7 @@ mod tests {
         assert_eq!(cfg.collect_concurrency, 10);
         assert_eq!(cfg.reconcile_threshold, 0.1);
         assert_eq!(cfg.graham_min_revenue, 1_000_000_000.0);
+        assert_eq!(cfg.parquet_dir, std::path::PathBuf::from("/tmp/pq"));
         assert_eq!(cfg.clone(), cfg);
     }
 
@@ -126,6 +133,7 @@ mod tests {
         assert_eq!(cfg.collect_concurrency, 8); // default
         assert_eq!(cfg.reconcile_threshold, 0.05);
         assert_eq!(cfg.graham_min_revenue, crate::graham::DEFAULT_MIN_REVENUE);
+        assert_eq!(cfg.parquet_dir, std::path::PathBuf::from("/data/parquet"));
     }
 
     #[test]

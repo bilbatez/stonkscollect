@@ -210,6 +210,7 @@ async fn scheduler_loop(store: &Arc<Store>, cfg: &Config) {
                 }
                 Tier::Price => collect_prices(store, cfg, &price_sources, fired).await,
                 Tier::News => collect_news(store, cfg, &news_sources, fired).await,
+                Tier::Parquet => pipeline::export_all_parquet(store, &cfg.parquet_dir).await,
             }
         })
         .await;
