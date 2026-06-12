@@ -599,6 +599,51 @@ mod tests {
         assert!(outcomes[0].1.facts_written > 0);
     }
 
+    /// A fact source returning a fixed set of facts.
+    struct StaticSource {
+        source: &'static str,
+        facts: Vec<FinancialFact>,
+    }
+    #[async_trait(?Send)]
+    impl FactSource for StaticSource {
+        fn name(&self) -> &'static str {
+            self.source
+        }
+        async fn fetch_facts(
+            &self,
+            _company_id: i64,
+            _target: &SourceTarget,
+            _now: DateTime<Utc>,
+        ) -> Result<Vec<FinancialFact>, CollectorError> {
+            Ok(self.facts.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_keeps_stored_canonical_when_a_source_reports_nothing() {
+        let (store, id, _d) = store_with_company().await;
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+
+        // First run: EDGAR reports Revenue 100 and it becomes canonical.
+        let edgar = StaticSource { source: "edgar", facts: vec![fact(id, "edgar", "Revenue", 100.0)] };
+        let sources: [&dyn FactSource; 1] = [&edgar];
+        ingest(&store, &sources, id, &target(), 0.05, now).await.unwrap();
+
+        // Second run: EDGAR answers 304 (no facts) while FMP diverges. The
+        // stored EDGAR value must stay canonical instead of FMP taking over.
+        let quiet_edgar = StaticSource { source: "edgar", facts: Vec::new() };
+        let fmp = StaticSource { source: "fmp", facts: vec![fact(id, "fmp", "Revenue", 130.0)] };
+        let sources: [&dyn FactSource; 2] = [&quiet_edgar, &fmp];
+        let report = ingest(&store, &sources, id, &target(), 0.05, now).await.unwrap();
+
+        let stored = store.get_facts(id).await.unwrap();
+        let revenue: Vec<_> = stored.iter().filter(|f| f.line_item == "Revenue").collect();
+        assert_eq!(revenue.len(), 1, "one canonical row, not one per source");
+        assert_eq!(revenue[0].source, "edgar");
+        assert_eq!(revenue[0].value, 100.0);
+        assert_eq!(report.discrepancies_written, 1); // 100 vs 130 flagged
+    }
+
     #[tokio::test]
     async fn ingest_records_source_errors_without_aborting() {
         let (store, id, _d) = store_with_company().await;

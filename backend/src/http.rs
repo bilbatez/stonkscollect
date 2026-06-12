@@ -7,8 +7,8 @@ use std::time::Duration;
 use chrono::Utc;
 use reqwest::header::RETRY_AFTER;
 
-use crate::collectors::{CollectorError, HttpClient};
-use crate::net::{RateLimiter, RetryPolicy};
+use crate::collectors::{CollectorError, FetchOutcome, HttpClient};
+use crate::net::{RateLimiter, RetryPolicy, Validators};
 
 /// HTTP client backed by `reqwest`. SEC requires a descriptive User-Agent.
 pub struct ReqwestClient {
@@ -54,16 +54,33 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-impl HttpClient for ReqwestClient {
-    async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
+fn header_string(resp: &reqwest::Response, name: reqwest::header::HeaderName) -> Option<String> {
+    resp.headers().get(name)?.to_str().ok().map(str::to_string)
+}
+
+impl ReqwestClient {
+    /// GET with retry/backoff + rate limiting; success and 304 both return the
+    /// response for the caller to interpret.
+    async fn send_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&'static str, String)],
+    ) -> Result<reqwest::Response, CollectorError> {
         let mut attempt = 0;
         loop {
             if let Some(rl) = &self.limiter {
                 tokio::time::sleep(rl.reserve(Utc::now())).await;
             }
-            match self.client.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    return resp.text().await.map_err(|e| CollectorError::Http(e.to_string()));
+            let mut req = self.client.get(url);
+            for (name, value) in headers {
+                req = req.header(*name, value);
+            }
+            match req.send().await {
+                Ok(resp)
+                    if resp.status().is_success()
+                        || resp.status() == reqwest::StatusCode::NOT_MODIFIED =>
+                {
+                    return Ok(resp);
                 }
                 Ok(resp) => {
                     let code = resp.status().as_u16();
@@ -85,5 +102,29 @@ impl HttpClient for ReqwestClient {
                 }
             }
         }
+    }
+}
+
+impl HttpClient for ReqwestClient {
+    async fn get_text(&self, url: &str) -> Result<String, CollectorError> {
+        let resp = self.send_with_headers(url, &[]).await?;
+        resp.text().await.map_err(|e| CollectorError::Http(e.to_string()))
+    }
+
+    async fn get_text_with_validators(
+        &self,
+        url: &str,
+        validators: &Validators,
+    ) -> Result<FetchOutcome, CollectorError> {
+        let resp = self.send_with_headers(url, &validators.request_headers()).await?;
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(FetchOutcome::NotModified);
+        }
+        let validators = Validators {
+            etag: header_string(&resp, reqwest::header::ETAG),
+            last_modified: header_string(&resp, reqwest::header::LAST_MODIFIED),
+        };
+        let body = resp.text().await.map_err(|e| CollectorError::Http(e.to_string()))?;
+        Ok(FetchOutcome::Modified { body, validators })
     }
 }

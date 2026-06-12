@@ -118,9 +118,34 @@ pub enum CollectorError {
     Parse(String),
 }
 
+/// Result of a conditional fetch: a fresh body (with the validators it arrived
+/// with) or confirmation that the cached copy is still current.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchOutcome {
+    Modified {
+        body: String,
+        validators: crate::net::Validators,
+    },
+    NotModified,
+}
+
 /// Minimal HTTP transport seam. Real impls live in [`crate::http`]; tests use fakes.
 #[allow(async_fn_in_trait)]
 pub trait HttpClient {
     /// Fetch the body of `url` as text.
     async fn get_text(&self, url: &str) -> Result<String, CollectorError>;
+
+    /// Conditional GET: send `validators` as If-None-Match / If-Modified-Since
+    /// and report 304 as [`FetchOutcome::NotModified`]. The default ignores
+    /// validators and always fetches — transports and sources opt in.
+    async fn get_text_with_validators(
+        &self,
+        url: &str,
+        _validators: &crate::net::Validators,
+    ) -> Result<FetchOutcome, CollectorError> {
+        Ok(FetchOutcome::Modified {
+            body: self.get_text(url).await?,
+            validators: crate::net::Validators::default(),
+        })
+    }
 }

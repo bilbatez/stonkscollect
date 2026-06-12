@@ -14,7 +14,7 @@ use sqlx::sqlite::{
 use sqlx::{Row, SqlitePool};
 
 use crate::domain::*;
-use crate::net::{LoginThrottle, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW};
+use crate::net::{LoginThrottle, Validators, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW};
 
 /// Errors returned by the store.
 #[derive(Debug, thiserror::Error)]
@@ -1063,6 +1063,51 @@ mod tests {
         assert_eq!(list[0].ticker, "AAPL");
         store.remove_watch(uid, cid).await.unwrap();
         assert!(store.list_watch(uid).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn http_validators_roundtrip_and_overwrite() {
+        let (store, _d) = temp_store().await;
+        assert_eq!(store.http_validators("https://u").await.unwrap(), None);
+        store
+            .save_http_validators(
+                "https://u",
+                &Validators { etag: Some("\"v1\"".into()), last_modified: None },
+            )
+            .await
+            .unwrap();
+        let v = store.http_validators("https://u").await.unwrap().unwrap();
+        assert_eq!(v.etag.as_deref(), Some("\"v1\""));
+        assert_eq!(v.last_modified, None);
+
+        store
+            .save_http_validators(
+                "https://u",
+                &Validators { etag: Some("\"v2\"".into()), last_modified: Some("lm".into()) },
+            )
+            .await
+            .unwrap();
+        let v = store.http_validators("https://u").await.unwrap().unwrap();
+        assert_eq!(v.etag.as_deref(), Some("\"v2\""));
+        assert_eq!(v.last_modified.as_deref(), Some("lm"));
+    }
+
+    #[tokio::test]
+    async fn validator_repo_is_best_effort_on_a_broken_store() {
+        use crate::net::HttpValidatorRepo;
+        let (store, _d) = temp_store().await;
+        store
+            .save_http_validators("https://u", &Validators { etag: Some("e".into()), last_modified: None })
+            .await
+            .unwrap();
+        assert_eq!(
+            HttpValidatorRepo::validators(&store, "https://u").await.unwrap().etag.as_deref(),
+            Some("e")
+        );
+        store.close().await;
+        // a failing cache reads as "no validators" and swallows writes
+        assert!(HttpValidatorRepo::validators(&store, "https://u").await.is_none());
+        HttpValidatorRepo::store_validators(&store, "https://u", &Validators::default()).await;
     }
 
     #[tokio::test]

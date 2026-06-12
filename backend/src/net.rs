@@ -77,6 +77,41 @@ impl RateLimiter {
     }
 }
 
+/// HTTP cache validators (RFC 9110): an entity tag and/or `Last-Modified`
+/// stamp, replayed as conditional-request headers so an unchanged upstream
+/// document answers 304 instead of a full body.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Validators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl Validators {
+    /// The conditional-request headers for these validators (only the present
+    /// fields; empty validators mean an unconditional request).
+    pub fn request_headers(&self) -> Vec<(&'static str, String)> {
+        let mut headers = Vec::new();
+        if let Some(etag) = &self.etag {
+            headers.push(("If-None-Match", etag.clone()));
+        }
+        if let Some(last_modified) = &self.last_modified {
+            headers.push(("If-Modified-Since", last_modified.clone()));
+        }
+        headers
+    }
+}
+
+/// Persistence for per-URL cache validators. Best-effort by contract: a failing
+/// cache must never fail a collection, so reads degrade to "no validators" and
+/// writes are fire-and-forget.
+#[async_trait::async_trait(?Send)]
+pub trait HttpValidatorRepo {
+    /// Stored validators for `url`, if any.
+    async fn validators(&self, url: &str) -> Option<Validators>;
+    /// Persist the validators a fresh response arrived with.
+    async fn store_validators(&self, url: &str, validators: &Validators);
+}
+
 /// Default brute-force policy for interactive login: this many failures per key
 /// within the window trips the block.
 pub const LOGIN_MAX_ATTEMPTS: u32 = 5;
@@ -206,6 +241,29 @@ mod tests {
         assert!(!th.allowed("b@e.com", now));
         th.clear("b@e.com");
         assert!(th.allowed("b@e.com", now));
+    }
+
+    #[test]
+    fn validators_request_headers_cover_only_present_fields() {
+        assert!(Validators::default().request_headers().is_empty());
+        let etag_only = Validators { etag: Some("\"abc\"".into()), last_modified: None };
+        assert_eq!(
+            etag_only.request_headers(),
+            vec![("If-None-Match", "\"abc\"".to_string())]
+        );
+        let both = Validators {
+            etag: Some("\"abc\"".into()),
+            last_modified: Some("Tue, 01 Jan 2024 00:00:00 GMT".into()),
+        };
+        assert_eq!(
+            both.request_headers(),
+            vec![
+                ("If-None-Match", "\"abc\"".to_string()),
+                ("If-Modified-Since", "Tue, 01 Jan 2024 00:00:00 GMT".to_string()),
+            ]
+        );
+        assert_eq!(both.clone(), both);
+        assert!(format!("{both:?}").contains("abc"));
     }
 
     #[test]

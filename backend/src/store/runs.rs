@@ -40,6 +40,36 @@ impl Store {
         Ok(())
     }
 
+    /// Stored HTTP cache validators for `url`, if any.
+    pub async fn http_validators(&self, url: &str) -> Result<Option<Validators>> {
+        let row = sqlx::query("SELECT etag,last_modified FROM http_cache WHERE url=?")
+            .bind(url)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|r| {
+            Ok(Validators {
+                etag: r.try_get("etag")?,
+                last_modified: r.try_get("last_modified")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Upsert the cache validators a fresh response for `url` arrived with.
+    pub async fn save_http_validators(&self, url: &str, v: &Validators) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO http_cache (url,etag,last_modified) VALUES (?,?,?) \
+             ON CONFLICT(url) DO UPDATE SET etag=excluded.etag, \
+             last_modified=excluded.last_modified, fetched_at=datetime('now')",
+        )
+        .bind(url)
+        .bind(&v.etag)
+        .bind(&v.last_modified)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// List the most recent collection runs, newest first.
     pub async fn recent_runs(&self, limit: i64) -> Result<Vec<CollectionRun>> {
         let rows = sqlx::query(
@@ -62,5 +92,26 @@ impl Store {
                 })
             })
             .collect()
+    }
+}
+
+/// Best-effort adapter: cache failures degrade to unconditional fetches
+/// instead of failing the collection.
+#[async_trait::async_trait(?Send)]
+impl crate::net::HttpValidatorRepo for Store {
+    async fn validators(&self, url: &str) -> Option<Validators> {
+        match self.http_validators(url).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!("http_cache read failed for {url}: {e}");
+                None
+            }
+        }
+    }
+
+    async fn store_validators(&self, url: &str, validators: &Validators) {
+        if let Err(e) = self.save_http_validators(url, validators).await {
+            tracing::debug!("http_cache write failed for {url}: {e}");
+        }
     }
 }

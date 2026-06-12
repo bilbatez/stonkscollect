@@ -124,6 +124,10 @@ pub struct IngestReport {
 
 /// Collect facts from every source (best-effort — a failing source is recorded,
 /// not fatal), reconcile, and persist canonical facts + discrepancies.
+///
+/// Sources that report nothing this run (304 Not Modified, errors, missing
+/// keys) are represented by their stored facts, so an already-canonical value
+/// keeps outranking a fresh value from a lesser source.
 pub async fn ingest(
     store: &Store,
     sources: &[&dyn FactSource],
@@ -140,6 +144,7 @@ pub async fn ingest(
             Err(e) => source_errors.push((source.name().to_string(), e.to_string())),
         }
     }
+    supplement_with_stored_facts(store, company_id, &mut all_facts).await?;
     let (facts_written, discrepancies_written) =
         persist_facts(store, &all_facts, threshold, now).await?;
     Ok(IngestReport {
@@ -147,6 +152,20 @@ pub async fn ingest(
         discrepancies_written,
         source_errors,
     })
+}
+
+/// Add a company's stored facts for every source absent from `fresh`, so
+/// reconciliation always sees each source's latest known values.
+async fn supplement_with_stored_facts(
+    store: &Store,
+    company_id: i64,
+    fresh: &mut Vec<FinancialFact>,
+) -> Result<(), StoreError> {
+    let fresh_sources: std::collections::HashSet<String> =
+        fresh.iter().map(|f| f.source.clone()).collect();
+    let stored = store.get_facts(company_id).await?;
+    fresh.extend(stored.into_iter().filter(|f| !fresh_sources.contains(&f.source)));
+    Ok(())
 }
 
 /// Reconcile `facts` (from any mix of sources) and persist the canonical value

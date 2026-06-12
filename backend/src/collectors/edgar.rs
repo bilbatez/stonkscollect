@@ -7,11 +7,14 @@ use serde_json::Value;
 
 use async_trait::async_trait;
 
+use std::sync::Arc;
+
 use crate::collectors::{
-    nonempty, parse_json, period_type_from_fp, CollectorError, FactSource, HttpClient,
-    ProfileSource, SourceTarget, ISO_DATE,
+    nonempty, parse_json, period_type_from_fp, CollectorError, FactSource, FetchOutcome,
+    HttpClient, ProfileSource, SourceTarget, ISO_DATE,
 };
 use crate::domain::{CompanyProfile, FinancialFact, StatementKind};
+use crate::net::HttpValidatorRepo;
 
 /// XBRL us-gaap concept -> (statement, normalized line item).
 const CONCEPTS: &[(&str, StatementKind, &str)] = &[
@@ -182,11 +185,35 @@ pub struct CompanyRef {
 /// Collects canonical fundamentals from SEC EDGAR's companyfacts API.
 pub struct EdgarCollector<H: HttpClient> {
     http: H,
+    validator_cache: Option<Arc<dyn HttpValidatorRepo>>,
 }
 
 impl<H: HttpClient> EdgarCollector<H> {
     pub fn new(http: H) -> Self {
-        Self { http }
+        Self { http, validator_cache: None }
+    }
+
+    /// Enable conditional GETs: stored validators ride along with each request
+    /// and a 304 skips the re-download + re-parse of an unchanged document.
+    pub fn with_cache(mut self, repo: Arc<dyn HttpValidatorRepo>) -> Self {
+        self.validator_cache = Some(repo);
+        self
+    }
+
+    /// GET `url`, conditionally when a validator cache is configured.
+    /// `None` means the upstream copy is unchanged (304).
+    async fn fetch_conditionally(&self, url: &str) -> Result<Option<String>, CollectorError> {
+        let Some(repo) = &self.validator_cache else {
+            return Ok(Some(self.http.get_text(url).await?));
+        };
+        let known = repo.validators(url).await.unwrap_or_default();
+        match self.http.get_text_with_validators(url, &known).await? {
+            FetchOutcome::NotModified => Ok(None),
+            FetchOutcome::Modified { body, validators } => {
+                repo.store_validators(url, &validators).await;
+                Ok(Some(body))
+            }
+        }
     }
 
     /// Build the companyfacts URL for a (possibly unpadded) CIK.
@@ -200,15 +227,17 @@ impl<H: HttpClient> EdgarCollector<H> {
     }
 
     /// Fetch and parse a company's facts into normalized [`FinancialFact`]s.
+    /// An unchanged document (304) yields no facts, leaving stored ones as-is.
     pub async fn collect_facts(
         &self,
         company_id: i64,
         cik: &str,
         now: DateTime<Utc>,
     ) -> Result<Vec<FinancialFact>, CollectorError> {
-        let url = Self::companyfacts_url(cik);
-        let body = self.http.get_text(&url).await?;
-        parse_companyfacts(company_id, &body, now)
+        match self.fetch_conditionally(&Self::companyfacts_url(cik)).await? {
+            Some(body) => parse_companyfacts(company_id, &body, now),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Fetch SEC's full ticker -> CIK directory (for bootstrapping companies).
@@ -228,8 +257,11 @@ impl<H: HttpClient> ProfileSource for EdgarCollector<H> {
     }
 
     async fn fetch_profile(&self, target: &SourceTarget) -> Result<CompanyProfile, CollectorError> {
-        let body = self.http.get_text(&Self::submissions_url(&target.cik)).await?;
-        parse_submissions_profile(&body)
+        match self.fetch_conditionally(&Self::submissions_url(&target.cik)).await? {
+            Some(body) => parse_submissions_profile(&body),
+            // Unchanged upstream: a blank profile COALESCEs to a no-op update.
+            None => Ok(CompanyProfile::default()),
+        }
     }
 }
 
@@ -376,6 +408,7 @@ mod tests {
     use super::*;
     use crate::collectors::{CollectorError, ProfileSource, SourceTarget};
     use crate::domain::{PeriodType, StatementKind};
+    use crate::net::Validators;
     use crate::testutil::{fixed_now as now, FakeHttp};
     use chrono::NaiveDate;
 
@@ -566,6 +599,60 @@ mod tests {
     fn parse_invalid_json_errors() {
         let err = parse_companyfacts(7, "not json", now()).unwrap_err();
         assert!(matches!(err, CollectorError::Parse(_)));
+    }
+
+    #[tokio::test]
+    async fn collect_facts_skips_parse_on_not_modified() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        let url = EdgarCollector::<FakeHttp>::companyfacts_url("320193");
+        store
+            .save_http_validators(
+                &url,
+                &Validators { etag: Some("\"v1\"".into()), last_modified: None },
+            )
+            .await
+            .unwrap();
+        let repo = std::sync::Arc::new(store);
+        let collector =
+            EdgarCollector::new(FakeHttp::not_modified()).with_cache(repo);
+        let facts = collector.collect_facts(7, "320193", now()).await.unwrap();
+        assert!(facts.is_empty(), "304 leaves stored facts untouched");
+        // the stored validators were sent with the request
+        assert_eq!(
+            collector.http.sent_validators().unwrap().etag.as_deref(),
+            Some("\"v1\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_facts_stores_validators_from_a_fresh_body() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        let repo = std::sync::Arc::new(store);
+        let http = FakeHttp::with_response_validators(
+            FIXTURE,
+            Validators { etag: Some("\"v2\"".into()), last_modified: Some("lm".into()) },
+        );
+        let collector = EdgarCollector::new(http).with_cache(repo.clone());
+        let facts = collector.collect_facts(7, "320193", now()).await.unwrap();
+        assert!(!facts.is_empty());
+        // first request had nothing to validate against
+        assert_eq!(collector.http.sent_validators().unwrap(), Validators::default());
+        // the response's validators are now stored for the next run
+        let url = EdgarCollector::<FakeHttp>::companyfacts_url("320193");
+        let stored = repo.http_validators(&url).await.unwrap().unwrap();
+        assert_eq!(stored.etag.as_deref(), Some("\"v2\""));
+        assert_eq!(stored.last_modified.as_deref(), Some("lm"));
+    }
+
+    #[tokio::test]
+    async fn fetch_profile_is_blank_on_not_modified() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        let collector = EdgarCollector::new(FakeHttp::not_modified())
+            .with_cache(std::sync::Arc::new(store));
+        let target = SourceTarget { cik: "109563".into(), symbol: "VMC".into() };
+        let p = collector.fetch_profile(&target).await.unwrap();
+        // a blank profile COALESCEs to a no-op update downstream
+        assert_eq!(p, crate::domain::CompanyProfile::default());
     }
 
     #[tokio::test]

@@ -98,7 +98,16 @@ async fn main() {
     // Parse args first so --help/--version short-circuit before touching the DB.
     let command = Cli::parse().command;
     let cfg = Config::parse(|k| std::env::var(k).ok());
-    let store = Store::connect(&cfg.database_url).await.expect("open database");
+    // Shared Arc: axum state, the scheduler loop, and the collectors' HTTP
+    // validator cache all hold the same store.
+    let store = Arc::new(
+        Store::connect(&cfg.database_url)
+            .await
+            .expect("open database")
+            .with_policy(stonkscollect_backend::store::Policy {
+                graham_min_revenue: cfg.graham_min_revenue,
+            }),
+    );
 
     match command {
         Command::Serve => serve(store, &cfg).await,
@@ -109,10 +118,7 @@ async fn main() {
     }
 }
 
-async fn serve(store: Store, cfg: &Config) {
-    let store = Arc::new(store.with_policy(stonkscollect_backend::store::Policy {
-        graham_min_revenue: cfg.graham_min_revenue,
-    }));
+async fn serve(store: Arc<Store>, cfg: &Config) {
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
@@ -151,7 +157,7 @@ async fn shutdown_signal() {
 /// Background loop: sleep until the next tier fires, then collect for that tier
 /// (Fundamentals = facts + ratios, Price = prices, News = news). Operates on the
 /// whole universe if COLLECT_ALL, else the configured tickers; idle when neither.
-async fn scheduler_loop(store: &Store, cfg: &Config) {
+async fn scheduler_loop(store: &Arc<Store>, cfg: &Config) {
     if !cfg.collect_all && cfg.tickers.is_empty() {
         tracing::info!("no TICKERS and COLLECT_ALL unset; collection loop idle");
         std::future::pending::<()>().await;
@@ -162,7 +168,8 @@ async fn scheduler_loop(store: &Store, cfg: &Config) {
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
     let mk = || Arc::new(RateLimiter::new(delay));
 
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let edgar =
+        EdgarCollector::new(http_client(&cfg.user_agent, &mk())).with_cache(store.clone());
     let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news
     let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut fact_sources: Vec<&dyn FactSource> = vec![&edgar];
@@ -313,11 +320,12 @@ fn report_bulk(label: &str, result: Result<pipeline::CollectSummary, stonkscolle
 /// Enrich company profiles from EDGAR (industry/exchange), FMP when a key is
 /// configured (employees/exchange), and Yahoo (description/website/sector).
 /// Idempotent (COALESCE update).
-async fn enrich(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
+async fn enrich(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
     let mk = || Arc::new(RateLimiter::new(delay));
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let edgar =
+        EdgarCollector::new(http_client(&cfg.user_agent, &mk())).with_cache(store.clone());
     let yahoo = YahooProfileCollector::new(http_client(&cfg.user_agent, &mk()));
     let fmp = cfg
         .fmp_api_key
@@ -372,7 +380,7 @@ async fn bootstrap(store: &Store, cfg: &Config) {
     tracing::info!("bootstrapped {n} companies");
 }
 
-async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: bool) {
+async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all: bool) {
     let bulk = all || cfg.collect_all;
 
     // One rate limiter PER HOST (each client owns its clone), so EDGAR, Yahoo and
@@ -380,7 +388,8 @@ async fn collect(store: &Store, cfg: &Config, mut tickers: Vec<String>, all: boo
     // COLLECT_CONCURRENCY. REQUEST_DELAY_MS is the per-host spacing.
     let delay = std::time::Duration::from_millis(cfg.request_delay_ms);
     let mk = || Arc::new(RateLimiter::new(delay));
-    let edgar = EdgarCollector::new(http_client(&cfg.user_agent, &mk()));
+    let edgar =
+        EdgarCollector::new(http_client(&cfg.user_agent, &mk())).with_cache(store.clone());
     let yahoo_lim = mk(); // shared by Yahoo prices + Yahoo news (same provider)
     let yahoo = YahooCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
     let mut sources: Vec<&dyn FactSource> = vec![&edgar];
