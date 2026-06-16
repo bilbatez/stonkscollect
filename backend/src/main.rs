@@ -10,12 +10,13 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 
 use stonkscollect_backend::collectors::edgar::EdgarCollector;
+use stonkscollect_backend::collectors::edgar_ownership::OwnershipCollector;
 use stonkscollect_backend::collectors::fmp::FmpCollector;
 use stonkscollect_backend::collectors::news::{FinnhubCollector, YahooNewsCollector};
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
 use stonkscollect_backend::collectors::yahoo::{YahooCollector, YahooProfileCollector};
 use stonkscollect_backend::collectors::{
-    FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
+    FactSource, HolderSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
 };
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
@@ -441,6 +442,33 @@ async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all
                 report.discrepancies_written,
                 report.source_errors.len()
             );
+        }
+    }
+
+    // Best-effort insider ownership from EDGAR Form 4 (keyless). Separate from
+    // the fact/price pipeline: holdings are not period-keyed facts.
+    let holders = OwnershipCollector::new(http_client(&cfg.user_agent, &mk()));
+    let companies = if bulk {
+        store.all_companies().await.unwrap_or_default()
+    } else {
+        let mut cs = Vec::new();
+        for t in &tickers {
+            if let Ok(Some(c)) = store.get_company(t).await {
+                cs.push(c);
+            }
+        }
+        cs
+    };
+    for c in &companies {
+        let target = SourceTarget { cik: c.cik.clone(), symbol: c.ticker.clone() };
+        match holders.fetch_holders(c.id, &target).await {
+            Ok(h) if !h.is_empty() => {
+                if let Err(e) = store.save_ownership(&h).await {
+                    tracing::warn!("save ownership for {} failed: {e}", c.ticker);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!("form 4 collection for {} failed: {e}", c.ticker),
         }
     }
 }

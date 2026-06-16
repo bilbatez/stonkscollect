@@ -3,6 +3,7 @@
 //! tested offline against captured fixtures.
 
 pub mod edgar;
+pub mod edgar_ownership;
 pub mod fmp;
 pub mod news;
 pub mod scrape;
@@ -13,7 +14,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::domain::{CompanyProfile, FinancialFact, NewsItem, PeriodType, PricePoint};
+use crate::domain::{CompanyProfile, FinancialFact, NewsItem, OwnershipHolding, PeriodType, PricePoint};
 
 /// `chrono` format string for ISO `YYYY-MM-DD` dates, as emitted by EDGAR and
 /// expected by the Finnhub news query.
@@ -78,6 +79,17 @@ pub trait NewsSource {
         target: &SourceTarget,
         now: DateTime<Utc>,
     ) -> Result<Vec<NewsItem>, CollectorError>;
+}
+
+/// A source of holder positions (e.g. SEC Form 4 insider filings).
+#[async_trait(?Send)]
+pub trait HolderSource {
+    fn name(&self) -> &'static str;
+    async fn fetch_holders(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+    ) -> Result<Vec<OwnershipHolding>, CollectorError>;
 }
 
 /// A source that yields financial facts for a company (Strategy pattern).
