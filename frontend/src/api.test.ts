@@ -3,6 +3,7 @@ import {
   addWatch,
   clearToken,
   deleteNote,
+  getMarketSummary,
   getMovers,
   getNote,
   getPeers,
@@ -236,4 +237,10 @@ test('getSectors hits /api/sectors', async () => {
   mockFetch(() => ({ json: async () => [] }))
   await getSectors()
   expect(calls[0].url).toBe('/api/sectors')
+})
+
+test('getMarketSummary hits /api/markets/summary', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await getMarketSummary()
+  expect(calls[0].url).toBe('/api/markets/summary')
 })

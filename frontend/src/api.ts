@@ -6,6 +6,7 @@ import type {
   Discrepancy,
   FinancialFact,
   GrahamAssessment,
+  MoverRow,
   Movers,
   NewsItem,
   Note,
@@ -150,6 +151,11 @@ export function getMovers(limit = 10): Promise<Movers> {
 /** The watchlist with each company's latest daily quote. */
 export function getWatchlistQuotes(): Promise<WatchQuote[]> {
   return getJson<WatchQuote[]>('/api/watchlist/quotes')
+}
+
+/** Latest close + day change for each tracked market index (S&P/Nasdaq/Dow). */
+export function getMarketSummary(): Promise<MoverRow[]> {
+  return getJson<MoverRow[]>('/api/markets/summary')
 }
 
 /** Paginated, optionally-searched directory of all companies + their scores. */

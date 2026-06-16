@@ -58,6 +58,24 @@ impl Store {
         Ok(companies.len())
     }
 
+    /// Insert or update a market index pseudo-company (`is_index = 1`) with a
+    /// synthetic CIK (`IDX-<symbol>`). Indices reuse the prices pipeline but are
+    /// hidden from the company directory and movers. Returns its id.
+    pub async fn upsert_index(&self, ticker: &str, name: &str) -> Result<i64> {
+        let cik = format!("IDX-{}", ticker.trim_start_matches('^'));
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO companies (cik,ticker,name,is_index) VALUES (?,?,?,1) \
+             ON CONFLICT(ticker) DO UPDATE SET cik=excluded.cik, name=excluded.name, is_index=1 \
+             RETURNING id",
+        )
+        .bind(cik)
+        .bind(ticker)
+        .bind(name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
     /// Apply a profile enrichment to a company. Only the `Some` fields overwrite
     /// (COALESCE keeps the existing value where the update is `None`).
     pub async fn update_company_profile(&self, company_id: i64, p: &CompanyProfile) -> Result<()> {

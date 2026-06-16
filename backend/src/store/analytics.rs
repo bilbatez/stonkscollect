@@ -189,10 +189,31 @@ impl Store {
              FROM daily last
              JOIN daily prev ON prev.company_id = last.company_id AND prev.day_rank = 2
              JOIN companies c ON c.id = last.company_id
-             WHERE last.day_rank = 1 AND prev.close <> 0.0
+             WHERE last.day_rank = 1 AND prev.close <> 0.0 AND c.is_index = 0
              ORDER BY c.ticker"
         );
-        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        Self::move_rows(&self.pool, &sql).await
+    }
+
+    /// Latest daily move for each market index (mirrors [`day_changes`] but for
+    /// `is_index = 1` rows), powering the dashboard's market summary.
+    pub async fn index_changes(&self) -> Result<Vec<MoverRow>> {
+        let sql = format!(
+            "WITH {DAILY_CLOSES_CTE}
+             SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
+                    last.volume AS volume, prev.close AS prev_close
+             FROM daily last
+             JOIN daily prev ON prev.company_id = last.company_id AND prev.day_rank = 2
+             JOIN companies c ON c.id = last.company_id
+             WHERE last.day_rank = 1 AND prev.close <> 0.0 AND c.is_index = 1
+             ORDER BY c.ticker"
+        );
+        Self::move_rows(&self.pool, &sql).await
+    }
+
+    /// Decode day-change `MoverRow`s from a prepared movers/index query.
+    async fn move_rows(pool: &SqlitePool, sql: &str) -> Result<Vec<MoverRow>> {
+        let rows = sqlx::query(sql).fetch_all(pool).await?;
         rows.iter()
             .map(|r| {
                 let last_close: f64 = r.try_get("last_close")?;
@@ -371,10 +392,11 @@ impl Store {
             let e = s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
             format!("%{}%", e)
         });
+        // Indices live in `companies` too; keep them out of the directory.
         let where_clause = if like.is_some() {
-            " WHERE c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\'"
+            " WHERE c.is_index = 0 AND (c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\')"
         } else {
-            ""
+            " WHERE c.is_index = 0"
         };
         let count_sql = format!("SELECT COUNT(*) FROM companies c{where_clause}");
         let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);

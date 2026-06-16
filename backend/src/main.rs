@@ -373,7 +373,8 @@ async fn bootstrap(store: &Store, cfg: &Config) {
     let n = pipeline::bootstrap_companies(store, &refs)
         .await
         .expect("bootstrap companies");
-    tracing::info!("bootstrapped {n} companies");
+    let idx = pipeline::seed_indices(store).await.expect("seed indices");
+    tracing::info!("bootstrapped {n} companies and {idx} indices");
 }
 
 async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all: bool) {

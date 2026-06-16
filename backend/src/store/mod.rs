@@ -1155,6 +1155,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn indices_are_collected_but_hidden_from_directory_and_movers() {
+        let (store, _d) = temp_store().await;
+        let aapl = store.insert_company(&sample_company()).await.unwrap();
+        let idx = store.upsert_index("^GSPC", "S&P 500").await.unwrap();
+        // re-seeding the same index is idempotent (keeps a single row)
+        assert_eq!(store.upsert_index("^GSPC", "S&P 500").await.unwrap(), idx);
+        let d1 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+        let d2 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
+        for (cid, c1, c2) in [(aapl, 100.0, 110.0), (idx, 4000.0, 4200.0)] {
+            for (d, close) in [(d1, c1), (d2, c2)] {
+                store
+                    .upsert_price(&PricePoint {
+                        company_id: cid, date: d, open: None, high: None, low: None,
+                        close, volume: Some(1), source: "yahoo".into(),
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
+        // collection still sees the index ...
+        assert_eq!(store.all_companies().await.unwrap().len(), 2);
+        // ... but the directory hides it
+        let (rows, total) = store.list_companies(None, None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.ticker, "AAPL");
+        // ... and so do the movers
+        let movers = store.day_changes().await.unwrap();
+        assert_eq!(movers.len(), 1);
+        assert_eq!(movers[0].company.ticker, "AAPL");
+        // index_changes returns only indices with their computed move
+        let idx_rows = store.index_changes().await.unwrap();
+        assert_eq!(idx_rows.len(), 1);
+        assert_eq!(idx_rows[0].company.ticker, "^GSPC");
+        assert!((idx_rows[0].change - 200.0).abs() < 1e-9);
+        assert_eq!(idx_rows[0].company.cik, "IDX-GSPC");
+    }
+
+    #[tokio::test]
     async fn http_validators_roundtrip_and_overwrite() {
         let (store, _d) = temp_store().await;
         assert_eq!(store.http_validators("https://u").await.unwrap(), None);

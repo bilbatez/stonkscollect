@@ -95,6 +95,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/screen", get(screen))
         .route("/api/sectors", get(sectors))
         .route("/api/movers", get(movers))
+        .route("/api/markets/summary", get(markets_summary))
         .route("/api/runs", get(runs))
 }
 
@@ -251,6 +252,14 @@ async fn movers(
 ) -> ApiResult<Movers> {
     let rows = store.day_changes().await.map_err(internal)?;
     Ok(Json(select_movers(rows, p.limit.unwrap_or(MOVERS_LIMIT))))
+}
+
+/// Market summary: each tracked index's latest close and day change.
+async fn markets_summary(
+    State(store): State<Arc<Store>>,
+    _user: AuthUser,
+) -> ApiResult<Vec<crate::domain::MoverRow>> {
+    Ok(Json(store.index_changes().await.map_err(internal)?))
 }
 
 #[derive(Serialize)]
@@ -899,6 +908,28 @@ mod tests {
             assert!(!tickers.contains(&"AAPL".to_string()), "{bucket}");
             assert!(!tickers.contains(&"ZERO".to_string()), "{bucket}");
         }
+    }
+
+    #[tokio::test]
+    async fn markets_summary_returns_index_day_changes() {
+        let (store, _d, t) = seeded().await; // AAPL equity (excluded from indices)
+        let idx = store.upsert_index("^GSPC", "S&P 500").await.unwrap();
+        let day1 = NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2024, 2, 2).unwrap();
+        store
+            .save_prices(&[
+                PricePoint { company_id: idx, date: day1, open: None, high: None, low: None, close: 4000.0, volume: None, source: "yahoo".into() },
+                PricePoint { company_id: idx, date: day2, open: None, high: None, low: None, close: 4200.0, volume: None, source: "yahoo".into() },
+            ])
+            .await
+            .unwrap();
+        let (status, json) = get(store, &t, "/api/markets/summary").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["company"]["ticker"], "^GSPC");
+        assert_eq!(json[0]["last_close"], 4200.0);
+        assert_eq!(json[0]["change"], 200.0);
+        assert!((json[0]["change_pct"].as_f64().unwrap() - 0.05).abs() < 1e-9);
     }
 
     #[tokio::test]

@@ -319,6 +319,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seed_indices_adds_tracked_indices_idempotently() {
+        let (store, _d) = crate::testutil::temp_store().await;
+        assert_eq!(seed_indices(&store).await.unwrap(), TRACKED_INDICES.len());
+        // rerun is safe — still one row per index, hidden from the directory
+        seed_indices(&store).await.unwrap();
+        let (_rows, total) = store.list_companies(None, None, None, 100, 0).await.unwrap();
+        assert_eq!(total, 0);
+        assert_eq!(store.all_companies().await.unwrap().len(), TRACKED_INDICES.len());
+        assert_eq!(store.get_company("^GSPC").await.unwrap().unwrap().cik, "IDX-GSPC");
+    }
+
+    #[tokio::test]
     async fn ensure_user_is_idempotent_and_sets_password() {
         let (store, _d) = crate::testutil::temp_store().await;
         assert!(ensure_user(&store, "admin", "admin").await.unwrap()); // created

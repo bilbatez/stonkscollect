@@ -79,6 +79,22 @@ pub async fn enrich_tickers(
     Ok(n)
 }
 
+/// Market indices tracked for the dashboard summary, as (Yahoo chart symbol, name).
+pub const TRACKED_INDICES: &[(&str, &str)] = &[
+    ("^GSPC", "S&P 500"),
+    ("^IXIC", "Nasdaq Composite"),
+    ("^DJI", "Dow Jones Industrial Average"),
+];
+
+/// Seed the tracked market indices as pseudo-companies (idempotent). They are
+/// collected like equities but hidden from the directory/movers. Returns count.
+pub async fn seed_indices(store: &Store) -> Result<usize, StoreError> {
+    for (ticker, name) in TRACKED_INDICES {
+        store.upsert_index(ticker, name).await?;
+    }
+    Ok(TRACKED_INDICES.len())
+}
+
 /// Upsert a batch of company identities (idempotent). Returns the count.
 pub async fn bootstrap_companies(store: &Store, refs: &[CompanyRef]) -> Result<usize, StoreError> {
     let companies: Vec<NewCompany> = refs
