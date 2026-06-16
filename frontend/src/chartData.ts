@@ -128,6 +128,52 @@ export function ratioChartData(ratios: Ratio[], period: 'annual' | 'quarterly'):
   return { categories, series }
 }
 
+/** Overlay multiple tickers as percentage change rebased to the first date all
+ *  of them have a price (Yahoo's "compare" chart). Each series is null before
+ *  the shared base date and on any date that ticker lacks a bar. Empty when no
+ *  shared base date exists. */
+export function normalizedReturns(seriesByTicker: Record<string, PricePoint[]>): ChartData {
+  const tickers = Object.keys(seriesByTicker)
+  if (tickers.length === 0) return { categories: [], series: [] }
+  const closeByDate = new Map<string, Map<string, number>>()
+  const allDates = new Set<string>()
+  for (const ticker of tickers) {
+    const m = new Map<string, number>()
+    for (const p of seriesByTicker[ticker]) {
+      m.set(p.date, p.close)
+      allDates.add(p.date)
+    }
+    closeByDate.set(ticker, m)
+  }
+  const categories = [...allDates].sort()
+  const baseDate = categories.find((d) => tickers.every((t) => closeByDate.get(t)!.has(d)))
+  if (baseDate === undefined) return { categories: [], series: [] }
+  const series: ChartSeries[] = tickers.map((ticker) => {
+    const m = closeByDate.get(ticker)!
+    const base = m.get(baseDate)!
+    return {
+      name: ticker,
+      data: categories.map((d) => {
+        const close = m.get(d)
+        return d >= baseDate && close !== undefined ? (close / base - 1) * 100 : null
+      }),
+    }
+  })
+  return { categories, series }
+}
+
+/** Trailing simple moving average of close, aligned to `prices` order.
+ *  Each index holds the mean of the prior `window` closes, or null until the
+ *  window fills. Chart wrappers stay logic-free, so this lives here (testable). */
+export function movingAverage(prices: PricePoint[], window: number): (number | null)[] {
+  let sum = 0
+  return prices.map((p, i) => {
+    sum += p.close
+    if (i >= window) sum -= prices[i - window].close
+    return i >= window - 1 ? sum / window : null
+  })
+}
+
 /** Price-chart range presets, Yahoo-style. */
 export type RangePreset = '1M' | '6M' | 'YTD' | '1Y' | '5Y' | 'MAX'
 

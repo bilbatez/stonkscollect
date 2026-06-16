@@ -98,6 +98,52 @@ export function computeQuote(prices: PricePoint[]): Quote | null {
   }
 }
 
+/** Yahoo-style trailing-return windows, in render order. */
+export const RETURN_PERIODS = ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y'] as const
+export type ReturnPeriod = (typeof RETURN_PERIODS)[number]
+export interface PeriodReturn {
+  period: ReturnPeriod
+  pct: number | null
+}
+
+const RETURN_MONTHS: Partial<Record<ReturnPeriod, number>> = {
+  '1M': 1,
+  '6M': 6,
+  '1Y': 12,
+  '5Y': 60,
+}
+
+function monthsBefore(date: string, months: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - months)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Percentage change of the latest close versus a baseline bar per window.
+ *  Anchored on the latest stored date (data is latest-and-stored, not realtime),
+ *  mirroring `pricesForRange`. Null when no earlier baseline exists or it is 0. */
+export function computePeriodReturns(prices: PricePoint[]): PeriodReturn[] {
+  const daily = dedupeDaily(prices)
+  const last = daily[daily.length - 1]
+  const earlier = daily.slice(0, -1)
+  return RETURN_PERIODS.map((period) => {
+    if (!last) return { period, pct: null }
+    let baseline: PricePoint | undefined
+    if (period === '1D') baseline = earlier[earlier.length - 1]
+    else if (period === '5D') baseline = earlier[earlier.length - 5]
+    else {
+      const start =
+        period === 'YTD'
+          ? `${last.date.slice(0, 4)}-01-01`
+          : monthsBefore(last.date, RETURN_MONTHS[period]!)
+      baseline = earlier.find((p) => p.date >= start)
+    }
+    const pct =
+      baseline && baseline.close !== 0 ? (last.close - baseline.close) / baseline.close : null
+    return { period, pct }
+  })
+}
+
 function latestFact(facts: FinancialFact[], item: string): number | null {
   let best: FinancialFact | null = null
   for (const fact of facts) {

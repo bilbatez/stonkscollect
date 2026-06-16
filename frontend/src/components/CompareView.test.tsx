@@ -6,6 +6,8 @@ import * as api from '../api'
 import type { Company, CompanyData, CompanyRow } from '../types'
 
 vi.mock('../api')
+// Canvas chart wrapper is coverage-excluded glue; echarts needs a real canvas.
+vi.mock('../charts/CompareChart', () => ({ default: () => <div data-testid="compare-chart" /> }))
 afterEach(() => vi.clearAllMocks())
 
 function company(ticker: string): Company {

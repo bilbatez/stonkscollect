@@ -9,7 +9,7 @@ import {
   Typography,
 } from '@mui/material'
 import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../../format'
-import { computeKeyStats, computeQuote } from '../../quote'
+import { computeKeyStats, computePeriodReturns, computeQuote } from '../../quote'
 import { DiscrepancyPanel } from '../panels/DiscrepancyPanel'
 import { FreshnessBadge } from '../shared/FreshnessBadge'
 import { GrahamScorecard } from '../panels/GrahamScorecard'
@@ -23,6 +23,7 @@ import { PeriodToggle } from '../shared/PeriodToggle'
 import { RangeToggle } from '../shared/RangeToggle'
 import { RatiosPanel } from '../panels/RatiosPanel'
 import { Skeleton } from '../shared/Skeleton'
+import { WeekRangeBar } from '../shared/WeekRangeBar'
 import { StatementTable } from '../panels/StatementTable'
 import { pricesForRange, type RangePreset } from '../../chartData'
 import type { CompanyData, Period } from '../../types'
@@ -50,6 +51,7 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
   const latestPriceDate = data.prices.at(-1)?.date ?? null
   const c = data.company
   const quote = computeQuote(data.prices)
+  const periodReturns = computePeriodReturns(data.prices)
   const keyStats = computeKeyStats(data, quote)
   const rangedPrices = pricesForRange(data.prices, priceRange)
   return (
@@ -89,11 +91,16 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
           </Link>
         </Stack>
 
-        <QuoteHeader quote={quote} />
+        <QuoteHeader quote={quote} returns={periodReturns} />
 
         <MetricsSummary ratios={data.ratios} graham={data.graham} />
 
         <Section title="Key statistics">
+          {quote && (
+            <Box sx={{ mb: 1.5 }}>
+              <WeekRangeBar low={quote.week52Low} high={quote.week52High} last={quote.last} />
+            </Box>
+          )}
           <KeyStatsPanel stats={keyStats} quote={quote} />
         </Section>
 

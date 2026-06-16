@@ -1,5 +1,12 @@
 import { expect, test } from 'vitest'
-import { grahamChartData, incomeChartData, pricesForRange, ratioChartData } from './chartData'
+import {
+  grahamChartData,
+  incomeChartData,
+  movingAverage,
+  normalizedReturns,
+  pricesForRange,
+  ratioChartData,
+} from './chartData'
 import type { FinancialFact, PricePoint, Ratio } from './types'
 
 const fact = (
@@ -205,6 +212,57 @@ test('pricesForRange windows by preset anchored on the latest price date', () =>
   ])
   expect(pricesForRange(prices, '1Y')).toHaveLength(4)
   expect(pricesForRange(prices, '5Y')).toHaveLength(4) // 2018 bar is older than 5y
+})
+
+// --- movingAverage ---
+
+test('movingAverage returns null until the window fills, then trailing mean of close', () => {
+  const prices = [
+    price('2024-01-01', 10),
+    price('2024-01-02', 20),
+    price('2024-01-03', 30),
+    price('2024-01-04', 40),
+  ]
+  expect(movingAverage(prices, 3)).toEqual([null, null, 20, 30])
+})
+
+test('movingAverage with window 1 just echoes closes', () => {
+  expect(movingAverage([price('2024-01-01', 5), price('2024-01-02', 7)], 1)).toEqual([5, 7])
+})
+
+test('movingAverage returns all nulls when fewer bars than the window', () => {
+  expect(movingAverage([price('2024-01-01', 5), price('2024-01-02', 7)], 3)).toEqual([null, null])
+})
+
+test('movingAverage on empty input is empty', () => {
+  expect(movingAverage([], 50)).toEqual([])
+})
+
+// --- normalizedReturns ---
+
+test('normalizedReturns rebases each ticker to % change from the first common date', () => {
+  const d = normalizedReturns({
+    AAPL: [price('2024-01-01', 100), price('2024-01-02', 110), price('2024-01-03', 120)],
+    MSFT: [price('2024-01-02', 200), price('2024-01-03', 220), price('2024-01-04', 230)],
+  })
+  expect(d.categories).toEqual(['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04'])
+  const aapl = d.series.find((s) => s.name === 'AAPL')!.data
+  const msft = d.series.find((s) => s.name === 'MSFT')!.data
+  // common base date is 2024-01-02 (AAPL base 110, MSFT base 200)
+  expect(aapl[0]).toBeNull() // before the shared base
+  expect(aapl[1]).toBeCloseTo(0)
+  expect(aapl[2]).toBeCloseTo((120 / 110 - 1) * 100)
+  expect(aapl[3]).toBeNull() // AAPL has no 2024-01-04 bar
+  expect(msft[1]).toBeCloseTo(0)
+  expect(msft[2]).toBeCloseTo(10)
+  expect(msft[3]).toBeCloseTo(15)
+})
+
+test('normalizedReturns is empty without input or a shared base date', () => {
+  expect(normalizedReturns({})).toEqual({ categories: [], series: [] })
+  expect(
+    normalizedReturns({ AAPL: [price('2024-01-01', 100)], MSFT: [price('2024-02-01', 200)] }),
+  ).toEqual({ categories: [], series: [] })
 })
 
 test('pricesForRange handles empty input and unordered dates', () => {

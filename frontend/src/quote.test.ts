@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { computeKeyStats, computeQuote, dedupeDaily } from './quote'
+import { computeKeyStats, computePeriodReturns, computeQuote, dedupeDaily } from './quote'
 import type { CompanyData, FinancialFact, PricePoint } from './types'
 
 function bar(date: string, close: number, extra: Partial<PricePoint> = {}): PricePoint {
@@ -135,6 +135,46 @@ test('computeQuote leaves change null when the previous close is zero', () => {
   expect(q.change).toBeNull()
   expect(q.changePct).toBeNull()
   expect(q.prevClose).toBe(0)
+})
+
+test('computePeriodReturns derives 1D/5D/1M/6M/YTD/1Y/5Y vs the latest close', () => {
+  const r = computePeriodReturns([
+    bar('2018-06-01', 40), // older than 5y → not the 5Y baseline
+    bar('2019-06-01', 60), // first bar inside 5y → 5Y baseline
+    bar('2023-03-01', 80), // 1Y baseline
+    bar('2023-09-01', 90), // 6M baseline
+    bar('2024-01-02', 100), // YTD baseline (first bar of 2024)
+    bar('2024-02-01', 105), // 1M baseline
+    bar('2024-02-22', 110), // 5 trading days before last → 5D baseline
+    bar('2024-02-23', 111),
+    bar('2024-02-26', 112),
+    bar('2024-02-27', 113),
+    bar('2024-02-28', 114), // prior bar → 1D baseline
+    bar('2024-03-01', 120), // last
+  ])
+  const pct = Object.fromEntries(r.map((x) => [x.period, x.pct]))
+  expect(pct['1D']).toBeCloseTo((120 - 114) / 114)
+  expect(pct['5D']).toBeCloseTo((120 - 110) / 110)
+  expect(pct['1M']).toBeCloseTo((120 - 105) / 105)
+  expect(pct['6M']).toBeCloseTo((120 - 90) / 90)
+  expect(pct['YTD']).toBeCloseTo((120 - 100) / 100)
+  expect(pct['1Y']).toBeCloseTo((120 - 80) / 80)
+  expect(pct['5Y']).toBeCloseTo((120 - 60) / 60)
+  // order is preserved for rendering
+  expect(r.map((x) => x.period)).toEqual(['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y'])
+})
+
+test('computePeriodReturns yields null pct without enough history', () => {
+  expect(computePeriodReturns([]).every((x) => x.pct === null)).toBe(true)
+  // a single bar has no earlier baseline for any window
+  expect(computePeriodReturns([bar('2024-03-01', 50)]).every((x) => x.pct === null)).toBe(true)
+})
+
+test('computePeriodReturns leaves a window null when its baseline close is zero', () => {
+  const pct = Object.fromEntries(
+    computePeriodReturns([bar('2024-02-28', 0), bar('2024-03-01', 50)]).map((x) => [x.period, x.pct]),
+  )
+  expect(pct['1D']).toBeNull()
 })
 
 test('computeKeyStats uses the summary share count first for market cap', () => {

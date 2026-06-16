@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Autocomplete, Box, Chip, Stack, TextField, Typography } from '@mui/material'
 import { listCompanies, loadCompanyData } from '../../api'
 import { COMPARE_AUTOCOMPLETE_LIMIT, SEARCH_DEBOUNCE_MS } from '../../constants'
-import type { CompanyData, CompanyRow } from '../../types'
+import type { CompanyData, CompanyRow, PricePoint } from '../../types'
 import { Compare, type CompareRow } from '../shared/Compare'
 import { Skeleton } from '../shared/Skeleton'
+
+const CompareChart = lazy(() => import('../../charts/CompareChart'))
 
 function latestMetrics(d: CompanyData): Record<string, number> {
   const m: Record<string, number> = {}
@@ -17,6 +19,7 @@ function latestMetrics(d: CompanyData): Record<string, number> {
 export function CompareView() {
   const [tickers, setTickers] = useState<string[]>([])
   const [dataMap, setDataMap] = useState<Record<string, Record<string, number>>>({})
+  const [priceMap, setPriceMap] = useState<Record<string, PricePoint[]>>({})
   const [inputValue, setInputValue] = useState('')
   const [options, setOptions] = useState<CompanyRow[]>([])
   const [loadingCount, setLoadingCount] = useState(0)
@@ -25,6 +28,10 @@ export function CompareView() {
   const rows: CompareRow[] = tickers
     .filter((t) => t in dataMap)
     .map((t) => ({ ticker: t, metrics: dataMap[t] }))
+  // Price series for the normalized overlay chart, in the same insertion order.
+  const seriesByTicker: Record<string, PricePoint[]> = Object.fromEntries(
+    tickers.filter((t) => t in priceMap).map((t) => [t, priceMap[t]]),
+  )
 
   useEffect(() => {
     if (!inputValue.trim()) {
@@ -49,6 +56,7 @@ export function CompareView() {
     try {
       const d = await loadCompanyData(ticker)
       setDataMap((prev) => ({ ...prev, [ticker]: latestMetrics(d) }))
+      setPriceMap((prev) => ({ ...prev, [ticker]: d.prices }))
     } finally {
       setLoadingCount((c) => c - 1)
     }
@@ -57,6 +65,11 @@ export function CompareView() {
   function removeTicker(ticker: string) {
     setTickers((prev) => prev.filter((t) => t !== ticker))
     setDataMap((prev) => {
+      const next = { ...prev }
+      delete next[ticker]
+      return next
+    })
+    setPriceMap((prev) => {
       const next = { ...prev }
       delete next[ticker]
       return next
@@ -95,7 +108,12 @@ export function CompareView() {
       ) : tickers.length === 0 ? (
         <Typography color="text.secondary">Add tickers above to compare.</Typography>
       ) : (
-        <Compare rows={rows} />
+        <>
+          <Suspense fallback={null}>
+            <CompareChart seriesByTicker={seriesByTicker} />
+          </Suspense>
+          <Compare rows={rows} />
+        </>
       )}
     </Box>
   )

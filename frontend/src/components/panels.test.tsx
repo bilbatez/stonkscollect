@@ -12,6 +12,7 @@ import { NewsFeed } from './panels/NewsFeed'
 import { NotePanel } from './panels/NotePanel'
 import { PeersPanel } from './panels/PeersPanel'
 import { RangeToggle } from './shared/RangeToggle'
+import { WeekRangeBar } from './shared/WeekRangeBar'
 import { RatiosPanel } from './panels/RatiosPanel'
 import { SectorOverview } from './pages/SectorOverview'
 import { StatementTable } from './panels/StatementTable'
@@ -396,6 +397,37 @@ test('QuoteHeader renders nothing without a quote', () => {
   expect(container.firstChild).toBeNull()
 })
 
+test('QuoteHeader renders period-return chips with colored, signed percentages', () => {
+  render(
+    <QuoteHeader
+      quote={{
+        last: 110, prevClose: 100, change: 10, changePct: 0.1, asOf: '2024-03-01',
+        dayHigh: 112, dayLow: 104, volume: 200, week52High: 120, week52Low: 80, avgVolume3m: 250,
+      }}
+      returns={[
+        { period: '1D', pct: 0.1 },
+        { period: '1Y', pct: -0.2 },
+        { period: '5Y', pct: null },
+      ]}
+    />,
+  )
+  expect(screen.getByLabelText('1D return')).toHaveTextContent('1D +10%')
+  expect(screen.getByLabelText('1Y return')).toHaveTextContent('1Y -20%')
+  expect(screen.getByLabelText('5Y return')).toHaveTextContent('5Y —')
+})
+
+test('QuoteHeader omits the returns row when none are provided', () => {
+  render(
+    <QuoteHeader
+      quote={{
+        last: 50, prevClose: 49, change: 1, changePct: 0.02, asOf: '2024-03-01',
+        dayHigh: null, dayLow: null, volume: null, week52High: 50, week52Low: 49, avgVolume3m: null,
+      }}
+    />,
+  )
+  expect(screen.queryByLabelText('1D return')).toBeNull()
+})
+
 // --- KeyStatsPanel ---
 
 test('KeyStatsPanel formats every populated statistic', () => {
@@ -435,6 +467,24 @@ test('KeyStatsPanel dashes missing values and tolerates a null quote', () => {
     />,
   )
   expect(screen.getAllByText('—').length).toBe(16)
+})
+
+// --- WeekRangeBar ---
+
+test('WeekRangeBar positions the marker between the low and high bounds', () => {
+  render(<WeekRangeBar low={100} high={200} last={150} />)
+  expect(screen.getByText('100.00')).toBeInTheDocument()
+  expect(screen.getByText('200.00')).toBeInTheDocument()
+  expect(screen.getByTestId('range-marker')).toHaveStyle({ left: '50%' })
+})
+
+test('WeekRangeBar clamps the marker and avoids dividing by a zero span', () => {
+  const { rerender } = render(<WeekRangeBar low={100} high={200} last={500} />)
+  expect(screen.getByTestId('range-marker')).toHaveStyle({ left: '100%' })
+  rerender(<WeekRangeBar low={100} high={200} last={10} />)
+  expect(screen.getByTestId('range-marker')).toHaveStyle({ left: '0%' })
+  rerender(<WeekRangeBar low={50} high={50} last={50} />)
+  expect(screen.getByTestId('range-marker')).toHaveStyle({ left: '0%' })
 })
 
 // --- RangeToggle ---
