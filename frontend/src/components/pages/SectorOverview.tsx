@@ -9,7 +9,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { formatNum, formatPct } from '../../format'
+import { formatNum, formatPct, scoreHeatColor } from '../../format'
 import type { SectorStats } from '../../types'
 
 export function SectorOverview({
@@ -39,7 +39,9 @@ export function SectorOverview({
             <TableRow key={s.sector} hover>
               <TableCell>{s.sector}</TableCell>
               <TableCell align="right">{s.company_count}</TableCell>
-              <TableCell align="right">{formatNum(s.avg_score)}</TableCell>
+              <TableCell align="right" sx={{ bgcolor: scoreHeatColor(s.avg_score) }}>
+                {formatNum(s.avg_score)}
+              </TableCell>
               <TableCell align="right">{formatPct(s.pct_defensive)}</TableCell>
               <TableCell align="right">
                 {s.top_ticker ? (

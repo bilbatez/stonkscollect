@@ -22,6 +22,13 @@ export function formatNum(x: number | null): string {
   return x === null ? '—' : x.toFixed(2)
 }
 
+/** Heatmap cell color for a Graham score (0–8): green whose opacity scales with
+ *  the score, clamped to [0, 8]. Used by the sector overview. */
+export function scoreHeatColor(score: number): string {
+  const alpha = Math.min(1, Math.max(0, score / 8))
+  return `rgba(34,197,94,${alpha.toFixed(2)})`
+}
+
 /** Escape one CSV cell (wrap in quotes if it contains comma, quote, or newline). */
 function csvCell(v: string | number | null): string {
   const s = v === null ? '' : String(v)

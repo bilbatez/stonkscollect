@@ -52,6 +52,7 @@ beforeEach(() => {
   mocked.getToken.mockReturnValue(null)
   mocked.getWatchlistQuotes.mockResolvedValue([])
   mocked.getMarketSummary.mockResolvedValue([])
+  mocked.getMovers.mockResolvedValue({ gainers: [], losers: [], most_active: [] })
   mocked.listCompanies.mockResolvedValue({ rows: [{ company: company('AAPL'), score: grahamScore() }], total: 1 })
   mocked.screen.mockResolvedValue({ rows: [{ company: company('KO'), score: grahamScore() }], total: 1 })
   mocked.getSectors.mockResolvedValue([{ sector: 'Technology', company_count: 1, avg_score: 5, pct_defensive: 1, top_ticker: 'AAPL' }])
@@ -79,6 +80,21 @@ test('shows the auth form when logged out, dashboard after auth', async () => {
   await userEvent.click(screen.getByRole('button', { name: /log in/i }))
   // lands on the All Stocks tab of the home dashboard
   await waitFor(() => expect(screen.getByLabelText('search stocks')).toBeInTheDocument())
+})
+
+test('home trending strip opens a company when a gainer chip is clicked', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.loadCompanyData.mockResolvedValue(data('AAPL'))
+  mocked.getMovers.mockResolvedValue({
+    gainers: [
+      { company: company('AAPL'), last_close: 10, change: 0.5, change_pct: 0.05, volume: null, as_of: '2024-03-01' },
+    ],
+    losers: [],
+    most_active: [],
+  })
+  render(<App />)
+  await userEvent.click(await screen.findByText('AAPL +5%'))
+  await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
 })
 
 test('home All Stocks tab opens a company; theme toggles; logout returns to auth', async () => {

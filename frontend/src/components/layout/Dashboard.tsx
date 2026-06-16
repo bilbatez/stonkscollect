@@ -22,6 +22,7 @@ import { CompareView } from '../pages/CompareView'
 import { AllStocks } from '../pages/AllStocks'
 import { CompanyView } from '../pages/CompanyView'
 import { MarketSummary } from '../panels/MarketSummary'
+import { TrendingStrip } from '../panels/TrendingStrip'
 import { MoversView } from '../pages/MoversView'
 import { SectorOverview } from '../pages/SectorOverview'
 import { Screener } from '../pages/Screener'
@@ -128,6 +129,7 @@ export function Dashboard({
         {page === 'home' && (
           <Box>
             <MarketSummary />
+            <TrendingStrip onSelect={(t) => void select(t)} />
             <Tabs value={tab} onChange={(_e, v: number) => showTab(v)} sx={{ mb: 2 }}>
               <Tab icon={<ViewListIcon />} iconPosition="start" label="All Stocks" />
               <Tab icon={<StarBorderIcon />} iconPosition="start" label="Watchlist" />

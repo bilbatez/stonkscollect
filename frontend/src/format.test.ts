@@ -12,6 +12,7 @@ import {
   freshness,
   metricGroup,
   metricLabel,
+  scoreHeatColor,
   secFilingsUrl,
   statementItemLabel,
   statementLabel,
@@ -62,6 +63,14 @@ test('formatMetric renders each metric kind', () => {
 
 test('metric labels and groups fall back gracefully', () => {
   expect(metricLabel('roe')).toBe('Return on equity')
+})
+
+test('scoreHeatColor scales green opacity with the Graham score and clamps', () => {
+  expect(scoreHeatColor(0)).toBe('rgba(34,197,94,0.00)')
+  expect(scoreHeatColor(8)).toBe('rgba(34,197,94,1.00)')
+  expect(scoreHeatColor(4)).toBe('rgba(34,197,94,0.50)')
+  expect(scoreHeatColor(-3)).toBe('rgba(34,197,94,0.00)') // clamped low
+  expect(scoreHeatColor(99)).toBe('rgba(34,197,94,1.00)') // clamped high
   expect(metricGroup('roe')).toBe('Profitability')
   expect(metricLabel('some_new_metric')).toBe('Some New Metric')
   expect(metricGroup('some_new_metric')).toBe('Other')
