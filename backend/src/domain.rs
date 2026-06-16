@@ -50,6 +50,18 @@ pub struct WatchQuote {
     pub as_of: Option<NaiveDate>,
 }
 
+/// One holder's position in a company (e.g. an insider's reported share count
+/// from an SEC Form 4 filing). `kind` is "insider" or "institutional".
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct OwnershipHolding {
+    pub company_id: i64,
+    pub holder: String,
+    pub kind: String,
+    pub shares: f64,
+    pub as_of: NaiveDate,
+    pub source: String,
+}
+
 /// A recorded per-source collection failure for a company.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SourceError {

@@ -1148,6 +1148,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ownership_saves_upserts_and_lists_by_position() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let hold = |holder: &str, shares: f64, as_of| OwnershipHolding {
+            company_id: id, holder: holder.into(), kind: "insider".into(),
+            shares, as_of, source: "edgar".into(),
+        };
+        assert!(store.get_ownership(id).await.unwrap().is_empty());
+        store
+            .save_ownership(&[hold("Tim Cook", 100.0, d(2024, 1, 2)), hold("Jeff Williams", 300.0, d(2024, 2, 1))])
+            .await
+            .unwrap();
+        // re-saving the same (holder, as_of, source) updates the share count in place
+        store.save_ownership(&[hold("Tim Cook", 150.0, d(2024, 1, 2))]).await.unwrap();
+        let rows = store.get_ownership(id).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        // newest as_of first, then larger position
+        assert_eq!(rows[0].holder, "Jeff Williams");
+        assert_eq!(rows[0].as_of, d(2024, 2, 1));
+        assert_eq!(rows[1].holder, "Tim Cook");
+        assert_eq!(rows[1].shares, 150.0); // upserted
+        // an empty batch is a no-op
+        store.save_ownership(&[]).await.unwrap();
+        assert_eq!(store.get_ownership(id).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn day_changes_errors_when_store_is_closed() {
         let (store, _d) = temp_store().await;
         store.close().await;

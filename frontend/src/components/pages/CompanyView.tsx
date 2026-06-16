@@ -14,6 +14,7 @@ import { DiscrepancyPanel } from '../panels/DiscrepancyPanel'
 import { DividendPanel } from '../panels/DividendPanel'
 import { FreshnessBadge } from '../shared/FreshnessBadge'
 import { GrahamScorecard } from '../panels/GrahamScorecard'
+import { HoldersPanel } from '../panels/HoldersPanel'
 import { KeyStatsPanel } from '../panels/KeyStatsPanel'
 import { MetricsSummary } from '../panels/MetricsSummary'
 import { QuoteHeader } from '../panels/QuoteHeader'
@@ -137,6 +138,9 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
         </Section>
         <Section title="Peers">
           <PeersPanel peers={data.peers} />
+        </Section>
+        <Section title="Holders">
+          <HoldersPanel ticker={c.ticker} />
         </Section>
         <Section title="Notes">
           <NotePanel ticker={c.ticker} initialBody={data.note.body} />

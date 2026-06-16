@@ -53,6 +53,7 @@ beforeEach(() => {
   mocked.getWatchlistQuotes.mockResolvedValue([])
   mocked.getMarketSummary.mockResolvedValue([])
   mocked.getMovers.mockResolvedValue({ gainers: [], losers: [], most_active: [] })
+  mocked.getHolders.mockResolvedValue([])
   mocked.listCompanies.mockResolvedValue({ rows: [{ company: company('AAPL'), score: grahamScore() }], total: 1 })
   mocked.screen.mockResolvedValue({ rows: [{ company: company('KO'), score: grahamScore() }], total: 1 })
   mocked.getSectors.mockResolvedValue([{ sector: 'Technology', company_count: 1, avg_score: 5, pct_defensive: 1, top_ticker: 'AAPL' }])

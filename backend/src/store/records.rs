@@ -280,6 +280,53 @@ impl Store {
             .collect()
     }
 
+    /// Insert or update holder positions (e.g. insider Form 4 share counts) in
+    /// one transaction, keyed by (company, holder, as_of, source).
+    pub async fn save_ownership(&self, holdings: &[OwnershipHolding]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for h in holdings {
+            sqlx::query(
+                "INSERT INTO ownership (company_id,holder,kind,shares,as_of,source) \
+                 VALUES (?,?,?,?,?,?) \
+                 ON CONFLICT(company_id,holder,as_of,source) \
+                 DO UPDATE SET shares=excluded.shares, kind=excluded.kind",
+            )
+            .bind(h.company_id)
+            .bind(&h.holder)
+            .bind(&h.kind)
+            .bind(h.shares)
+            .bind(h.as_of)
+            .bind(&h.source)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// A company's holders, most recent filing first, larger positions first.
+    pub async fn get_ownership(&self, company_id: i64) -> Result<Vec<OwnershipHolding>> {
+        let rows = sqlx::query(
+            "SELECT company_id,holder,kind,shares,as_of,source FROM ownership \
+             WHERE company_id=? ORDER BY as_of DESC, shares DESC",
+        )
+        .bind(company_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(OwnershipHolding {
+                    company_id: r.try_get("company_id")?,
+                    holder: r.try_get("holder")?,
+                    kind: r.try_get("kind")?,
+                    shares: r.try_get("shares")?,
+                    as_of: r.try_get("as_of")?,
+                    source: r.try_get("source")?,
+                })
+            })
+            .collect()
+    }
+
     /// Insert or update a derived ratio, keyed by (company, period, metric).
     pub async fn upsert_ratio(&self, r: &Ratio) -> Result<()> {
         bind_ratio(sqlx::query(RATIO_UPSERT_SQL), r).execute(&self.pool).await?;

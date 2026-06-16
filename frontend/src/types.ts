@@ -135,6 +135,15 @@ export interface Note {
   body: string | null
 }
 
+export interface OwnershipHolding {
+  company_id: number
+  holder: string
+  kind: string
+  shares: number
+  as_of: string
+  source: string
+}
+
 export interface SectorStats {
   sector: string
   company_count: number

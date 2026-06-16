@@ -10,6 +10,7 @@ import type {
   Movers,
   NewsItem,
   Note,
+  OwnershipHolding,
   Page,
   PeerRow,
   PricePoint,
@@ -202,6 +203,11 @@ export function screen(f: ScreenFilters): Promise<Page<ScreenRow>> {
 /** Peers in the same sector, sorted by Graham score. */
 export function getPeers(ticker: string): Promise<PeerRow[]> {
   return getJson<PeerRow[]>(`/api/companies/${ticker}/peers`)
+}
+
+/** A company's holders (e.g. insider Form 4 positions), newest filing first. */
+export function getHolders(ticker: string): Promise<OwnershipHolding[]> {
+  return getJson<OwnershipHolding[]>(`/api/companies/${ticker}/holders`)
 }
 
 /** Get the current user's note for a company. */

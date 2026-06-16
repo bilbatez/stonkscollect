@@ -3,6 +3,7 @@ import {
   addWatch,
   clearToken,
   deleteNote,
+  getHolders,
   getMarketSummary,
   getMovers,
   getNote,
@@ -243,4 +244,10 @@ test('getMarketSummary hits /api/markets/summary', async () => {
   mockFetch(() => ({ json: async () => [] }))
   await getMarketSummary()
   expect(calls[0].url).toBe('/api/markets/summary')
+})
+
+test('getHolders hits /api/companies/:ticker/holders', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await getHolders('AAPL')
+  expect(calls[0].url).toBe('/api/companies/AAPL/holders')
 })

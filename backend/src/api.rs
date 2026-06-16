@@ -86,6 +86,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/api/companies/:ticker/facts", get(facts))
         .route("/api/companies/:ticker/ratios", get(ratios))
         .route("/api/companies/:ticker/news", get(news))
+        .route("/api/companies/:ticker/holders", get(holders))
         .route("/api/companies/:ticker/discrepancies", get(discrepancies))
         .route("/api/companies/:ticker/errors", get(source_errors))
         .route("/api/companies/:ticker/graham", get(graham_assessment))
@@ -504,6 +505,15 @@ async fn news(
     Ok(Json(store.get_news(c.id).await.map_err(internal)?))
 }
 
+async fn holders(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+) -> ApiResult<Vec<crate::domain::OwnershipHolding>> {
+    let c = resolve(&store, &ticker).await?;
+    Ok(Json(store.get_ownership(c.id).await.map_err(internal)?))
+}
+
 async fn discrepancies(
     State(store): State<Arc<Store>>,
     Path(ticker): Path<String>,
@@ -759,6 +769,30 @@ mod tests {
         assert_eq!(json.as_array().unwrap()[0]["status"], "ok");
 
         let (status, _) = get(store, &t, "/api/companies/NOPE").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn holders_endpoint_returns_saved_ownership() {
+        let (store, _d, t) = seeded().await;
+        let c = store.get_company("AAPL").await.unwrap().unwrap();
+        store
+            .save_ownership(&[crate::domain::OwnershipHolding {
+                company_id: c.id,
+                holder: "Tim Cook".into(),
+                kind: "insider".into(),
+                shares: 3_280_000.0,
+                as_of: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                source: "edgar".into(),
+            }])
+            .await
+            .unwrap();
+        let (status, json) = get(store.clone(), &t, "/api/companies/AAPL/holders").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json[0]["holder"], "Tim Cook");
+        assert_eq!(json[0]["shares"], 3_280_000.0);
+        // unknown ticker -> 404
+        let (status, _) = get(store, &t, "/api/companies/NOPE/holders").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
