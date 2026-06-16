@@ -162,6 +162,30 @@ export function normalizedReturns(seriesByTicker: Record<string, PricePoint[]>):
   return { categories, series }
 }
 
+/** Trailing-twelve-month value per statement line item, keyed `statement|item`.
+ *  Flow items (income/cash flow) sum the most recent 4 quarters — omitted when
+ *  fewer than 4 exist; balance-sheet (stock) items take the latest quarter.
+ *  Only quarterly facts participate. */
+export function ttmColumn(facts: FinancialFact[]): Map<string, number> {
+  const byKey = new Map<string, FinancialFact[]>()
+  for (const f of facts) {
+    if (f.period_type !== 'quarterly') continue
+    const key = `${f.statement}|${f.line_item}`
+    if (!byKey.has(key)) byKey.set(key, [])
+    byKey.get(key)!.push(f)
+  }
+  const out = new Map<string, number>()
+  for (const [key, list] of byKey) {
+    const sorted = [...list].sort((a, b) => b.period_end.localeCompare(a.period_end))
+    if (key.startsWith('balance|')) {
+      out.set(key, sorted[0].value)
+    } else if (sorted.length >= 4) {
+      out.set(key, sorted.slice(0, 4).reduce((sum, f) => sum + f.value, 0))
+    }
+  }
+  return out
+}
+
 /** Trailing simple moving average of close, aligned to `prices` order.
  *  Each index holds the mean of the prior `window` closes, or null until the
  *  window fills. Chart wrappers stay logic-free, so this lives here (testable). */

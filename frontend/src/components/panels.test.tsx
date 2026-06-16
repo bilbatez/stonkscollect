@@ -15,6 +15,7 @@ import { RangeToggle } from './shared/RangeToggle'
 import { WeekRangeBar } from './shared/WeekRangeBar'
 import { RatiosPanel } from './panels/RatiosPanel'
 import { SectorOverview } from './pages/SectorOverview'
+import { DividendPanel } from './panels/DividendPanel'
 import { StatementTable } from './panels/StatementTable'
 import type { Company, Discrepancy, FinancialFact, GrahamAssessment, GrahamScore, NewsItem, Period, PeerRow, Ratio, SectorStats } from '../types'
 
@@ -102,9 +103,56 @@ test('StatementTable toggles annual/quarterly and shows an empty period', async 
   expect(screen.getByText('$80.0B')).toBeInTheDocument()
 })
 
+test('StatementTable shows a TTM column on the quarterly view', async () => {
+  render(
+    <StatementTable
+      facts={[
+        // 4 quarters of Revenue (flow) -> TTM = sum = $100.0B
+        fact('income', 'Revenue', '2023-06-30', 10_000_000_000, 'quarterly'),
+        fact('income', 'Revenue', '2023-09-30', 20_000_000_000, 'quarterly'),
+        fact('income', 'Revenue', '2023-12-31', 30_000_000_000, 'quarterly'),
+        fact('income', 'Revenue', '2024-03-31', 40_000_000_000, 'quarterly'),
+        // only 1 quarter (flow) -> TTM dashed
+        fact('income', 'NetIncome', '2024-03-31', 5_000_000_000, 'quarterly'),
+        // balance (stock) -> TTM is the latest quarter
+        fact('balance', 'StockholdersEquity', '2024-03-31', 8_000_000_000, 'quarterly'),
+      ]}
+    />,
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Quarterly' }))
+  expect(screen.getByText('TTM')).toBeInTheDocument()
+  expect(screen.getByText('$100.0B')).toBeInTheDocument() // summed revenue TTM (only in TTM col)
+  // balance TTM equals the latest quarter, so $8.0B appears in both its column and TTM
+  expect(screen.getAllByText('$8.0B').length).toBe(2)
+})
+
 test('StatementTable shows an empty state when there are no facts', () => {
   render(<StatementTable facts={[]} />)
   expect(screen.getByText(/no statement data/i)).toBeInTheDocument()
+})
+
+// --- DividendPanel ---
+
+test('DividendPanel lists annual dividend-per-share history newest first', () => {
+  render(
+    <DividendPanel
+      facts={[
+        fact('income', 'DividendPerShare', '2022-12-31', 0.88),
+        fact('income', 'DividendPerShare', '2023-12-31', 0.94),
+        fact('income', 'Revenue', '2023-12-31', 1_000), // ignored
+        fact('income', 'DividendPerShare', '2023-09-30', 0.24, 'quarterly'), // ignored
+      ]}
+    />,
+  )
+  const rows = screen.getAllByText(/Dec 202\d/)
+  expect(rows[0]).toHaveTextContent('Dec 2023') // newest first
+  expect(screen.getByText('0.94')).toBeInTheDocument()
+  expect(screen.getByText('0.88')).toBeInTheDocument()
+})
+
+test('DividendPanel shows an empty state without dividends', () => {
+  render(<DividendPanel facts={[fact('income', 'Revenue', '2023-12-31', 1_000)]} />)
+  expect(screen.getByText(/no dividend history/i)).toBeInTheDocument()
 })
 
 test('RatiosPanel groups metrics, formats by kind, dashes gaps', async () => {

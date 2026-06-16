@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/material'
 import { calcGrowth, downloadCsv, formatCurrency, formatPeriodDate, statementItemLabel, statementLabel } from '../../format'
+import { ttmColumn } from '../../chartData'
 import type { FinancialFact, Period } from '../../types'
 import { PeriodToggle } from '../shared/PeriodToggle'
 
@@ -28,6 +29,10 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
 
   const rows = facts.filter((f) => f.period_type === period)
   const periods = [...new Set(rows.map((f) => f.period_end))].sort().reverse()
+  // A trailing-twelve-month column makes quarterly statements comparable to
+  // annual ones (Yahoo-style). Only shown for the quarterly view.
+  const ttm = ttmColumn(facts)
+  const showTtm = period === 'quarterly' && ttm.size > 0
   // statement -> line_item -> (period_end -> value)
   const bySection = new Map<string, Map<string, Map<string, number>>>()
   for (const f of rows) {
@@ -49,7 +54,7 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
   for (const section of sections) {
     body.push(
       <TableRow key={`s-${section}`}>
-        <TableCell colSpan={periods.length + 1} sx={{ fontWeight: 600, bgcolor: 'action.hover' }}>
+        <TableCell colSpan={periods.length + 1 + (showTtm ? 1 : 0)} sx={{ fontWeight: 600, bgcolor: 'action.hover' }}>
           {statementLabel(section)}
         </TableCell>
       </TableRow>,
@@ -58,6 +63,11 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
       body.push(
         <TableRow key={`${section}-${item}`} hover>
           <TableCell>{statementItemLabel(item)}</TableCell>
+          {showTtm && (
+            <TableCell align="right" sx={{ fontWeight: 600 }}>
+              {ttm.has(`${section}|${item}`) ? formatCurrency(ttm.get(`${section}|${item}`)!) : '—'}
+            </TableCell>
+          )}
           {periods.map((p, i) => {
             const v = values.get(p)
             const prior = i < periods.length - 1 ? values.get(periods[i + 1]) : undefined
@@ -107,6 +117,7 @@ export function StatementTable({ facts }: { facts: FinancialFact[] }) {
             <TableHead>
               <TableRow>
                 <TableCell>Line item</TableCell>
+                {showTtm && <TableCell align="right">TTM</TableCell>}
                 {periods.map((p) => (
                   <TableCell key={p} align="right">
                     {formatPeriodDate(p)}

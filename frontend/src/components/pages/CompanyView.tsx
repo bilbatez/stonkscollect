@@ -11,6 +11,7 @@ import {
 import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../../format'
 import { computeKeyStats, computePeriodReturns, computeQuote } from '../../quote'
 import { DiscrepancyPanel } from '../panels/DiscrepancyPanel'
+import { DividendPanel } from '../panels/DividendPanel'
 import { FreshnessBadge } from '../shared/FreshnessBadge'
 import { GrahamScorecard } from '../panels/GrahamScorecard'
 import { KeyStatsPanel } from '../panels/KeyStatsPanel'
@@ -121,6 +122,9 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
         </Section>
         <Section title="Statements">
           <StatementTable facts={data.facts} />
+        </Section>
+        <Section title="Dividends">
+          <DividendPanel facts={data.facts} />
         </Section>
         <Box sx={{ mt: 3 }}>
           <GrahamScorecard assessment={data.graham} />

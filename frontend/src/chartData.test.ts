@@ -6,6 +6,7 @@ import {
   normalizedReturns,
   pricesForRange,
   ratioChartData,
+  ttmColumn,
 } from './chartData'
 import type { FinancialFact, PricePoint, Ratio } from './types'
 
@@ -185,6 +186,46 @@ test('grahamChartData skips prices with no applicable graham period', () => {
   expect(d).not.toBeNull()
   // 2021-01-01 dropped; only 2 price points remain
   expect(d!.dates).toEqual(['2022-12-31', '2023-12-31'])
+})
+
+// --- ttmColumn ---
+
+test('ttmColumn sums the last 4 quarters for flow items and takes latest for balance', () => {
+  const facts = [
+    // income (flow): 5 quarters — only the most recent 4 sum
+    fact('Revenue', '2023-03-31', 10, 'income', 'quarterly'),
+    fact('Revenue', '2023-06-30', 20, 'income', 'quarterly'),
+    fact('Revenue', '2023-09-30', 30, 'income', 'quarterly'),
+    fact('Revenue', '2023-12-31', 40, 'income', 'quarterly'),
+    fact('Revenue', '2024-03-31', 50, 'income', 'quarterly'),
+    // cashflow (flow) with exactly 4 quarters
+    fact('OperatingCashFlow', '2023-06-30', 1, 'cashflow', 'quarterly'),
+    fact('OperatingCashFlow', '2023-09-30', 2, 'cashflow', 'quarterly'),
+    fact('OperatingCashFlow', '2023-12-31', 3, 'cashflow', 'quarterly'),
+    fact('OperatingCashFlow', '2024-03-31', 4, 'cashflow', 'quarterly'),
+    // balance (stock): latest quarter wins
+    fact('Assets', '2023-12-31', 900, 'balance', 'quarterly'),
+    fact('Assets', '2024-03-31', 1000, 'balance', 'quarterly'),
+    // annual facts are ignored entirely
+    fact('Revenue', '2023-12-31', 999, 'income', 'annual'),
+  ]
+  const ttm = ttmColumn(facts)
+  expect(ttm.get('income|Revenue')).toBe(20 + 30 + 40 + 50) // last 4 of 5
+  expect(ttm.get('cashflow|OperatingCashFlow')).toBe(1 + 2 + 3 + 4)
+  expect(ttm.get('balance|Assets')).toBe(1000)
+})
+
+test('ttmColumn omits flow items with fewer than 4 quarters', () => {
+  const facts = [
+    fact('Revenue', '2023-09-30', 30, 'income', 'quarterly'),
+    fact('Revenue', '2023-12-31', 40, 'income', 'quarterly'),
+    fact('Revenue', '2024-03-31', 50, 'income', 'quarterly'),
+  ]
+  expect(ttmColumn(facts).has('income|Revenue')).toBe(false)
+})
+
+test('ttmColumn is empty without quarterly facts', () => {
+  expect(ttmColumn([fact('Revenue', '2023-12-31', 100)]).size).toBe(0)
 })
 
 // --- pricesForRange ---
