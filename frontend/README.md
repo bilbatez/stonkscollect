@@ -1,73 +1,24 @@
-# React + TypeScript + Vite
+# StonksCollect — frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + Vite 8 + TypeScript SPA (MUI v9, dark-first; ECharts; Vitest +
+Playwright) for the StonksCollect fundamental-analysis dashboard.
 
-Currently, two official plugins are available:
+- **What it does / where things live:** [`src/README.md`](src/README.md) (module
+  map) and [`/FEATURES.md`](../FEATURES.md) (full-stack feature catalog).
+- **Project overview & setup:** root [`/README.md`](../README.md).
+- **Frontend feature details:** [`/docs/features.md`](../docs/features.md).
+- **Conventions (TDD, 100% coverage, MUI rules):** [`/CLAUDE.md`](../CLAUDE.md),
+  [`/AGENTS.md`](../AGENTS.md), [`/.cursorrules`](../.cursorrules).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Develop
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev        # Vite dev server (proxies /api and /auth to VITE_API_TARGET)
+npm run test:run   # Vitest
+npm run coverage   # Vitest + coverage (gate: 100%, src/charts/ excluded)
+npm run build      # tsc -b + vite build
+npm run e2e        # Playwright
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+The dev proxy target is `VITE_API_TARGET` (`frontend/.env`, see `.env.example`).

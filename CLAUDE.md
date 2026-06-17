@@ -5,6 +5,8 @@ cross-checks them (SEC EDGAR canonical), stores history locally, and serves a da
 with graphs for fundamental analysis. Not realtime — latest-and-stored.
 
 Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
+**Feature catalog (every feature, full-stack — read first to grasp the app):
+[`FEATURES.md`](FEATURES.md).** What's *not* built yet: [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Tech stack
 
@@ -33,19 +35,19 @@ backend/          Rust crate — lib (all logic) + thin bin (bootstrap, coverage
   src/main.rs       CLI: serve | bootstrap | collect | enrich | seed-admin; NO logic (coverage-excluded)
   src/config.rs     env-driven Config (pure parse(getter))
   src/domain.rs     typed models + value objects
-  src/store/        SQLite (WAL) persistence, split by aggregate: mod (struct/pool/policy/helpers + tests), companies, records (prices/facts/news/ratios/discrepancies), runs, accounts (users/sessions/watch/notes), analytics (graham/screen/sectors/peers + Parquet export)
-  src/collectors/   mod (shared traits + parse_json/nonempty/ISO_DATE helpers), edgar (facts+ProfileSource), fmp, yahoo (keyless prices + ProfileSource via assetProfile), news (rss+finnhub, sha256 dedup), scrape — Fact/Price/News/ProfileSource traits
+  src/store/        SQLite (WAL) persistence, split by aggregate: mod (struct/pool/policy/helpers + tests), companies (incl. index pseudo-companies via upsert_index), records (prices/facts/news/ratios/discrepancies/ownership), runs, accounts (users/sessions/watch/notes), analytics (graham/screen/sectors/peers + day_changes/index_changes movers + Parquet export)
+  src/collectors/   mod (shared traits + parse_json/nonempty/ISO_DATE helpers), edgar (facts+ProfileSource), edgar_ownership (keyless Form 4 insider holders → HolderSource), fmp, yahoo (keyless prices + ProfileSource via assetProfile), news (rss+finnhub, sha256 dedup), scrape — Fact/Price/News/Profile/HolderSource traits
   src/http.rs       reqwest client w/ retry+rate-limit (coverage-excluded glue)
   src/net.rs        RetryPolicy + RateLimiter + LoginThrottle (pure, time-injected)
   src/reconcile.rs  canonical selection + discrepancy flagging (pure)
   src/ratios.rs     derived ratios (per period_type: annual/quarterly) incl. P/E, P/B, FCF, payout (pure)
   src/graham.rs     Graham defensive scorecard, Graham Number, NCAV (pure)
-  src/pipeline/     mod (CollectProgress/NoProgress/CollectSummary + tests), collect (per-company + batch collect, recompute_metrics), enrich (profiles/users/bootstrap), orchestrate (collect_all/tickers, ingest, persist_facts)
+  src/pipeline/     mod (CollectProgress/NoProgress/CollectSummary + tests), collect (per-company + batch collect, recompute_metrics), enrich (profiles/users/bootstrap, seed_indices + TRACKED_INDICES), orchestrate (collect_all/tickers, ingest, persist_facts)
   src/scheduler.rs  Tier cron exprs + next_after + best-effort run_tracked
   src/auth.rs       argon2 password hashing + session tokens (pure)
   src/api.rs        axum REST handlers + AuthUser extractor; login brute-force
                     throttle (Store-held), sanitized 500s (no store/SQL leak)
-  migrations/       SQL (companies, facts, prices(OHLC), ratios, graham_scores, users…)
+  migrations/       SQL (companies(+is_index), facts, prices(OHLC), ratios, graham_scores, users, ownership…)
   tests/            integration tests + fixtures/
 frontend/         React + Vite SPA
   src/            api client, format utils, constants, types
@@ -58,16 +60,28 @@ Makefile          dev tasks
 docker-compose.yml
 ```
 
-**CLI:** `bootstrap` (SEC ticker/CIK universe), `collect [--ticker | --all]`
-(facts+prices+news → reconcile → persist → recompute ratios+Graham), `serve`
-(REST API + background tiered collection loop via `tokio::select!`; graceful
-shutdown on SIGTERM). Multi-user: signup/login (argon2 + bearer sessions),
-per-user watchlists; `/api/screen` ranks Graham defensive passers.
+**CLI:** `bootstrap` (SEC ticker/CIK universe + `seed_indices`), `collect
+[--ticker | --all]` (facts+prices+news → reconcile → persist → recompute
+ratios+Graham, then best-effort EDGAR Form 4 insider holders), `serve` (REST API
++ background tiered collection loop via `tokio::select!`; graceful shutdown on
+SIGTERM), `enrich`, `seed-admin`. Multi-user: signup/login (argon2 + bearer
+sessions), per-user watchlists; `/api/screen` ranks Graham defensive passers.
+Market indices (`^GSPC`/`^IXIC`/`^DJI`) are seeded as `is_index` pseudo-companies,
+collected via the Yahoo price path, hidden from the directory/movers, and exposed
+at `/api/markets/summary`. Full endpoint + feature map: `FEATURES.md`.
 
-**Remaining:** segment/ownership/guidance ingestion (not in EDGAR companyfacts —
-needs a paid feed). HTTP conditional GET (ETag, `http_cache` table), incremental
-price fetch, per-source error persistence (`/api/companies/:ticker/errors`), and
-the weekly Parquet tier are implemented.
+**Implemented (was previously listed as remaining):** keyless **EDGAR Form 4
+insider ownership** (`edgar_ownership.rs`; no paid feed — runs on the `collect`
+CLI path, surfaced at `/api/companies/:ticker/holders`). Also done: HTTP
+conditional GET (ETag, `http_cache`), incremental price fetch, per-source error
+persistence (`/api/companies/:ticker/errors`), the weekly Parquet tier, market
+indices + movers, the Yahoo-style chart/quote/fundamentals upgrades.
+
+**Still not built (see `docs/roadmap.md`):** 13F institutional holdings;
+segment/guidance ingestion (empty `segments`/`guidance` tables — not in EDGAR
+companyfacts); analyst ratings/price-targets/forward-estimates, options, ESG
+(paid data, out of scope); real-time quotes (by design); wiring Form 4 holders
+into the background scheduler tier (currently CLI-only).
 
 ## Run / test / build
 
@@ -103,7 +117,8 @@ Direct:
 
 ## Data sources (US only)
 
-- **SEC EDGAR** `data.sec.gov` companyfacts/companyconcept — canonical fundamentals.
+- **SEC EDGAR** `data.sec.gov` companyfacts/companyconcept — canonical fundamentals; also the submissions feed + Form 4 filing XML for **keyless insider ownership** (`edgar_ownership.rs`).
+- **Yahoo index symbols** `^GSPC`/`^IXIC`/`^DJI` — keyless daily index prices via the same chart API as equities; power `/api/markets/summary`.
 - **Financial Modeling Prep** (FMP_API_KEY) — prices/OHLC, income facts. **Finnhub** (FINNHUB_API_KEY) — company news. **Yahoo Finance** chart API — keyless daily prices (no key needed; needs a non-empty User-Agent, our contact UA works). Keyless: EDGAR + Yahoo. (Stooq was tried but now serves a JS anti-bot challenge.)
 - HTML scrape fallback (gap-fill + cross-check; respect robots.txt, rate-limit, cache).
 - News: keyless per-company **Yahoo headline RSS** (`YahooNewsCollector`) + Finnhub (key); title + description only, deduped. Collected per company inside `collect_*` (like prices), so `make collect` populates news.

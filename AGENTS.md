@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Conventions for AI coding agents (and humans) working in this repo. For the
-full project map see `README.md` and `CLAUDE.md`.
+full project map see `README.md` and `CLAUDE.md`; for the full-stack feature
+catalog see `FEATURES.md`; for what's not built see `docs/roadmap.md`.
 
 ## Golden rules
 

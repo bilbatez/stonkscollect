@@ -56,6 +56,19 @@ pub trait ProfileSource {
 }
 ```
 
+**`HolderSource`** — provides holder positions (e.g. SEC Form 4 insiders):
+```rust
+#[async_trait(?Send)]
+pub trait HolderSource {
+    fn name(&self) -> &'static str;
+    async fn fetch_holders(
+        &self,
+        company_id: i64,
+        target: &SourceTarget,
+    ) -> Result<Vec<OwnershipHolding>, CollectorError>;
+}
+```
+
 ---
 
 ## Collectors
@@ -74,6 +87,29 @@ pub trait ProfileSource {
 **Deduplication:** Multiple filings for the same (line item, period type, period end) — e.g. a 10-K/A amendment — keep only the most recent `filed` date.
 
 **Key method:** `collect_facts(company_id, cik, now)` — fetches `https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:0>10}.json` and parses all known CONCEPTS entries.
+
+---
+
+### `OwnershipCollector` (`collectors/edgar_ownership.rs`)
+
+**Implements:** `HolderSource`
+
+**Source:** SEC EDGAR — the company submissions feed + each filing's Form 4 XML
+(keyless; no API key).
+
+**What it collects:** insider ownership. It discovers the company's recent
+**Form 4** filings via `submissions/CIK{cik}.json`, fetches each filing's raw XML
+(stripping EDGAR's `xslF345X05/` styled-view wrapper), and extracts the reporting
+owners and their latest post-transaction share counts with a dependency-free
+parser. Capped per company (`MAX_FORM4`).
+
+**Run path:** best-effort step on the `collect` CLI (after facts/prices/news),
+persisted via `store::save_ownership`; surfaced at
+`GET /api/companies/:ticker/holders`. Ownership is **not** a period-keyed fact, so
+it bypasses the reconcile/ratio/Graham pipeline.
+
+**Out of scope:** 13F institutional holdings (filer-centric — needs a full-text
+search inversion; see [roadmap.md](roadmap.md)).
 
 ---
 

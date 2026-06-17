@@ -98,6 +98,15 @@ Remove a ticker from the watchlist.
 
 ---
 
+### `GET /api/watchlist/quotes`
+
+The watchlist with each company's latest daily quote (close, day change, volume).
+Unpriced companies still appear with `null` quote fields.
+
+**Response `200`:** Array of [WatchQuote](#watchquote).
+
+---
+
 ## Companies
 
 ### `GET /api/companies`
@@ -191,6 +200,24 @@ Cross-source value conflicts flagged above the discrepancy threshold.
 
 ---
 
+### `GET /api/companies/:ticker/holders`
+
+Insider holders extracted from the company's recent SEC **Form 4** filings
+(keyless EDGAR). Newest filing first, then larger positions. Populated by the
+`collect` CLI; empty until a collection run has fetched Form 4 data.
+
+**Response `200`:** Array of [OwnershipHolding](#ownershipholding).
+
+---
+
+### `GET /api/companies/:ticker/errors`
+
+Recent per-source collection failures for a company (observability).
+
+**Response `200`:** Array of [SourceError](#sourceerror).
+
+---
+
 ### `GET /api/companies/:ticker/graham`
 
 Graham defensive-investor assessment (live, from stored facts).
@@ -252,9 +279,9 @@ Screen companies by Graham criteria and optional ratio filters. Returns ranked r
 
 | Param | Type | Default | Description |
 |---|---|---|---|
-| `defensive` | bool | `false` | Only companies passing all 7 Graham criteria |
+| `defensive` | bool | `false` | Only companies passing all 8 Graham criteria |
 | `net_net` | bool | `false` | Only NCAV net-nets |
-| `min_score` | integer | `0` | Minimum Graham score (0–7) |
+| `min_score` | integer | `0` | Minimum Graham score (0–8) |
 | `sector` | string | — | Exact sector match |
 | `min_pe` | float | — | Min P/E (latest annual) |
 | `max_pe` | float | — | Max P/E (latest annual) |
@@ -286,6 +313,36 @@ Sector-level aggregates, ordered by average Graham score descending.
 
 ---
 
+## Market
+
+### `GET /api/movers`
+
+Top gainers, losers, and most-active equities by latest daily move (index
+pseudo-companies excluded).
+
+**Query params:** `limit` (rows per bucket; default 10).
+
+**Response `200`:**
+```json
+{
+  "gainers": [ { ...MoverRow } ],
+  "losers": [ { ...MoverRow } ],
+  "most_active": [ { ...MoverRow } ]
+}
+```
+
+---
+
+### `GET /api/markets/summary`
+
+Latest close + day change for each tracked market index (`^GSPC`, `^IXIC`,
+`^DJI`), seeded as `is_index` pseudo-companies and collected via the Yahoo price
+path.
+
+**Response `200`:** Array of [MoverRow](#moverrow).
+
+---
+
 ## Collection runs
 
 ### `GET /api/runs`
@@ -309,7 +366,8 @@ Recent collection run history (status, errors, timing).
   "sector": "Technology",
   "industry": "Consumer Electronics",
   "description": "Apple designs...",
-  "website": "https://www.apple.com"
+  "website": "https://www.apple.com",
+  "employees": 164000
 }
 ```
 
@@ -418,6 +476,53 @@ Recent collection run history (status, errors, timing).
   "avg_score": 3.8,
   "pct_defensive": 0.12,
   "top_ticker": "MSFT"
+}
+```
+
+### MoverRow
+Used by `/api/movers` (buckets) and `/api/markets/summary` (array).
+```json
+{
+  "company": { ...Company },
+  "last_close": 185.9,
+  "change": 2.3,
+  "change_pct": 0.0125,
+  "volume": 52000000,
+  "as_of": "2024-01-15"
+}
+```
+
+### WatchQuote
+Quote fields are `null` when the watched company has no priced days yet.
+```json
+{
+  "company": { ...Company },
+  "last_close": 185.9,
+  "change": 2.3,
+  "change_pct": 0.0125,
+  "volume": 52000000,
+  "as_of": "2024-01-15"
+}
+```
+
+### OwnershipHolding
+```json
+{
+  "company_id": 1,
+  "holder": "Cook Timothy D",
+  "kind": "insider",
+  "shares": 3280000.0,
+  "as_of": "2024-02-01",
+  "source": "edgar-form4"
+}
+```
+
+### SourceError
+```json
+{
+  "source": "edgar",
+  "message": "503 Service Unavailable",
+  "occurred_at": "2024-01-15T10:00:00Z"
 }
 ```
 

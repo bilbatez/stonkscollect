@@ -17,7 +17,9 @@ CREATE TABLE companies (
   sector      TEXT,
   industry    TEXT,
   description TEXT,
-  website     TEXT
+  website     TEXT,
+  employees   INTEGER,            -- added by 0010_company_employees.sql
+  is_index    INTEGER NOT NULL DEFAULT 0  -- 0010/0014: index pseudo-companies (^GSPC etc.) hidden from directory/movers
 );
 ```
 
@@ -48,6 +50,7 @@ interface Company {
   industry: string | null
   description: string | null
   website: string | null
+  employees: number | null
 }
 ```
 
@@ -144,7 +147,7 @@ Metrics computed: `pe`, `pb`, `roe`, `net_margin`, `gross_margin`, `operating_ma
 ```sql
 CREATE TABLE graham_scores (
   company_id        INTEGER NOT NULL REFERENCES companies(id) UNIQUE,
-  score             INTEGER NOT NULL,    -- 0–7 criteria passed
+  score             INTEGER NOT NULL,    -- 0–8 criteria passed
   passes_defensive  INTEGER NOT NULL,    -- 0 | 1
   graham_number     REAL,
   ncav_per_share    REAL,
@@ -253,3 +256,85 @@ CREATE TABLE notes (
   PRIMARY KEY (user_id, company_id)
 );
 ```
+
+---
+
+## Ownership (insider holders)
+
+**SQLite table: `ownership`** (`0001_init.sql`; indexed by `0015_ownership_index.sql`).
+Populated by the EDGAR Form 4 collector.
+```sql
+CREATE TABLE ownership (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id INTEGER NOT NULL REFERENCES companies(id),
+  holder     TEXT NOT NULL,
+  kind       TEXT NOT NULL,   -- 'insider' (13F 'institutional' not yet ingested)
+  shares     REAL NOT NULL,
+  as_of      TEXT NOT NULL,
+  source     TEXT NOT NULL,   -- 'edgar-form4'
+  UNIQUE (company_id, holder, as_of, source)
+);
+```
+
+**Rust: `domain::OwnershipHolding`**
+```rust
+pub struct OwnershipHolding {
+    pub company_id: i64,
+    pub holder: String,
+    pub kind: String,
+    pub shares: f64,
+    pub as_of: NaiveDate,
+    pub source: String,
+}
+```
+
+> The `segments` and `guidance` tables (`0001_init.sql`) exist but are **not yet
+> ingested** — see [roadmap.md](roadmap.md).
+
+---
+
+## API-only aggregates (no table)
+
+These are serialized straight from queries, not stored as their own tables.
+
+**`domain::MoverRow` / `Movers`** — `/api/movers` (buckets) and
+`/api/markets/summary` (array).
+```rust
+pub struct MoverRow {
+    pub company: Company,
+    pub last_close: f64,
+    pub change: f64,
+    pub change_pct: f64,
+    pub volume: Option<i64>,
+    pub as_of: NaiveDate,
+}
+pub struct Movers { pub gainers: Vec<MoverRow>, pub losers: Vec<MoverRow>, pub most_active: Vec<MoverRow> }
+```
+
+**`domain::WatchQuote`** — `/api/watchlist/quotes` (quote fields are `Option`,
+`None` for unpriced companies).
+```rust
+pub struct WatchQuote {
+    pub company: Company,
+    pub last_close: Option<f64>,
+    pub change: Option<f64>,
+    pub change_pct: Option<f64>,
+    pub volume: Option<i64>,
+    pub as_of: Option<NaiveDate>,
+}
+```
+
+**`domain::SectorStats`** — `/api/sectors`.
+```rust
+pub struct SectorStats {
+    pub sector: String,
+    pub company_count: i64,
+    pub avg_score: f64,
+    pub pct_defensive: f64,
+    pub top_ticker: Option<String>,
+}
+```
+
+**`domain::SourceError`** — `/api/companies/:ticker/errors` (rows of the
+`source_errors` table, `0012_source_errors.sql`): `source`, `message`,
+`occurred_at`.

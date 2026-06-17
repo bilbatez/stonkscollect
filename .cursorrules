@@ -1,0 +1,29 @@
+# Cursor rules — StonksCollect
+
+Authoritative context lives in `CLAUDE.md` and `AGENTS.md` (read both). The
+full feature map is `FEATURES.md`; what's NOT built is `docs/roadmap.md`. This
+file only restates the non-negotiables.
+
+## Non-negotiables
+- **Strict TDD.** Write a failing test first, watch it fail (RED), minimal code
+  (GREEN), refactor. No production code without a failing test first.
+- **Coverage gates.** Backend: functions 100% / lines ≥99% (`main.rs`, `http.rs`
+  excluded). Frontend: 100% (`src/charts/` excluded — keep chart logic in pure
+  `quote.ts` / `chartData.ts` helpers, not in the ECharts wrappers).
+- **Determinism.** Inject HTTP/DB/clock; use recorded fixtures. No live-network
+  calls in unit/integration tests.
+- **Keep `main.rs` thin.** All backend logic lives under `backend/src/` lib tree;
+  `main.rs` is coverage-excluded glue only.
+- **MUI v9.** No system shorthand props (`alignItems`, `fontWeight`, etc.) — pass
+  them via `sx`. All components MUI; no bespoke CSS.
+
+## Architecture quick map
+- Backend: `axum` REST in `api.rs`; persistence in `store/` (split by aggregate);
+  collectors behind `Fact/Price/News/Profile/HolderSource` traits + injected
+  `HttpClient`; pure logic in `reconcile.rs` / `ratios.rs` / `graham.rs`.
+- Frontend: React 19 + Vite + MUI SPA; API client in `api.ts`; pure derivation in
+  `quote.ts` / `chartData.ts`; lazy ECharts wrappers in `charts/`.
+
+## Commands
+Prefix shell commands with `rtk` (token-optimized proxy). Tests/lint via the
+Makefile: `make test`, `make cov`, `make lint`, `make e2e`.

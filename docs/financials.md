@@ -80,21 +80,24 @@ Ratios are computed per period (annual and quarterly) by `ratios::compute()` fro
 
 Implemented in `graham::assess()`. Based on Benjamin Graham's *The Intelligent Investor*, adapted for 10–15 years of XBRL data from EDGAR.
 
-### 7 criteria
+### 8 criteria
+
+Criterion names match those emitted by `graham::assess()`.
 
 | # | Criterion | Threshold | Source |
 |---|---|---|---|
 | 1 | Adequate size | Revenue ≥ $500M (default floor, configurable) | `Revenue` |
-| 2 | Strong financial position | Current ratio ≥ 2.0 | `CurrentAssets / CurrentLiabilities` |
-| 3 | Earnings stability | Positive EPS in each of the last 3+ years | `Eps` annual |
-| 4 | Dividend record | Uninterrupted dividends for 3+ years | `DividendPerShare` annual |
-| 5 | Earnings growth | ≥33% EPS growth over 10 years (or available history) | `Eps` annual |
-| 6 | Moderate P/E | P/E ≤ 15 | `pe` |
-| 7 | Moderate P/B | P/B ≤ 1.5 (or P/E × P/B ≤ 22.5) | `pb`, `pe` |
+| 2 | Current ratio >= 2 | Current ratio ≥ 2.0 | `CurrentAssets / CurrentLiabilities` |
+| 3 | Debt <= working capital | Long-term debt ≤ (CurrentAssets − CurrentLiabilities) | `LongTermDebt`, current items |
+| 4 | Earnings stability | Positive net income in each available year (3+ years) | `NetIncome` annual |
+| 5 | EPS growth >= 33% | ≥33% EPS growth (3-yr-average endpoints over the window) | `Eps` annual |
+| 6 | P/E <= 15 | Price ÷ 3-yr-avg EPS ≤ 15 | latest price, `Eps` |
+| 7 | P/B <= 1.5 or P/E·P/B <= 22.5 | P/B ≤ 1.5 **or** P/E × P/B ≤ 22.5 | latest price, BVPS |
+| 8 | Dividend record | Dividends paid in every available year | `DividendPerShare` annual |
 
 ### Score
 
-`score` = number of criteria passed (0–7). `passes_defensive` = true when all 7 pass.
+`score` = number of criteria passed (0–8). `passes_defensive` = true when all 8 pass.
 
 ### Graham Number
 

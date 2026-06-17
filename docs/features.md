@@ -6,7 +6,10 @@ The frontend is a React 19 SPA served by Vite in development and nginx in produc
 
 ### Home
 
-The landing page after login. Contains two tabs:
+The landing page after login. Above the tabs sit a **market summary** strip
+(`MarketSummary` — S&P 500 / Nasdaq / Dow cards via `/api/markets/summary`) and a
+**trending strip** (`TrendingStrip` — the day's top gainer/loser chips via
+`/api/movers`). Contains two tabs:
 
 **All Stocks tab** — Paginated, sortable, filterable directory of all ~8,000+ companies with their Graham scores. Implemented as a `DataGrid` (TanStack Table + DnD Kit) with per-column filters and drag-reorderable columns.
 
@@ -22,27 +25,29 @@ The landing page after login. Contains two tabs:
 
 Opens inline within the Home page (tabs remain visible). Sections:
 
-1. **Header** — Company name, ticker, freshness badge (green/yellow/red based on price data age).
-2. **Profile chips** — Sector, industry, exchange.
-3. **Description** — SEC/Yahoo company description.
-4. **Links** — SEC filings, company website, Wikipedia, Yahoo Finance.
-5. **Metrics summary** — 8 quick-view cards: P/E, P/B, ROE, Net margin, D/E, Current ratio, Graham #, Margin of safety.
-6. **Price chart** — Interactive ECharts candlestick/line chart of historical close prices.
-7. **Graham Number chart** — Dual-line ECharts chart: close price (solid) vs. Graham Number (dashed), with a translucent green "buying zone" shaded where price < Graham Number.
-8. **Income chart** — Grouped bar chart: Revenue / Gross Profit / Net Income per period. Toggle between annual and quarterly.
-9. **Statements table** — Full income / balance / cash flow data, with year-over-year growth badges (green +% / red -%).
-10. **Graham Scorecard** — All 7 criteria shown with pass/fail status and detail text.
-11. **Ratios panel** — Table of all computed ratios. Toggle annual/quarterly.
-12. **Peers panel** — Companies in the same sector, ranked by Graham score.
-13. **Notes** — Private Markdown note per company (persisted server-side, per user).
-14. **News** — Recent headlines from Yahoo RSS and Finnhub.
-15. **Discrepancies** — Cross-source value conflicts flagged by the reconciler.
+1. **Header** — Company name, ticker, freshness badge (green/yellow/red by price-data age).
+2. **Quote header** (`QuoteHeader`) — last close, colored day change, and a row of **trailing-return chips** (1D / 5D / 1M / 6M / YTD / 1Y / 5Y).
+3. **Profile chips** — Sector, industry, exchange; description; links (SEC filings, website, Wikipedia, Yahoo Finance).
+4. **Metrics summary** — 8 quick-view cards: P/E, P/B, ROE, Net margin, D/E, Current ratio, Graham #, Margin of safety.
+5. **Key statistics** (`KeyStatsPanel`) — 16-card grid (market cap, shares, float, day/52-week range, volume, EPS, P/E, P/B, dividend rate/yield, payout, FCF, BVPS, employees) above a **52-week range gauge** (`WeekRangeBar`).
+6. **Price chart** — ECharts candlestick/line with a **volume sub-chart**, optional **SMA 50/200 overlays**, and **range presets** (1M/6M/YTD/1Y/5Y/MAX).
+7. **Graham Number chart** — close price (solid) vs. Graham Number (dashed) with a green "buying zone" shaded where price < Graham Number.
+8. **Income chart** — Grouped bar chart: Revenue / Gross Profit / Net Income per period (annual/quarterly toggle).
+9. **Statements table** — income / balance / cash flow with YoY growth badges, a **TTM column** on the quarterly view (last-4-quarter sums for flows, latest quarter for balance items), and CSV export.
+10. **Dividends** (`DividendPanel`) — annual dividend-per-share history.
+11. **Graham Scorecard** — all 8 criteria with pass/fail status + detail; Defensive / Net-net badges.
+12. **Ratios panel** — Table of all computed ratios (annual/quarterly toggle) + CSV.
+13. **Peers panel** — Same-sector companies ranked by Graham score.
+14. **Holders** (`HoldersPanel`) — insider holders from SEC Form 4 filings (holder, type, shares, as-of); empty until a `collect` run has fetched Form 4 data.
+15. **Notes** — Private note per company (persisted server-side, per user).
+16. **News** — Recent headlines from Yahoo RSS and Finnhub.
+17. **Discrepancies** — Cross-source value conflicts flagged by the reconciler.
 
 ### Screener
 
 `/api/screen` powered view. Rank Graham defensive passers with filters:
 
-- Minimum Graham score (0–7 slider).
+- Minimum Graham score (0–8 slider).
 - Defensive only / net-net only checkboxes.
 - Sector filter.
 - **Advanced filters**: Min P/E, Max P/E, Min ROE, Max D/E, Min net margin.
@@ -50,11 +55,20 @@ Opens inline within the Home page (tabs remain visible). Sections:
 
 ### Compare
 
-Side-by-side comparison of up to 4 companies. Add tickers via the input field. Renders a condensed metrics summary for each.
+Side-by-side comparison of multiple companies (debounced autocomplete add/remove).
+Renders a **normalized % overlay chart** (`CompareChart` — each ticker rebased to
+its first common date) above a metric comparison table.
+
+### Movers
+
+Three tables — top gainers, losers, and most-active — by latest daily move, with
+clickable tickers (`/api/movers`).
 
 ### Sectors
 
-Sector-level overview table: sector name, company count, average Graham score, % passing defensive criteria, top-ranked ticker (clickable to open company detail).
+Sector-level overview table: sector name, company count, average Graham score
+(cells **heat-colored** by score), % passing defensive criteria, top-ranked ticker
+(clickable to open company detail).
 
 ## Theming
 
@@ -68,41 +82,62 @@ The MUI theme is configured with:
 
 ## Component structure
 
+Components are grouped by role (`auth/`, `layout/`, `pages/`, `panels/`,
+`shared/`); `*.test.tsx` are co-located or at `components/` root for cross-cutting
+suites.
+
 ```
 src/
-  App.tsx               Auth routing + theme state (~50 lines)
+  App.tsx                  Auth routing + theme state
   components/
-    Dashboard.tsx         Nav bar + page routing + watchlist state
-    CompanyView.tsx        Full company detail with all sections
-    AllStocks.tsx          Paginated company directory
-    Screener.tsx           Graham screener with filters
-    Watchlist.tsx          User watchlist management
-    CompareView.tsx        Side-by-side company comparison
-    SectorOverview.tsx     Sector aggregates table
-    MetricsSummary.tsx     8-card quick metrics bar
-    GrahamScorecard.tsx    7-criteria scorecard
-    StatementTable.tsx     Financial statements with YoY growth
-    RatiosPanel.tsx        Computed ratios table
-    PeersPanel.tsx         Sector peers list
-    NewsFeed.tsx           News headlines
-    NotePanel.tsx          Personal note editor
-    DiscrepancyPanel.tsx   Cross-source conflicts
-    FreshnessBadge.tsx     Price data freshness indicator
-    PeriodToggle.tsx       Annual/quarterly toggle
-    DataGrid.tsx           Reusable sortable/filterable grid
-    ThemeToggle.tsx        Dark/light mode switch
-    AuthForm.tsx           Login/signup form
-    Skeleton.tsx           Loading placeholder
-  charts/               (lazy-loaded, coverage-excluded)
-    PriceChart.tsx
+    auth/AuthForm.tsx        Login/signup form
+    layout/
+      Dashboard.tsx           Nav + page routing + watchlist state + market/trending strips
+      Watchlist.tsx           User watchlist management
+    pages/
+      AllStocks.tsx           Paginated company directory
+      CompanyView.tsx         Full company detail (all sections)
+      CompareView.tsx         Compare table + normalized overlay chart
+      Screener.tsx            Graham screener with filters
+      MoversView.tsx          Gainers / losers / most-active
+      SectorOverview.tsx      Sector aggregates + heatmap
+    panels/
+      QuoteHeader.tsx         Last close, day change, period-return chips
+      KeyStatsPanel.tsx       16-card key statistics
+      MetricsSummary.tsx      8-card quick metrics bar
+      MarketSummary.tsx       Index summary cards (Home)
+      TrendingStrip.tsx       Top gainers/losers chips (Home)
+      GrahamScorecard.tsx     8-criteria scorecard
+      StatementTable.tsx      Statements + YoY growth + TTM column
+      DividendPanel.tsx       Annual dividend-per-share history
+      RatiosPanel.tsx         Computed ratios table
+      PeersPanel.tsx          Sector peers list
+      HoldersPanel.tsx        Form 4 insider holders
+      NewsFeed.tsx            News headlines
+      NotePanel.tsx           Personal note editor
+      DiscrepancyPanel.tsx    Cross-source conflicts
+    shared/
+      DataGrid.tsx            Reusable sortable/filterable grid
+      Compare.tsx             Metric comparison table
+      RangeToggle.tsx         1M/6M/YTD/1Y/5Y/MAX presets
+      PeriodToggle.tsx        Annual/quarterly toggle
+      WeekRangeBar.tsx        52-week range gauge
+      FreshnessBadge.tsx      Price-data freshness indicator
+      ThemeToggle.tsx         Dark/light mode switch
+      Skeleton.tsx            Loading placeholder
+  charts/                  (lazy-loaded, coverage-excluded — keep logic in helpers)
+    PriceChart.tsx           Candlestick + volume + SMA overlays
     IncomeChart.tsx
     RatioChart.tsx
     GrahamChart.tsx
-  api.ts                All HTTP calls + token management
-  format.ts             Number formatting, labels, growth calc
-  chartData.ts          Pure data transform functions for charts
-  constants.ts          PAGE_SIZE, GRAHAM_FORMULA_MULTIPLE
-  types.ts              TypeScript interfaces
+    CompareChart.tsx         Normalized multi-ticker overlay
+  hooks/usePaginatedFetch.ts Loading/error/abort fetch hook
+  api.ts                   All HTTP calls + token management
+  quote.ts                 computeQuote / computeKeyStats / computePeriodReturns
+  chartData.ts             movingAverage / pricesForRange / normalizedReturns / ttmColumn / chart transforms
+  format.ts                Number formatting, labels, growth calc, scoreHeatColor
+  constants.ts             PAGE_SIZE, CHART_HEIGHT, GRAHAM_FORMULA_MULTIPLE
+  types.ts                 TypeScript interfaces
 ```
 
 ## Key frontend patterns
