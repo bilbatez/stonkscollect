@@ -351,6 +351,8 @@ async fn enrich(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all:
             .expect("enrich tickers");
         tracing::info!("enriched {n} companies");
     }
+    // Close the pool so the one-shot process exits (see bootstrap).
+    store.close().await;
 }
 
 /// Dev convenience: ensure an admin login exists so a developer can sign straight
@@ -365,6 +367,8 @@ async fn seed_admin(store: &Store) {
     } else {
         tracing::info!("admin user already exists; left unchanged");
     }
+    // Close the pool so the one-shot process exits (see bootstrap).
+    store.close().await;
 }
 
 async fn bootstrap(store: &Store, cfg: &Config) {
@@ -376,6 +380,9 @@ async fn bootstrap(store: &Store, cfg: &Config) {
         .expect("bootstrap companies");
     let idx = pipeline::seed_indices(store).await.expect("seed indices");
     tracing::info!("bootstrapped {n} companies and {idx} indices");
+    // Close the sqlx pool so the one-shot process exits instead of hanging on
+    // SQLite's non-daemon background connection threads.
+    store.close().await;
 }
 
 async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all: bool) {
@@ -471,4 +478,7 @@ async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all
             Err(e) => tracing::debug!("form 4 collection for {} failed: {e}", c.ticker),
         }
     }
+
+    // Close the pool so the one-shot process exits (see bootstrap).
+    store.close().await;
 }

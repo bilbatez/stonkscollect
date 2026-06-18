@@ -378,30 +378,46 @@ impl Store {
     }
 
     /// A page of companies with each one's Graham score when computed, plus the
-    /// total count. `q` filters by ticker/name substring. `sort_by`/`sort_dir`
-    /// control ordering (whitelisted — no injection risk).
+    /// total count. `q` filters by ticker/name substring. `filters` AND-combines
+    /// optional per-column substring filters for an allow-listed set of columns
+    /// (`ticker`/`name`/`industry`); any other column is ignored. `sort_by`/
+    /// `sort_dir` control ordering (whitelisted — no injection risk).
     pub async fn list_companies(
         &self,
         q: Option<&str>,
+        filters: &[(&str, &str)],
         sort_by: Option<&str>,
         sort_dir: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<(Company, Option<GrahamScore>)>, i64)> {
-        let like = q.map(|s| {
+        let escape = |s: &str| {
             let e = s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
             format!("%{}%", e)
-        });
-        // Indices live in `companies` too; keep them out of the directory.
-        let where_clause = if like.is_some() {
-            " WHERE c.is_index = 0 AND (c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\')"
-        } else {
-            " WHERE c.is_index = 0"
         };
+        let like = q.map(&escape);
+        // Column names are restricted to this fixed allow-list, so formatting
+        // them into SQL is safe; the values stay bound parameters.
+        let col_filters: Vec<(&str, String)> = filters
+            .iter()
+            .filter(|(col, _)| matches!(*col, "ticker" | "name" | "industry"))
+            .map(|(col, val)| (*col, escape(val)))
+            .collect();
+        // Indices live in `companies` too; keep them out of the directory.
+        let mut where_clause = String::from(" WHERE c.is_index = 0");
+        if like.is_some() {
+            where_clause.push_str(" AND (c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\')");
+        }
+        for (col, _) in &col_filters {
+            where_clause.push_str(&format!(" AND c.{col} LIKE ? ESCAPE '\\'"));
+        }
         let count_sql = format!("SELECT COUNT(*) FROM companies c{where_clause}");
         let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
         if let Some(l) = &like {
             count_q = count_q.bind(l.as_str()).bind(l.as_str());
+        }
+        for (_, v) in &col_filters {
+            count_q = count_q.bind(v.as_str());
         }
         let total = count_q.fetch_one(&self.pool).await?;
 
@@ -414,6 +430,9 @@ impl Store {
         let mut query = sqlx::query(&sql);
         if let Some(l) = &like {
             query = query.bind(l.as_str()).bind(l.as_str());
+        }
+        for (_, v) in &col_filters {
+            query = query.bind(v.as_str());
         }
         let rows = query.bind(limit).bind(offset).fetch_all(&self.pool).await?;
         let page = rows

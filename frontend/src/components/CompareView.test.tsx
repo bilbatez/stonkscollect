@@ -47,7 +47,7 @@ test('typing triggers a company search', async () => {
   render(<CompareView />)
   await userEvent.type(screen.getByRole('combobox'), 'ap')
   await waitFor(
-    () => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('ap', null, 'asc', 8, 0),
+    () => expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('ap', {}, null, 'asc', 8, 0),
     { timeout: 2000 },
   )
 })

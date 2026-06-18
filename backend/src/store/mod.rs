@@ -876,27 +876,91 @@ mod tests {
             .unwrap();
 
         // page of all, ordered by ticker; AAPL has a score, MSFT does not
-        let (rows, total) = store.list_companies(None, None, None, 10, 0).await.unwrap();
+        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(rows[0].0.ticker, "AAPL");
         assert!(rows[0].1.is_some());
         assert!(rows[1].1.is_none());
         // search by name
-        let (msrows, mstotal) = store.list_companies(Some("micro"), None, None, 10, 0).await.unwrap();
+        let (msrows, mstotal) = store.list_companies(Some("micro"), &[], None, None, 10, 0).await.unwrap();
         assert_eq!(mstotal, 1);
         assert_eq!(msrows[0].0.ticker, "MSFT");
         // limit + offset
-        let (p2, _) = store.list_companies(None, None, None, 1, 1).await.unwrap();
+        let (p2, _) = store.list_companies(None, &[], None, None, 1, 1).await.unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].0.ticker, "MSFT");
 
         // LIKE wildcards in query must be escaped and treated literally
-        let (pct, pct_total) = store.list_companies(Some("%"), None, None, 10, 0).await.unwrap();
+        let (pct, pct_total) = store.list_companies(Some("%"), &[], None, None, 10, 0).await.unwrap();
         assert_eq!(pct_total, 0, "bare % should not match any company");
         assert!(pct.is_empty());
-        let (und, und_total) = store.list_companies(Some("_"), None, None, 10, 0).await.unwrap();
+        let (und, und_total) = store.list_companies(Some("_"), &[], None, None, 10, 0).await.unwrap();
         assert_eq!(und_total, 0, "bare _ should not match any company");
         assert!(und.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_companies_per_column_filters_narrow_and_combine() {
+        let (store, _d) = temp_store().await;
+        let mut a = sample_company();
+        a.ticker = "AAA".into();
+        a.name = "Alpha Corp".into();
+        a.industry = Some("Software".into());
+        store.upsert_company(&a).await.unwrap();
+        let mut b = sample_company();
+        b.cik = "0000000002".into();
+        b.ticker = "BBB".into();
+        b.name = "Beta Corp".into();
+        b.industry = Some("Hardware".into());
+        store.upsert_company(&b).await.unwrap();
+        let mut c = sample_company();
+        c.cik = "0000000003".into();
+        c.ticker = "CCC".into();
+        c.name = "Gamma Inc".into();
+        c.industry = Some("Software".into());
+        store.upsert_company(&c).await.unwrap();
+
+        // filter by ticker
+        let (rows, total) =
+            store.list_companies(None, &[("ticker", "AAA")], None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.ticker, "AAA");
+
+        // filter by name
+        let (rows, total) =
+            store.list_companies(None, &[("name", "Beta")], None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].0.ticker, "BBB");
+
+        // filter by industry narrows to the two Software companies
+        let (rows, total) =
+            store.list_companies(None, &[("industry", "Software")], None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 2);
+        let tickers: Vec<_> = rows.iter().map(|r| r.0.ticker.as_str()).collect();
+        assert!(tickers.contains(&"AAA"));
+        assert!(tickers.contains(&"CCC"));
+
+        // combining filters ANDs them: Software + name Gamma -> only CCC
+        let (rows, total) = store
+            .list_companies(None, &[("industry", "Software"), ("name", "Gamma")], None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].0.ticker, "CCC");
+
+        // a column outside the allow-list is ignored (no narrowing)
+        let (_rows, total) =
+            store.list_companies(None, &[("sector", "Technology")], None, None, 10, 0).await.unwrap();
+        assert_eq!(total, 3);
+
+        // per-column filter combines with the global q
+        let (rows, total) = store
+            .list_companies(Some("AAA"), &[("industry", "Software")], None, None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].0.ticker, "AAA");
     }
 
     #[test]
@@ -958,17 +1022,17 @@ mod tests {
             .unwrap();
 
         // sort by score desc -> AAPL(8) first
-        let (rows, _) = store.list_companies(None, Some("score"), Some("desc"), 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("desc"), 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
         assert_eq!(rows[1].0.ticker, "MSFT");
 
         // sort by score asc -> MSFT(3) first
-        let (rows, _) = store.list_companies(None, Some("score"), Some("asc"), 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("asc"), 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         assert_eq!(rows[1].0.ticker, "AAPL");
 
         // unknown sort_by falls back to ticker asc
-        let (rows, _) = store.list_companies(None, Some("bogus"), None, 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("bogus"), None, 10, 0).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
     }
 
@@ -1205,7 +1269,7 @@ mod tests {
         // collection still sees the index ...
         assert_eq!(store.all_companies().await.unwrap().len(), 2);
         // ... but the directory hides it
-        let (rows, total) = store.list_companies(None, None, None, 10, 0).await.unwrap();
+        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0.ticker, "AAPL");

@@ -299,16 +299,44 @@ test('AllStocks lists, paginates, searches, selects and watches', async () => {
   await userEvent.click(screen.getByRole('button', { name: /next page/i }))
   // numeric column → TanStack sorts desc first; page offset = 25
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', 'score', 'desc', 25, 25),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, 'score', 'desc', 25, 25),
   )
   await userEvent.type(screen.getByLabelText('search stocks'), 'a')
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 'score', 'desc', 25, 0),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'desc', 25, 0),
   )
   // second click on same column toggles to asc
   await userEvent.click(screen.getByText('Graham score'))
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', 'score', 'asc', 25, 0),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'asc', 25, 0),
+  )
+})
+
+test('AllStocks pushes a per-column filter to the backend and resets the page', async () => {
+  vi.mocked(api.listCompanies).mockResolvedValue({
+    rows: [{ company: company('AAPL', 'Software'), score: score() }],
+    total: 50,
+  })
+  render(<AllStocks onSelect={vi.fn()} onAdd={vi.fn()} />)
+  await screen.findByText('6/8')
+  // move to page 2 first so we can assert the filter resets to page 0
+  await userEvent.click(screen.getByRole('button', { name: /next page/i }))
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, null, 'asc', 25, 25),
+  )
+  vi.mocked(api.listCompanies).mockClear()
+  // typing in the Industry column filter triggers a server refetch with the
+  // industry param and offset reset to 0 (page 0)
+  await userEvent.type(screen.getByLabelText('filter industry'), 'Soft')
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith(
+      '',
+      { industry: 'Soft' },
+      null,
+      'asc',
+      25,
+      0,
+    ),
   )
 })
 

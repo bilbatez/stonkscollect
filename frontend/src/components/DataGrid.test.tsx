@@ -99,6 +99,30 @@ test('onSortChange fires with column id and direction, then null when cleared', 
   expect(onSortChange).toHaveBeenCalledWith(null, 'asc')
 })
 
+test('onFilterChange fires with the non-empty column filter map; clearing drops the key', async () => {
+  const onFilterChange = vi.fn()
+  render(
+    <DataGrid columns={columns} rows={rows} getRowId={(r) => r.name} onFilterChange={onFilterChange} />,
+  )
+  await userEvent.type(screen.getByLabelText('filter name'), 'al')
+  expect(onFilterChange).toHaveBeenLastCalledWith({ name: 'al' })
+  // clearing the input emits an empty map (the empty value is skipped)
+  await userEvent.clear(screen.getByLabelText('filter name'))
+  expect(onFilterChange).toHaveBeenLastCalledWith({})
+})
+
+test('with onFilterChange, client-side filtering is off (server is authoritative)', async () => {
+  const onFilterChange = vi.fn()
+  render(
+    <DataGrid columns={columns} rows={rows} getRowId={(r) => r.name} onFilterChange={onFilterChange} />,
+  )
+  // Typing a value that matches neither row would client-side hide both rows,
+  // but with onFilterChange the rows passed in stay rendered (server filters).
+  await userEvent.type(screen.getByLabelText('filter name'), 'zzz')
+  expect(screen.getByText('Alpha')).toBeInTheDocument()
+  expect(screen.getByText('Beta')).toBeInTheDocument()
+})
+
 test('empty state, default and custom', () => {
   const { rerender } = render(<DataGrid columns={columns} rows={[]} getRowId={(r) => r.name} />)
   expect(screen.getByText('No data.')).toBeInTheDocument()
