@@ -59,9 +59,11 @@ export function GrahamScorecard({ assessment }: { assessment: GrahamAssessment }
         <Stack direction="row" spacing={4} sx={{ mt: 1.5 }}>
           <Stack>
             <Typography variant="caption" color="text.secondary">
-              Graham Number
+              Graham # (target price)
             </Typography>
-            <Typography variant="body1">{formatNum(graham_number)}</Typography>
+            <Typography variant="body1">
+              {graham_number === null ? '—' : `$${formatNum(graham_number)}`}
+            </Typography>
           </Stack>
           <Stack>
             <Typography variant="caption" color="text.secondary">

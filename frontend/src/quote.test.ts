@@ -252,3 +252,29 @@ test('computeKeyStats picks the newest fact and computes dividend yield', () => 
   expect(s.payoutRatio).toBeNull()
   expect(s.employees).toBe(164_000)
 })
+
+test('computeKeyStats surfaces the new at-a-glance ratios', () => {
+  const annual = (metric: string, value: number) => ({
+    company_id: 1,
+    period_end: '2023-12-31',
+    period_type: 'annual' as const,
+    metric,
+    value,
+    computed_at: '2024-01-01T00:00:00Z',
+  })
+  const d = data({
+    ratios: [
+      annual('roa', 0.12),
+      annual('quick_ratio', 1.8),
+      annual('interest_coverage', 25),
+      annual('price_to_sales', 7.3),
+    ],
+  })
+  const s = computeKeyStats(d, null)
+  expect(s.roa).toBe(0.12)
+  expect(s.quickRatio).toBe(1.8)
+  expect(s.interestCoverage).toBe(25)
+  expect(s.priceToSales).toBe(7.3)
+  // absent → null
+  expect(computeKeyStats(data({}), null).roa).toBeNull()
+})

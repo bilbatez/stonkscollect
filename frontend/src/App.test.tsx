@@ -177,7 +177,10 @@ test('Screener nav lists ranked passers and a row opens the company', async () =
   await userEvent.click(await screen.findByRole('button', { name: /screener/i }))
   await waitFor(() => expect(screen.getByRole('button', { name: 'KO' })).toBeInTheDocument())
   await userEvent.click(screen.getByRole('button', { name: 'KO' }))
-  await waitFor(() => expect(screen.getByText(/graham scorecard/i)).toBeInTheDocument())
+  await waitFor(() => expect(screen.getByRole('heading', { name: /ko inc/i })).toBeInTheDocument())
+  // the Graham scorecard now lives on the Valuation & quality tab
+  await userEvent.click(screen.getByRole('tab', { name: /valuation/i }))
+  expect(await screen.findByText(/graham scorecard/i)).toBeInTheDocument()
 })
 
 test('Compare navigates to the empty CompareView', async () => {

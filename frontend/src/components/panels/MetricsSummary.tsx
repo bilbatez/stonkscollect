@@ -30,7 +30,7 @@ export function MetricsSummary({
     { label: 'Net margin', value: r('net_margin') !== null ? formatMetric('net_margin', r('net_margin')!) : '—' },
     { label: 'Debt to equity', value: r('debt_to_equity') !== null ? formatMetric('debt_to_equity', r('debt_to_equity')!) : '—' },
     { label: 'Current ratio', value: r('current_ratio') !== null ? formatMetric('current_ratio', r('current_ratio')!) : '—' },
-    { label: 'Graham #', value: graham.graham_number !== null ? formatNum(graham.graham_number) : '—' },
+    { label: 'Graham # (target price)', value: graham.graham_number !== null ? `$${formatNum(graham.graham_number)}` : '—' },
     { label: 'Margin of safety', value: graham.margin_of_safety !== null ? formatPct(graham.margin_of_safety) : '—' },
   ]
 

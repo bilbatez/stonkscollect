@@ -11,8 +11,11 @@ import {
   formatPeriodDate,
   freshness,
   metricGroup,
+  metricGroups,
   metricLabel,
+  metricMeta,
   scoreHeatColor,
+  trendDirection,
   secFilingsUrl,
   statementItemLabel,
   statementLabel,
@@ -63,6 +66,69 @@ test('formatMetric renders each metric kind', () => {
 
 test('metric labels and groups fall back gracefully', () => {
   expect(metricLabel('roe')).toBe('Return on equity')
+})
+
+test('new metric metadata: labels, groups, kinds, better direction', () => {
+  // every new metric has a meta entry with the right kind
+  const expected: Record<string, { group: string; kind: string; better: 'high' | 'low' }> = {
+    roa: { group: 'Profitability', kind: 'percent', better: 'high' },
+    roce: { group: 'Profitability', kind: 'percent', better: 'high' },
+    asset_turnover: { group: 'Efficiency', kind: 'ratio', better: 'high' },
+    ebitda: { group: 'Profitability', kind: 'currency', better: 'high' },
+    quick_ratio: { group: 'Liquidity', kind: 'ratio', better: 'high' },
+    cash_ratio: { group: 'Liquidity', kind: 'ratio', better: 'high' },
+    debt_to_assets: { group: 'Leverage', kind: 'ratio', better: 'low' },
+    interest_coverage: { group: 'Leverage', kind: 'ratio', better: 'high' },
+    net_debt: { group: 'Leverage', kind: 'currency', better: 'low' },
+    debt_to_ebitda: { group: 'Leverage', kind: 'ratio', better: 'low' },
+    price_to_sales: { group: 'Valuation', kind: 'ratio', better: 'low' },
+    price_to_fcf: { group: 'Valuation', kind: 'ratio', better: 'low' },
+    dividend_yield: { group: 'Valuation', kind: 'percent', better: 'high' },
+    revenue_growth: { group: 'Growth', kind: 'percent', better: 'high' },
+    eps_growth: { group: 'Growth', kind: 'percent', better: 'high' },
+    revenue_cagr: { group: 'Growth', kind: 'percent', better: 'high' },
+    eps_cagr: { group: 'Growth', kind: 'percent', better: 'high' },
+  }
+  for (const [key, exp] of Object.entries(expected)) {
+    const m = metricMeta[key]
+    expect(m, key).toBeDefined()
+    expect(m.group, key).toBe(exp.group)
+    expect(m.kind, key).toBe(exp.kind)
+    expect(m.better, key).toBe(exp.better)
+  }
+  // groups list includes Efficiency + Growth in a sensible order
+  expect(metricGroups).toEqual([
+    'Profitability',
+    'Efficiency',
+    'Liquidity',
+    'Leverage',
+    'Valuation',
+    'Growth',
+    'Per share',
+  ])
+  // every metric defines a `better` direction
+  for (const [key, m] of Object.entries(metricMeta)) {
+    expect(m.better, key).toMatch(/^(high|low)$/)
+  }
+  // a couple of existing ones to be safe
+  expect(metricMeta.debt_to_equity.better).toBe('low')
+  expect(metricMeta.payout_ratio.better).toBe('low')
+})
+
+test('trendDirection reports direction and whether the move is good', () => {
+  // higher-is-better metric going up = good
+  expect(trendDirection('roe', 0.2, 0.1)).toEqual({ direction: 'up', good: true })
+  expect(trendDirection('roe', 0.1, 0.2)).toEqual({ direction: 'down', good: false })
+  // lower-is-better metric going down = good
+  expect(trendDirection('debt_to_equity', 0.5, 1.0)).toEqual({ direction: 'down', good: true })
+  expect(trendDirection('debt_to_equity', 1.5, 1.0)).toEqual({ direction: 'up', good: false })
+  // flat
+  expect(trendDirection('roe', 0.1, 0.1)).toEqual({ direction: 'flat', good: false })
+  // missing prior → no trend
+  expect(trendDirection('roe', 0.1, null)).toBeNull()
+  expect(trendDirection('roe', null, 0.1)).toBeNull()
+  // unknown metric (no `better`) → direction only, never good
+  expect(trendDirection('mystery_metric', 2, 1)).toEqual({ direction: 'up', good: false })
 })
 
 test('scoreHeatColor scales green opacity with the Graham score and clamps', () => {

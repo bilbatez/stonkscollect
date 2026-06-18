@@ -185,6 +185,37 @@ test('RatiosPanel groups metrics, formats by kind, dashes gaps', async () => {
   )
 })
 
+test('RatiosPanel renders latest-vs-prior trend arrows colored by direction', () => {
+  render(
+    <RatiosPanel
+      ratios={[
+        // roe (higher is better) rising → "up, good"
+        ratio('roe', '2023-12-31', 0.2),
+        ratio('roe', '2022-12-31', 0.1),
+        // debt_to_equity (lower is better) rising → "up, bad"
+        ratio('debt_to_equity', '2023-12-31', 1.5),
+        ratio('debt_to_equity', '2022-12-31', 1.0),
+        // net_margin (higher is better) falling → "down, bad"
+        ratio('net_margin', '2023-12-31', 0.1),
+        ratio('net_margin', '2022-12-31', 0.2),
+        // current_ratio flat → no arrow
+        ratio('current_ratio', '2023-12-31', 2.0),
+        ratio('current_ratio', '2022-12-31', 2.0),
+        // gross_margin only has an OLDER period (latest column undefined) → no arrow
+        ratio('gross_margin', '2022-12-31', 0.5),
+      ]}
+    />,
+  )
+  const up = screen.getAllByLabelText('trending up')
+  const down = screen.getAllByLabelText('trending down')
+  expect(up.length).toBe(2) // roe and debt_to_equity both rose
+  expect(down.length).toBe(1) // net_margin fell
+  // exactly one rise is "good" (roe), one is "bad" (debt_to_equity)
+  expect(up.filter((el) => el.getAttribute('data-good') === 'true').length).toBe(1)
+  // the fall is "bad" (net_margin should be high)
+  expect(down[0].getAttribute('data-good')).toBe('false')
+})
+
 test('RatiosPanel shows empty period, toggles, and ignores re-clicking active', async () => {
   // only quarterly data -> the default annual view is empty
   render(<RatiosPanel ratios={[ratio('roe', '2023-09-30', 0.05, 'quarterly')]} />)
@@ -350,8 +381,8 @@ test('MetricsSummary renders 8 metric cards with formatted values', () => {
   expect(screen.getByText('0.45×')).toBeInTheDocument()
   expect(screen.getByText('Current ratio')).toBeInTheDocument()
   expect(screen.getByText('2.30×')).toBeInTheDocument()
-  expect(screen.getByText('Graham #')).toBeInTheDocument()
-  expect(screen.getByText('42.50')).toBeInTheDocument()
+  expect(screen.getByText('Graham # (target price)')).toBeInTheDocument()
+  expect(screen.getByText('$42.50')).toBeInTheDocument()
   expect(screen.getByText('Margin of safety')).toBeInTheDocument()
   expect(screen.getByText('20%')).toBeInTheDocument()
 })
@@ -485,6 +516,7 @@ test('KeyStatsPanel formats every populated statistic', () => {
         marketCap: 1_700_000_000_000, sharesOutstanding: 15_812_547_000, publicFloat: 2_591_165_000_000,
         eps: 6.13, dividendRate: 0.94, dividendYield: 0.005, pe: 28.5, pb: 45.2,
         payoutRatio: 0.15, freeCashFlow: 99_584_000_000, bookValuePerShare: 3.95, employees: 164_000,
+        roa: 0.12, quickRatio: 1.8, interestCoverage: 25, priceToSales: 7.3,
       }}
       quote={{
         last: 110, prevClose: 100, change: 10, changePct: 0.1, asOf: '2024-03-01',
@@ -501,6 +533,18 @@ test('KeyStatsPanel formats every populated statistic', () => {
   expect(screen.getByText('6.13')).toBeInTheDocument() // EPS
   expect(screen.getByText('1%')).toBeInTheDocument() // dividend yield rounded
   expect(screen.getByText('164.00K')).toBeInTheDocument() // employees
+  // dividend rate + book value/share now carry a $ prefix (currency)
+  expect(screen.getByText('$0.94')).toBeInTheDocument() // dividend rate
+  expect(screen.getByText('$3.95')).toBeInTheDocument() // book value / share
+  // new at-a-glance metrics surfaced
+  expect(screen.getByText('Return on assets')).toBeInTheDocument()
+  expect(screen.getByText('12.0%')).toBeInTheDocument() // roa
+  expect(screen.getByText('Quick ratio')).toBeInTheDocument()
+  expect(screen.getByText('1.80×')).toBeInTheDocument()
+  expect(screen.getByText('Interest coverage')).toBeInTheDocument()
+  expect(screen.getByText('25.00×')).toBeInTheDocument()
+  expect(screen.getByText('P/S')).toBeInTheDocument()
+  expect(screen.getByText('7.30×')).toBeInTheDocument()
 })
 
 test('KeyStatsPanel dashes missing values and tolerates a null quote', () => {
@@ -510,11 +554,12 @@ test('KeyStatsPanel dashes missing values and tolerates a null quote', () => {
         marketCap: null, sharesOutstanding: null, publicFloat: null, eps: null,
         dividendRate: null, dividendYield: null, pe: null, pb: null,
         payoutRatio: null, freeCashFlow: null, bookValuePerShare: null, employees: null,
+        roa: null, quickRatio: null, interestCoverage: null, priceToSales: null,
       }}
       quote={null}
     />,
   )
-  expect(screen.getAllByText('—').length).toBe(16)
+  expect(screen.getAllByText('—').length).toBe(20)
 })
 
 // --- WeekRangeBar ---

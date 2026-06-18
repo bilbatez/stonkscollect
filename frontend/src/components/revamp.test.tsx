@@ -185,7 +185,9 @@ test('GrahamScorecard renders criteria, valuation, net-net, and the price-gap hi
   }
   render(<GrahamScorecard assessment={assessment} />)
   expect(screen.getByText(/Current ratio >= 2/)).toBeInTheDocument()
-  expect(screen.getByText('22.40')).toBeInTheDocument()
+  // Graham Number relabeled as a target price and formatted with $
+  expect(screen.getByText(/Graham # \(target price\)/)).toBeInTheDocument()
+  expect(screen.getByText('$22.40')).toBeInTheDocument()
   expect(screen.getByText('net-net')).toBeInTheDocument()
   expect(screen.getByText('1/2')).toBeInTheDocument()
   expect(screen.getByText('needs price data')).toBeInTheDocument() // price-dependent P/E

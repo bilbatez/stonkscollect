@@ -31,6 +31,10 @@ export interface KeyStats {
   freeCashFlow: number | null
   bookValuePerShare: number | null
   employees: number | null
+  roa: number | null
+  quickRatio: number | null
+  interestCoverage: number | null
+  priceToSales: number | null
 }
 
 const SOURCE_RANK: Record<string, number> = { yahoo: 0, fmp: 1 }
@@ -191,5 +195,9 @@ export function computeKeyStats(data: CompanyData, quote: Quote | null): KeyStat
     freeCashFlow: latestAnnualRatio(data.ratios, 'free_cash_flow'),
     bookValuePerShare: latestAnnualRatio(data.ratios, 'book_value_per_share'),
     employees: data.company.employees ?? null,
+    roa: latestAnnualRatio(data.ratios, 'roa'),
+    quickRatio: latestAnnualRatio(data.ratios, 'quick_ratio'),
+    interestCoverage: latestAnnualRatio(data.ratios, 'interest_coverage'),
+    priceToSales: latestAnnualRatio(data.ratios, 'price_to_sales'),
   }
 }

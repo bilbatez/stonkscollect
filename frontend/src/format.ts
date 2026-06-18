@@ -94,27 +94,79 @@ export interface MetricMeta {
   label: string
   group: string
   kind: MetricKind
+  /** Which direction is "good" for trend coloring. */
+  better?: 'high' | 'low'
 }
 
 /** Display metadata for derived ratio metrics: human label, group, value kind. */
 export const metricMeta: Record<string, MetricMeta> = {
-  net_margin: { label: 'Net margin', group: 'Profitability', kind: 'percent' },
-  gross_margin: { label: 'Gross margin', group: 'Profitability', kind: 'percent' },
-  operating_margin: { label: 'Operating margin', group: 'Profitability', kind: 'percent' },
-  roe: { label: 'Return on equity', group: 'Profitability', kind: 'percent' },
-  fcf_margin: { label: 'Free cash flow margin', group: 'Profitability', kind: 'percent' },
-  current_ratio: { label: 'Current ratio', group: 'Liquidity', kind: 'ratio' },
-  working_capital: { label: 'Working capital', group: 'Liquidity', kind: 'currency' },
-  free_cash_flow: { label: 'Free cash flow', group: 'Liquidity', kind: 'currency' },
-  debt_to_equity: { label: 'Debt to equity', group: 'Leverage', kind: 'ratio' },
-  pe: { label: 'P/E', group: 'Valuation', kind: 'ratio' },
-  pb: { label: 'P/B', group: 'Valuation', kind: 'ratio' },
-  payout_ratio: { label: 'Payout ratio', group: 'Valuation', kind: 'percent' },
-  book_value_per_share: { label: 'Book value / share', group: 'Per share', kind: 'currency' },
+  net_margin: { label: 'Net margin', group: 'Profitability', kind: 'percent', better: 'high' },
+  gross_margin: { label: 'Gross margin', group: 'Profitability', kind: 'percent', better: 'high' },
+  operating_margin: {
+    label: 'Operating margin',
+    group: 'Profitability',
+    kind: 'percent',
+    better: 'high',
+  },
+  roe: { label: 'Return on equity', group: 'Profitability', kind: 'percent', better: 'high' },
+  roa: { label: 'Return on assets', group: 'Profitability', kind: 'percent', better: 'high' },
+  roce: {
+    label: 'Return on capital employed',
+    group: 'Profitability',
+    kind: 'percent',
+    better: 'high',
+  },
+  fcf_margin: {
+    label: 'Free cash flow margin',
+    group: 'Profitability',
+    kind: 'percent',
+    better: 'high',
+  },
+  ebitda: { label: 'EBITDA', group: 'Profitability', kind: 'currency', better: 'high' },
+  asset_turnover: { label: 'Asset turnover', group: 'Efficiency', kind: 'ratio', better: 'high' },
+  current_ratio: { label: 'Current ratio', group: 'Liquidity', kind: 'ratio', better: 'high' },
+  quick_ratio: { label: 'Quick ratio', group: 'Liquidity', kind: 'ratio', better: 'high' },
+  cash_ratio: { label: 'Cash ratio', group: 'Liquidity', kind: 'ratio', better: 'high' },
+  working_capital: { label: 'Working capital', group: 'Liquidity', kind: 'currency', better: 'high' },
+  free_cash_flow: { label: 'Free cash flow', group: 'Liquidity', kind: 'currency', better: 'high' },
+  debt_to_equity: { label: 'Debt to equity', group: 'Leverage', kind: 'ratio', better: 'low' },
+  debt_to_assets: { label: 'Debt to assets', group: 'Leverage', kind: 'ratio', better: 'low' },
+  interest_coverage: {
+    label: 'Interest coverage',
+    group: 'Leverage',
+    kind: 'ratio',
+    better: 'high',
+  },
+  net_debt: { label: 'Net debt', group: 'Leverage', kind: 'currency', better: 'low' },
+  debt_to_ebitda: { label: 'Debt to EBITDA', group: 'Leverage', kind: 'ratio', better: 'low' },
+  pe: { label: 'P/E', group: 'Valuation', kind: 'ratio', better: 'low' },
+  pb: { label: 'P/B', group: 'Valuation', kind: 'ratio', better: 'low' },
+  price_to_sales: { label: 'P/S', group: 'Valuation', kind: 'ratio', better: 'low' },
+  price_to_fcf: { label: 'P/FCF', group: 'Valuation', kind: 'ratio', better: 'low' },
+  payout_ratio: { label: 'Payout ratio', group: 'Valuation', kind: 'percent', better: 'low' },
+  dividend_yield: { label: 'Dividend yield', group: 'Valuation', kind: 'percent', better: 'high' },
+  revenue_growth: { label: 'Revenue growth (YoY)', group: 'Growth', kind: 'percent', better: 'high' },
+  eps_growth: { label: 'EPS growth (YoY)', group: 'Growth', kind: 'percent', better: 'high' },
+  revenue_cagr: { label: 'Revenue CAGR', group: 'Growth', kind: 'percent', better: 'high' },
+  eps_cagr: { label: 'EPS CAGR', group: 'Growth', kind: 'percent', better: 'high' },
+  book_value_per_share: {
+    label: 'Book value / share',
+    group: 'Per share',
+    kind: 'currency',
+    better: 'high',
+  },
 }
 
 /** Stable display order for metric groups. */
-export const metricGroups = ['Profitability', 'Liquidity', 'Leverage', 'Valuation', 'Per share']
+export const metricGroups = [
+  'Profitability',
+  'Efficiency',
+  'Liquidity',
+  'Leverage',
+  'Valuation',
+  'Growth',
+  'Per share',
+]
 
 /** Human label for a ratio metric key (falls back to a titleized key). */
 export function metricLabel(key: string): string {
@@ -139,6 +191,29 @@ export function formatMetric(key: string, value: number): string {
     default:
       return value.toFixed(2)
   }
+}
+
+export interface Trend {
+  direction: 'up' | 'down' | 'flat'
+  /** Whether the move is favorable, per the metric's `better` direction. */
+  good: boolean
+}
+
+/** Compare a metric's latest vs prior value into a trend (direction + good?).
+ *  Returns null when either value is missing. */
+export function trendDirection(
+  key: string,
+  latest: number | null,
+  prior: number | null,
+): Trend | null {
+  if (latest === null || prior === null) return null
+  const direction = latest > prior ? 'up' : latest < prior ? 'down' : 'flat'
+  const better = metricMeta[key]?.better
+  const good =
+    direction === 'flat' || better === undefined
+      ? false
+      : (better === 'high' && direction === 'up') || (better === 'low' && direction === 'down')
+  return { direction, good }
 }
 
 /** Human labels for statement line-item keys. */

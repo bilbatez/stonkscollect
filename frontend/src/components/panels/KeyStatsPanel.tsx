@@ -1,5 +1,5 @@
 import { Box, Card, CardContent, Typography } from '@mui/material'
-import { formatCompact, formatCurrency, formatNum, formatPct } from '../../format'
+import { formatCompact, formatCurrency, formatMetric, formatNum, formatPct } from '../../format'
 import type { KeyStats, Quote } from '../../quote'
 
 interface StatRow {
@@ -8,6 +8,9 @@ interface StatRow {
 }
 
 const currency = (v: number | null) => (v === null ? '—' : formatCurrency(v))
+
+/** Format an at-a-glance metric value via its metricMeta kind, or dash. */
+const metric = (key: string, v: number | null) => (v === null ? '—' : formatMetric(key, v))
 
 function range(low: number | null, high: number | null): string {
   return low === null || high === null ? '—' : `${formatNum(low)} – ${formatNum(high)}`
@@ -26,11 +29,15 @@ export function KeyStatsPanel({ stats, quote }: { stats: KeyStats; quote: Quote 
     { label: 'EPS', value: formatNum(stats.eps) },
     { label: 'P/E', value: formatNum(stats.pe) },
     { label: 'P/B', value: formatNum(stats.pb) },
-    { label: 'Dividend rate', value: formatNum(stats.dividendRate) },
+    { label: 'P/S', value: metric('price_to_sales', stats.priceToSales) },
+    { label: 'Return on assets', value: metric('roa', stats.roa) },
+    { label: 'Quick ratio', value: metric('quick_ratio', stats.quickRatio) },
+    { label: 'Interest coverage', value: metric('interest_coverage', stats.interestCoverage) },
+    { label: 'Dividend rate', value: currency(stats.dividendRate) },
     { label: 'Dividend yield', value: formatPct(stats.dividendYield) },
     { label: 'Payout ratio', value: formatPct(stats.payoutRatio) },
     { label: 'Free cash flow', value: currency(stats.freeCashFlow) },
-    { label: 'Book value / share', value: formatNum(stats.bookValuePerShare) },
+    { label: 'Book value / share', value: currency(stats.bookValuePerShare) },
     { label: 'Employees', value: formatCompact(stats.employees) },
   ]
   return (

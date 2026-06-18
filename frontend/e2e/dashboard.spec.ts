@@ -66,8 +66,17 @@ test('log in, pick a watchlist ticker, see its data', async ({ page }) => {
   await expect(pick).toBeVisible()
   await pick.click()
 
+  // Identity header stays visible across tabs
   await expect(page.getByRole('heading', { name: /apple inc/i })).toBeVisible()
+
+  // Financials tab reveals the statement table
+  await page.getByRole('tab', { name: /financials/i }).click()
   await expect(page.getByText('Revenue')).toBeVisible()
   await expect(page.getByText('$383.3B')).toBeVisible()
+  // identity header is still present after switching tabs
+  await expect(page.getByRole('heading', { name: /apple inc/i })).toBeVisible()
+
+  // Valuation & quality tab reveals the Graham scorecard
+  await page.getByRole('tab', { name: /valuation/i }).click()
   await expect(page.getByText(/graham scorecard/i)).toBeVisible()
 })

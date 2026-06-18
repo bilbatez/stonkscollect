@@ -6,6 +6,8 @@ import {
   Chip,
   Link,
   Stack,
+  Tab,
+  Tabs,
   Typography,
 } from '@mui/material'
 import { freshness, secFilingsUrl, wikipediaUrl, yahooProfileUrl } from '../../format'
@@ -37,7 +39,7 @@ const GrahamChart = lazy(() => import('../../charts/GrahamChart'))
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <Box sx={{ mt: 3 }}>
+    <Box sx={{ mt: 2 }}>
       <Typography variant="subtitle1" component="h3" gutterBottom sx={{ fontWeight: 600 }}>
         {title}
       </Typography>
@@ -46,7 +48,47 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
+/** Lay children side-by-side on wider screens, stacked on small ones. */
+function TwoUp({ children }: { children: React.ReactNode }) {
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gap: 2,
+        gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+        alignItems: 'start',
+      }}
+    >
+      {children}
+    </Box>
+  )
+}
+
+const TABS = ['Overview', 'Financials', 'Valuation & quality', 'Ownership & news'] as const
+
+function a11yProps(index: number) {
+  return { id: `company-tab-${index}`, 'aria-controls': `company-tabpanel-${index}` }
+}
+
+function TabPanel({
+  index,
+  active,
+  children,
+}: {
+  index: number
+  active: number
+  children: React.ReactNode
+}) {
+  if (active !== index) return null
+  return (
+    <Box role="tabpanel" id={`company-tabpanel-${index}`} aria-labelledby={`company-tab-${index}`}>
+      {children}
+    </Box>
+  )
+}
+
 export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: number }) {
+  const [activeTab, setActiveTab] = useState(0)
   const [chartPeriod, setChartPeriod] = useState<Period>('annual')
   const [priceRange, setPriceRange] = useState<RangePreset>('1Y')
   // prices arrive oldest-first from the API (ORDER BY date ASC); last element is newest
@@ -93,64 +135,89 @@ export function CompanyView({ data, loadedAt }: { data: CompanyData; loadedAt: n
           </Link>
         </Stack>
 
-        <QuoteHeader quote={quote} returns={periodReturns} />
+        <Tabs
+          value={activeTab}
+          onChange={(_, v) => setActiveTab(v)}
+          aria-label="company sections"
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ mt: 2, borderBottom: 1, borderColor: 'divider' }}
+        >
+          {TABS.map((label, i) => (
+            <Tab key={label} label={label} {...a11yProps(i)} />
+          ))}
+        </Tabs>
 
-        <MetricsSummary ratios={data.ratios} graham={data.graham} />
+        <TabPanel index={0} active={activeTab}>
+          <QuoteHeader quote={quote} returns={periodReturns} />
+          <TwoUp>
+            <MetricsSummary ratios={data.ratios} graham={data.graham} />
+            <Section title="Key statistics">
+              {quote && (
+                <Box sx={{ mb: 1.5 }}>
+                  <WeekRangeBar low={quote.week52Low} high={quote.week52High} last={quote.last} />
+                </Box>
+              )}
+              <KeyStatsPanel stats={keyStats} quote={quote} />
+            </Section>
+          </TwoUp>
+          <Section title="Price">
+            <RangeToggle value={priceRange} onChange={setPriceRange} />
+            <Suspense fallback={<Skeleton label="Loading chart…" />}>
+              <PriceChart prices={rangedPrices} />
+            </Suspense>
+            <Suspense fallback={null}>
+              <GrahamChart prices={rangedPrices} facts={data.facts} ratios={data.ratios} />
+            </Suspense>
+          </Section>
+        </TabPanel>
 
-        <Section title="Key statistics">
-          {quote && (
-            <Box sx={{ mb: 1.5 }}>
-              <WeekRangeBar low={quote.week52Low} high={quote.week52High} last={quote.last} />
-            </Box>
-          )}
-          <KeyStatsPanel stats={keyStats} quote={quote} />
-        </Section>
+        <TabPanel index={1} active={activeTab}>
+          <Section title="Income">
+            <PeriodToggle period={chartPeriod} onChange={setChartPeriod} />
+            <Suspense fallback={null}>
+              <IncomeChart facts={data.facts} period={chartPeriod} />
+            </Suspense>
+          </Section>
+          <Section title="Statements">
+            <StatementTable facts={data.facts} />
+          </Section>
+          <Section title="Dividends">
+            <DividendPanel facts={data.facts} />
+          </Section>
+        </TabPanel>
 
-        <Section title="Price">
-          <RangeToggle value={priceRange} onChange={setPriceRange} />
-          <Suspense fallback={<Skeleton label="Loading chart…" />}>
-            <PriceChart prices={rangedPrices} />
-          </Suspense>
-          <Suspense fallback={null}>
-            <GrahamChart prices={rangedPrices} facts={data.facts} ratios={data.ratios} />
-          </Suspense>
-        </Section>
-        <Section title="Income">
-          <PeriodToggle period={chartPeriod} onChange={setChartPeriod} />
-          <Suspense fallback={null}>
-            <IncomeChart facts={data.facts} period={chartPeriod} />
-          </Suspense>
-        </Section>
-        <Section title="Statements">
-          <StatementTable facts={data.facts} />
-        </Section>
-        <Section title="Dividends">
-          <DividendPanel facts={data.facts} />
-        </Section>
-        <Box sx={{ mt: 3 }}>
-          <GrahamScorecard assessment={data.graham} />
-        </Box>
-        <Section title="Ratios">
-          <Suspense fallback={null}>
-            <RatioChart ratios={data.ratios} period={chartPeriod} />
-          </Suspense>
-          <RatiosPanel ratios={data.ratios} />
-        </Section>
-        <Section title="Peers">
-          <PeersPanel peers={data.peers} />
-        </Section>
-        <Section title="Holders">
-          <HoldersPanel ticker={c.ticker} />
-        </Section>
-        <Section title="Notes">
-          <NotePanel ticker={c.ticker} initialBody={data.note.body} />
-        </Section>
-        <Section title="News">
-          <NewsFeed news={data.news} />
-        </Section>
-        <Section title="Discrepancies">
-          <DiscrepancyPanel discrepancies={data.discrepancies} />
-        </Section>
+        <TabPanel index={2} active={activeTab}>
+          <Box sx={{ mt: 2 }}>
+            <GrahamScorecard assessment={data.graham} />
+          </Box>
+          <Section title="Ratios">
+            <Suspense fallback={null}>
+              <RatioChart ratios={data.ratios} period={chartPeriod} />
+            </Suspense>
+            <RatiosPanel ratios={data.ratios} />
+          </Section>
+        </TabPanel>
+
+        <TabPanel index={3} active={activeTab}>
+          <TwoUp>
+            <Section title="Peers">
+              <PeersPanel peers={data.peers} />
+            </Section>
+            <Section title="Holders">
+              <HoldersPanel ticker={c.ticker} />
+            </Section>
+          </TwoUp>
+          <Section title="News">
+            <NewsFeed news={data.news} />
+          </Section>
+          <Section title="Notes">
+            <NotePanel ticker={c.ticker} initialBody={data.note.body} />
+          </Section>
+          <Section title="Discrepancies">
+            <DiscrepancyPanel discrepancies={data.discrepancies} />
+          </Section>
+        </TabPanel>
       </CardContent>
     </Card>
   )

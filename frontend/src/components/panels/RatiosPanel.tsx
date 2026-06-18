@@ -12,9 +12,37 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import { downloadCsv, formatMetric, formatPeriodDate, metricGroup, metricGroups, metricLabel } from '../../format'
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
+import {
+  downloadCsv,
+  formatMetric,
+  formatPeriodDate,
+  metricGroup,
+  metricGroups,
+  metricLabel,
+  trendDirection,
+} from '../../format'
 import type { Period, Ratio } from '../../types'
 import { PeriodToggle } from '../shared/PeriodToggle'
+
+/** Small ↑/↓ arrow for a metric's latest-vs-prior move, colored by whether the
+ *  move is favorable (per the metric's `better` direction). Nothing if flat or
+ *  if there is no prior period to compare against. */
+function TrendArrow({ metric, latest, prior }: { metric: string; latest?: number; prior?: number }) {
+  const trend = trendDirection(metric, latest ?? null, prior ?? null)
+  if (!trend || trend.direction === 'flat') return null
+  const Icon = trend.direction === 'up' ? ArrowUpwardIcon : ArrowDownwardIcon
+  return (
+    <Icon
+      fontSize="inherit"
+      color={trend.good ? 'success' : 'error'}
+      aria-label={`trending ${trend.direction}`}
+      data-good={trend.good}
+      sx={{ ml: 0.5, verticalAlign: 'middle' }}
+    />
+  )
+}
 
 /** Derived ratios, grouped by category (rows) across periods (date columns),
  *  with an Annual/Quarterly toggle and human labels + formatting. */
@@ -54,7 +82,14 @@ export function RatiosPanel({ ratios }: { ratios: Ratio[] }) {
     for (const m of ms) {
       body.push(
         <TableRow key={m} hover>
-          <TableCell>{metricLabel(m)}</TableCell>
+          <TableCell>
+            {metricLabel(m)}
+            <TrendArrow
+              metric={m}
+              latest={byMetric.get(m)!.get(periods[0])}
+              prior={byMetric.get(m)!.get(periods[1])}
+            />
+          </TableCell>
           {periods.map((p) => {
             const v = byMetric.get(m)!.get(p)
             return (
