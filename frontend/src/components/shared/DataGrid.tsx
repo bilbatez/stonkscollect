@@ -43,19 +43,25 @@ import { applyUpdater, makeDragEndHandler, type GridColumn } from '../shared/dat
 
 /** Sortable, per-column-filterable, drag-reorderable grid (TanStack + dnd-kit,
  *  MUI-rendered). Client-side over the rows it's given. When `onSortChange` is
- *  provided it fires on every sort toggle so the parent can re-fetch server-side. */
+ *  provided it fires on every sort toggle so the parent can re-fetch server-side.
+ *  When `onFilterChange` is provided it fires on every filter-input change with a
+ *  column-id → text map of the non-empty filters (so the parent can re-fetch
+ *  server-side); in that mode client-side row filtering is disabled because the
+ *  server is authoritative. Without it, filtering stays client-side as before. */
 export function DataGrid<T>({
   columns,
   rows,
   getRowId,
   empty = 'No data.',
   onSortChange,
+  onFilterChange,
 }: {
   columns: GridColumn<T>[]
   rows: T[]
   getRowId: (row: T) => string
   empty?: string
   onSortChange?: (col: string | null, dir: 'asc' | 'desc') => void
+  onFilterChange?: (filters: Record<string, string>) => void
 }) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [filters, setFilters] = useState<ColumnFiltersState>([])
@@ -88,11 +94,25 @@ export function DataGrid<T>({
       const first = next[0]
       onSortChange?.(first?.id ?? null, first?.desc ? 'desc' : 'asc')
     },
-    onColumnFiltersChange: setFilters,
+    onColumnFiltersChange: (updater) => {
+      const next = applyUpdater(updater, filters)
+      setFilters(next)
+      if (onFilterChange) {
+        // TanStack auto-removes a column filter once its value is cleared, so
+        // `next` only ever holds non-empty filter values here.
+        const map: Record<string, string> = {}
+        for (const f of next) {
+          map[f.id] = f.value as string
+        }
+        onFilterChange(map)
+      }
+    },
     onColumnOrderChange: setOrder,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
+    // With server-side filtering (onFilterChange) the parent re-fetches the
+    // matching rows, so we must NOT filter them again client-side.
+    ...(onFilterChange ? {} : { getFilteredRowModel: getFilteredRowModel() }),
     getRowId,
     autoResetAll: false,
   })

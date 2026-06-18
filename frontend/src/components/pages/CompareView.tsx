@@ -40,7 +40,7 @@ export function CompareView() {
       return
     }
     const id = setTimeout(() => {
-      void listCompanies(inputValue, null, 'asc', COMPARE_AUTOCOMPLETE_LIMIT, 0).then((p) =>
+      void listCompanies(inputValue, {}, null, 'asc', COMPARE_AUTOCOMPLETE_LIMIT, 0).then((p) =>
         setOptions(p.rows),
       )
     }, SEARCH_DEBOUNCE_MS)

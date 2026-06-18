@@ -159,9 +159,12 @@ export function getMarketSummary(): Promise<MoverRow[]> {
   return getJson<MoverRow[]>('/api/markets/summary')
 }
 
-/** Paginated, optionally-searched directory of all companies + their scores. */
+/** Paginated, optionally-searched/filtered directory of all companies + their
+ *  scores. `filters` holds optional per-column substring filters keyed by column
+ *  id (ticker/name/industry); empty values are omitted. */
 export function listCompanies(
   q: string,
+  filters: Record<string, string>,
   sortBy: string | null,
   sortDir: 'asc' | 'desc',
   limit: number,
@@ -170,6 +173,11 @@ export function listCompanies(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (q !== '') {
     params.set('q', q)
+  }
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== '') {
+      params.set(key, value)
+    }
   }
   if (sortBy !== null) {
     params.set('sort_by', sortBy)

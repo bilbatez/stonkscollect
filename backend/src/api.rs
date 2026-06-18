@@ -133,6 +133,9 @@ struct Page<T> {
 #[derive(Deserialize)]
 struct CompaniesParams {
     q: Option<String>,
+    ticker: Option<String>,
+    name: Option<String>,
+    industry: Option<String>,
     sort_by: Option<String>,
     sort_dir: Option<String>,
     limit: Option<i64>,
@@ -152,9 +155,20 @@ async fn companies(
     Query(p): Query<CompaniesParams>,
     _user: AuthUser,
 ) -> ApiResult<Page<CompanyRow>> {
+    let mut filters: Vec<(&str, &str)> = Vec::new();
+    if let Some(v) = p.ticker.as_deref() {
+        filters.push(("ticker", v));
+    }
+    if let Some(v) = p.name.as_deref() {
+        filters.push(("name", v));
+    }
+    if let Some(v) = p.industry.as_deref() {
+        filters.push(("industry", v));
+    }
     let (rows, total) = store
         .list_companies(
             p.q.as_deref(),
+            &filters,
             p.sort_by.as_deref(),
             p.sort_dir.as_deref(),
             p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
@@ -1075,6 +1089,42 @@ mod tests {
         let (status, json) = get(store.clone(), &t, "/api/screen?sort_by=ticker&sort_dir=asc").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+    }
+
+    #[tokio::test]
+    async fn companies_per_column_filters() {
+        let (store, _d, t) = seeded().await;
+        store
+            .insert_company(&NewCompany {
+                cik: "0000000002".into(),
+                ticker: "MSFT".into(),
+                name: "Microsoft".into(),
+                exchange: Some("NASDAQ".into()),
+                sector: None,
+                industry: Some("Software".into()),
+            })
+            .await
+            .unwrap();
+
+        // ?ticker= narrows to a single company
+        let (status, json) = get(store.clone(), &t, "/api/companies?ticker=MSFT").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "MSFT");
+
+        // ?industry= narrows on the industry column
+        let (_s, json) = get(store.clone(), &t, "/api/companies?industry=Software").await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "MSFT");
+
+        // ?name= narrows on the name column
+        let (_s, json) = get(store.clone(), &t, "/api/companies?name=Apple").await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["ticker"], "AAPL");
+
+        // non-matching filter returns an empty page
+        let (_s, json) = get(store.clone(), &t, "/api/companies?industry=Nonexistent").await;
+        assert_eq!(json["total"], 0);
     }
 
     #[tokio::test]

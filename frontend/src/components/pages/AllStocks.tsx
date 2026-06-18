@@ -18,12 +18,13 @@ interface Props {
 export function AllStocks({ onSelect, onAdd }: Props) {
   const [page, setPage] = useState(0)
   const [q, setQ] = useState('')
+  const [filters, setFilters] = useState<Record<string, string>>({})
   const [sortBy, setSortBy] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   const { rows, total, loading, error } = usePaginatedFetch<CompanyRow>(
-    () => listCompanies(q, sortBy, sortDir, PAGE_SIZE, page * PAGE_SIZE),
-    [q, page, sortBy, sortDir],
+    () => listCompanies(q, filters, sortBy, sortDir, PAGE_SIZE, page * PAGE_SIZE),
+    [q, filters, page, sortBy, sortDir],
   )
 
   const columns: GridColumn<CompanyRow>[] = [
@@ -85,6 +86,7 @@ export function AllStocks({ onSelect, onAdd }: Props) {
         getRowId={(r) => r.company.ticker}
         empty="No companies."
         onSortChange={(col, dir) => { setPage(0); setSortBy(col); setSortDir(dir) }}
+        onFilterChange={(f) => { setPage(0); setFilters(f) }}
       />
       <TablePagination
         component="div"
