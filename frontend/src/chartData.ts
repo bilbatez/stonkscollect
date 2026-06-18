@@ -81,7 +81,7 @@ export function grahamChartData(
   const grahamByPeriod = new Map<string, number>()
   for (const [period, eps] of epsByPeriod) {
     const bvps = bvpsByPeriod.get(period)
-    if (bvps !== undefined) {
+    if (bvps !== undefined && eps > 0 && bvps > 0) {
       grahamByPeriod.set(period, Math.sqrt(GRAHAM_FORMULA_MULTIPLE * eps * bvps))
     }
   }

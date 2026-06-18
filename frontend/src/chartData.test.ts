@@ -188,6 +188,50 @@ test('grahamChartData skips prices with no applicable graham period', () => {
   expect(d!.dates).toEqual(['2022-12-31', '2023-12-31'])
 })
 
+test('grahamChartData skips non-positive eps/bvps periods (no NaN graham numbers)', () => {
+  const facts = [
+    fact('Eps', '2021-12-31', -1.0), // negative EPS → would make sqrt NaN
+    fact('Eps', '2022-12-31', 4.0),
+    fact('Eps', '2023-12-31', 5.0),
+    fact('Eps', '2024-12-31', 6.0), // valid eps but bvps is negative below
+  ]
+  const ratios = [
+    ratio('book_value_per_share', '2021-12-31', 20.0, 'annual'),
+    ratio('book_value_per_share', '2022-12-31', 25.0, 'annual'),
+    ratio('book_value_per_share', '2023-12-31', 30.0, 'annual'),
+    ratio('book_value_per_share', '2024-12-31', -5.0, 'annual'), // negative BVPS
+  ]
+  const prices = [
+    price('2021-12-31', 50), // would map to 2021 (bad) without the guard
+    price('2022-12-31', 100),
+    price('2023-12-31', 120),
+    price('2024-12-31', 130),
+  ]
+  const d = grahamChartData(prices, facts, ratios)
+  expect(d).not.toBeNull()
+  // No NaN leaked into the series
+  expect(d!.grahamNumbers.every(Number.isFinite)).toBe(true)
+  // Only the 2022 and 2023 periods are valid (2021 has negative EPS, 2024 has
+  // negative BVPS — both excluded). The 2021 price has no applicable period
+  // (all valid periods are after it) and is dropped.
+  expect(d!.dates).toEqual(['2022-12-31', '2023-12-31', '2024-12-31'])
+  expect(d!.grahamNumbers[0]).toBeCloseTo(Math.sqrt(22.5 * 4 * 25), 5) // 2022
+  // 2024 price maps to the latest valid period (2023), not the excluded 2024.
+  expect(d!.grahamNumbers[2]).toBeCloseTo(Math.sqrt(22.5 * 5 * 30), 5)
+})
+
+test('grahamChartData returns null when excluding bad periods drops below 2 valid', () => {
+  // 2022 valid; 2023 has negative eps → excluded → only 1 valid period → null
+  const facts = [fact('Eps', '2022-12-31', 4.0), fact('Eps', '2023-12-31', -5.0)]
+  const ratios = [
+    ratio('book_value_per_share', '2022-12-31', 20.0, 'annual'),
+    ratio('book_value_per_share', '2023-12-31', 25.0, 'annual'),
+  ]
+  expect(
+    grahamChartData([price('2022-12-31', 100), price('2023-12-31', 110)], facts, ratios),
+  ).toBeNull()
+})
+
 // --- ttmColumn ---
 
 test('ttmColumn sums the last 4 quarters for flow items and takes latest for balance', () => {

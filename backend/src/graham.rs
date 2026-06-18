@@ -140,7 +140,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
 
     // 5. EPS growth >= 1/3 over the window (3-yr-average endpoints).
     let eps = series("Eps");
-    let eps_growth = if eps.len() >= 2 {
+    let eps_growth = if eps.len() >= 6 {
         let head = avg(&eps[..eps.len().min(3)]);
         let tail = avg(&eps[eps.len().saturating_sub(3)..]);
         match (head, tail) {
@@ -260,6 +260,10 @@ mod tests {
         a.criteria.iter().find(|c| c.name == name).unwrap().passed
     }
 
+    fn detail<'a>(a: &'a GrahamAssessment, name: &str) -> &'a str {
+        &a.criteria.iter().find(|c| c.name == name).unwrap().detail
+    }
+
     /// A company that satisfies every defensive criterion.
     fn strong_company() -> Vec<FinancialFact> {
         let mut f = Vec::new();
@@ -327,6 +331,22 @@ mod tests {
         assert!(!passed(&a, "P/E <= 15"));
         assert!(!passed(&a, "Dividend record"));
         assert!(!a.passes_defensive);
+    }
+
+    #[test]
+    fn eps_growth_with_two_years_is_insufficient_data() {
+        // Only 2 annual EPS years: the head (oldest 3) and tail (newest 3)
+        // windows would overlap and report a bogus "EPS growth 0%". With
+        // strictly disjoint windows (>= 6 years required) this is insufficient.
+        let f = vec![
+            fact("Revenue", 2022, 1_000.0),
+            fact("NetIncome", 2022, 10.0),
+            fact("Eps", 2022, 1.0),
+            fact("Eps", 2023, 2.0),
+        ];
+        let a = assess(&f, Some(10.0), 500_000_000.0);
+        assert_eq!(detail(&a, "EPS growth >= 33%"), "insufficient data");
+        assert!(!passed(&a, "EPS growth >= 33%"));
     }
 
     #[test]
