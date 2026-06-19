@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import App from './App'
@@ -50,6 +50,8 @@ function data(ticker: string): CompanyData {
 beforeEach(() => {
   localStorage.clear()
   mocked.getToken.mockReturnValue(null)
+  mocked.getMe.mockResolvedValue({ email: 'u@e.com', display_name: '' })
+  mocked.getGroups.mockResolvedValue([])
   mocked.getWatchlistQuotes.mockResolvedValue([])
   mocked.getMarketSummary.mockResolvedValue([])
   mocked.getMovers.mockResolvedValue({ gainers: [], losers: [], most_active: [] })
@@ -149,6 +151,7 @@ test('Watchlist tab adds and removes tickers', async () => {
       change_pct: 0.011,
       volume: null,
       as_of: '2024-03-01',
+      group_ids: [],
     },
   ])
   mocked.addWatch.mockResolvedValue()
@@ -169,6 +172,53 @@ test('Watchlist tab adds and removes tickers', async () => {
   await waitFor(() => expect(screen.getByRole('heading', { name: /msft inc/i })).toBeInTheDocument())
 })
 
+test('Watchlist tab manages groups: create, tag, untag, rename, delete', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.getGroups.mockResolvedValue([
+    { id: 1, name: 'Tech' },
+    { id: 2, name: 'Div' },
+  ])
+  mocked.getWatchlistQuotes.mockResolvedValue([
+    {
+      company: company('MSFT'),
+      last_close: 410,
+      change: 4,
+      change_pct: 0.01,
+      volume: 10,
+      as_of: '2024-03-01',
+      group_ids: [1],
+    },
+  ])
+  mocked.createGroup.mockResolvedValue()
+  mocked.renameGroup.mockResolvedValue()
+  mocked.deleteGroup.mockResolvedValue()
+  mocked.tagWatch.mockResolvedValue()
+  mocked.untagWatch.mockResolvedValue()
+
+  render(<App />)
+  await userEvent.click(await screen.findByRole('tab', { name: /watchlist/i }))
+  // create a group
+  await userEvent.type(await screen.findByLabelText('new group'), 'Growth')
+  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+  await waitFor(() => expect(mocked.createGroup).toHaveBeenCalledWith('Growth'))
+  // tag MSFT into Div (it is only in Tech)
+  await userEvent.click(screen.getByRole('button', { name: 'tag MSFT into Div' }))
+  await waitFor(() => expect(mocked.tagWatch).toHaveBeenCalledWith('MSFT', 2))
+  // untag MSFT from Tech (chip in the MSFT row)
+  const msftRow = screen.getByRole('row', { name: /MSFT/ })
+  const techChip = within(msftRow).getByText('Tech').closest('.MuiChip-root') as HTMLElement
+  await userEvent.click(within(techChip).getByTestId('CancelIcon'))
+  await waitFor(() => expect(mocked.untagWatch).toHaveBeenCalledWith('MSFT', 1))
+  // rename + delete via the filter row
+  const filters = screen.getByRole('group', { name: 'group filters' })
+  await userEvent.click(within(filters).getByRole('button', { name: 'edit Tech' }))
+  await userEvent.type(screen.getByLabelText('rename Tech'), '!{enter}')
+  await waitFor(() => expect(mocked.renameGroup).toHaveBeenCalledWith(1, 'Tech!'))
+  const divChip = within(filters).getByText('Div').closest('.MuiChip-root') as HTMLElement
+  await userEvent.click(within(divChip).getByTestId('CancelIcon'))
+  await waitFor(() => expect(mocked.deleteGroup).toHaveBeenCalledWith(2))
+})
+
 test('Screener nav lists ranked passers and a row opens the company', async () => {
   mocked.getToken.mockReturnValue('tok')
   mocked.loadCompanyData.mockResolvedValue(data('KO'))
@@ -181,6 +231,21 @@ test('Screener nav lists ranked passers and a row opens the company', async () =
   // the Graham scorecard now lives on the Valuation & quality tab
   await userEvent.click(screen.getByRole('tab', { name: /valuation/i }))
   expect(await screen.findByText(/graham scorecard/i)).toBeInTheDocument()
+})
+
+test('Profile nav shows the account page and the header reflects the display name', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.getMe.mockResolvedValue({ email: 'u@e.com', display_name: 'Uma' })
+  mocked.updateProfile.mockResolvedValue()
+
+  render(<App />)
+  // header button shows the display name once loaded
+  await screen.findByRole('button', { name: /uma/i })
+  await userEvent.click(screen.getByRole('button', { name: /uma/i }))
+  // the account page renders with the loaded email
+  await waitFor(() => expect(screen.getByLabelText('profile email')).toHaveValue('u@e.com'))
+  await userEvent.click(screen.getByRole('button', { name: /save profile/i }))
+  await waitFor(() => expect(mocked.updateProfile).toHaveBeenCalled())
 })
 
 test('Compare navigates to the empty CompareView', async () => {

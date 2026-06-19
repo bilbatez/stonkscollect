@@ -245,6 +245,11 @@ impl Store {
              ORDER BY c.ticker"
         );
         let rows = sqlx::query(&sql).bind(user_id).fetch_all(&self.pool).await?;
+        // Group memberships, keyed by company id, attached to each quote below.
+        let mut by_company: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+        for (company_id, group_id) in self.watch_group_memberships(user_id).await? {
+            by_company.entry(company_id).or_default().push(group_id);
+        }
         rows.iter()
             .map(|r| {
                 let last_close: Option<f64> = r.try_get("last_close")?;
@@ -253,8 +258,10 @@ impl Store {
                     (Some(last), Some(prev)) if prev != 0.0 => Some(last - prev),
                     _ => None,
                 };
+                let company = company_from_row(r)?;
+                let group_ids = by_company.get(&company.id).cloned().unwrap_or_default();
                 Ok(WatchQuote {
-                    company: company_from_row(r)?,
+                    company,
                     last_close,
                     change,
                     change_pct: match (change, prev_close) {
@@ -263,6 +270,7 @@ impl Store {
                     },
                     volume: r.try_get("volume")?,
                     as_of: r.try_get("as_of")?,
+                    group_ids,
                 })
             })
             .collect()
@@ -382,6 +390,7 @@ impl Store {
     /// optional per-column substring filters for an allow-listed set of columns
     /// (`ticker`/`name`/`industry`); any other column is ignored. `sort_by`/
     /// `sort_dir` control ordering (whitelisted — no injection risk).
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_companies(
         &self,
         q: Option<&str>,
@@ -390,6 +399,7 @@ impl Store {
         sort_dir: Option<&str>,
         limit: i64,
         offset: i64,
+        include_delisted: bool,
     ) -> Result<(Vec<(Company, Option<GrahamScore>)>, i64)> {
         let escape = |s: &str| {
             let e = s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
@@ -404,7 +414,11 @@ impl Store {
             .map(|(col, val)| (*col, escape(val)))
             .collect();
         // Indices live in `companies` too; keep them out of the directory.
+        // Delisted companies are hidden unless explicitly requested.
         let mut where_clause = String::from(" WHERE c.is_index = 0");
+        if !include_delisted {
+            where_clause.push_str(" AND c.status = 'active'");
+        }
         if like.is_some() {
             where_clause.push_str(" AND (c.ticker LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\')");
         }

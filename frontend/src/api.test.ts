@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
   addWatch,
+  changePassword,
   clearToken,
+  createGroup,
+  deleteGroup,
   deleteNote,
+  getGroups,
   getHolders,
   getMarketSummary,
+  getMe,
   getMovers,
   getNote,
   getPeers,
@@ -17,10 +22,15 @@ import {
   login,
   logout,
   removeWatch,
+  renameGroup,
   saveNote,
   screen,
+  setCompanyStatus,
   setToken,
   signup,
+  tagWatch,
+  untagWatch,
+  updateProfile,
 } from './api'
 
 interface Call {
@@ -253,4 +263,49 @@ test('getHolders hits /api/companies/:ticker/holders', async () => {
   mockFetch(() => ({ json: async () => [] }))
   await getHolders('AAPL')
   expect(calls[0].url).toBe('/api/companies/AAPL/holders')
+})
+
+test('profile endpoints: getMe, updateProfile, changePassword', async () => {
+  mockFetch(() => ({ json: async () => ({ email: 'u@e.com', display_name: 'Uma' }) }))
+  await getMe()
+  expect(calls[0].url).toBe('/auth/me')
+  await updateProfile('u@e.com', 'Uma')
+  expect(calls[1].url).toBe('/auth/profile')
+  expect(calls[1].init.method).toBe('PUT')
+  expect(JSON.parse(calls[1].init.body as string)).toEqual({ email: 'u@e.com', display_name: 'Uma' })
+  await changePassword('old', 'new')
+  expect(calls[2].url).toBe('/auth/password')
+  expect(JSON.parse(calls[2].init.body as string)).toEqual({ old_password: 'old', new_password: 'new' })
+})
+
+test('watch group endpoints', async () => {
+  mockFetch(() => ({ json: async () => [] }))
+  await getGroups()
+  expect(calls[0].url).toBe('/api/watchlist/groups')
+  await createGroup('Tech')
+  expect(calls[1].url).toBe('/api/watchlist/groups')
+  expect(calls[1].init.method).toBe('POST')
+  expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'Tech' })
+  await renameGroup(3, 'Technology')
+  expect(calls[2].url).toBe('/api/watchlist/groups/3')
+  expect(calls[2].init.method).toBe('PUT')
+  await deleteGroup(3)
+  expect(calls[3].url).toBe('/api/watchlist/groups/3')
+  expect(calls[3].init.method).toBe('DELETE')
+  await tagWatch('AAPL', 3)
+  expect(calls[4].url).toBe('/api/watchlist/AAPL/groups')
+  expect(JSON.parse(calls[4].init.body as string)).toEqual({ group_id: 3 })
+  await untagWatch('AAPL', 3)
+  expect(calls[5].url).toBe('/api/watchlist/AAPL/groups/3')
+  expect(calls[5].init.method).toBe('DELETE')
+})
+
+test('listCompanies appends include_delisted and setCompanyStatus puts the status', async () => {
+  mockFetch(() => ({ json: async () => ({ rows: [], total: 0 }) }))
+  await listCompanies('', {}, null, 'asc', 25, 0, true)
+  expect(calls[0].url).toBe('/api/companies?limit=25&offset=0&include_delisted=true')
+  await setCompanyStatus('AAPL', 'delisted')
+  expect(calls[1].url).toBe('/api/companies/AAPL/status')
+  expect(calls[1].init.method).toBe('PUT')
+  expect(JSON.parse(calls[1].init.body as string)).toEqual({ status: 'delisted' })
 })

@@ -15,12 +15,27 @@ import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import FilterAltIcon from '@mui/icons-material/FilterAlt'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import LogoutIcon from '@mui/icons-material/Logout'
+import PersonIcon from '@mui/icons-material/Person'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
-import { addWatch, getSectors, getWatchlistQuotes, loadCompanyData, removeWatch } from '../../api'
+import {
+  addWatch,
+  createGroup,
+  deleteGroup,
+  getGroups,
+  getMe,
+  getSectors,
+  getWatchlistQuotes,
+  loadCompanyData,
+  removeWatch,
+  renameGroup,
+  tagWatch,
+  untagWatch,
+} from '../../api'
 import { CompareView } from '../pages/CompareView'
 import { AllStocks } from '../pages/AllStocks'
 import { CompanyView } from '../pages/CompanyView'
+import { Profile } from '../pages/Profile'
 import { MarketSummary } from '../panels/MarketSummary'
 import { TrendingStrip } from '../panels/TrendingStrip'
 import { MoversView } from '../pages/MoversView'
@@ -29,9 +44,9 @@ import { Screener } from '../pages/Screener'
 import { Skeleton } from '../shared/Skeleton'
 import { ThemeToggle, type Theme } from '../shared/ThemeToggle'
 import { Watchlist } from '../layout/Watchlist'
-import type { CompanyData, SectorStats, WatchQuote } from '../../types'
+import type { CompanyData, SectorStats, WatchGroup, WatchQuote } from '../../types'
 
-type Page = 'home' | 'compare' | 'screen' | 'movers' | 'sectors'
+type Page = 'home' | 'compare' | 'screen' | 'movers' | 'sectors' | 'profile'
 
 type Detail =
   | { kind: 'none' }
@@ -49,6 +64,8 @@ export function Dashboard({
   onToggleTheme: () => void
 }) {
   const [items, setItems] = useState<WatchQuote[]>([])
+  const [groups, setGroups] = useState<WatchGroup[]>([])
+  const [displayName, setDisplayName] = useState('')
   const [page, setPage] = useState<Page>('home')
   const [tab, setTab] = useState(0)
   const [detail, setDetail] = useState<Detail>({ kind: 'none' })
@@ -58,11 +75,22 @@ export function Dashboard({
     setItems(await getWatchlistQuotes())
   }, [])
 
-  // Load the watchlist once on mount (async fetch, not a synchronous cascade).
+  const refreshGroups = useCallback(async () => {
+    setGroups(await getGroups())
+  }, [])
+
+  const refreshMe = useCallback(async () => {
+    const me = await getMe()
+    setDisplayName(me.display_name !== '' ? me.display_name : me.email)
+  }, [])
+
+  // Load the watchlist, groups, and profile once on mount.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshWatchlist()
-  }, [refreshWatchlist])
+    void refreshGroups()
+    void refreshMe()
+  }, [refreshWatchlist, refreshGroups, refreshMe])
 
   // Open a company in the home detail panel (tabs stay visible).
   async function select(ticker: string) {
@@ -87,6 +115,27 @@ export function Dashboard({
   }
   async function remove(ticker: string) {
     await removeWatch(ticker)
+    await refreshWatchlist()
+  }
+  async function createGroupAndRefresh(name: string) {
+    await createGroup(name)
+    await refreshGroups()
+  }
+  async function renameGroupAndRefresh(id: number, name: string) {
+    await renameGroup(id, name)
+    await refreshGroups()
+  }
+  async function deleteGroupAndRefresh(id: number) {
+    await deleteGroup(id)
+    await refreshGroups()
+    await refreshWatchlist()
+  }
+  async function tag(ticker: string, groupId: number) {
+    await tagWatch(ticker, groupId)
+    await refreshWatchlist()
+  }
+  async function untag(ticker: string, groupId: number) {
+    await untagWatch(ticker, groupId)
     await refreshWatchlist()
   }
 
@@ -119,6 +168,9 @@ export function Dashboard({
             Sectors
           </Button>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <Button color="inherit" startIcon={<PersonIcon />} onClick={() => setPage('profile')}>
+            {displayName !== '' ? displayName : 'Profile'}
+          </Button>
           <Button color="inherit" startIcon={<LogoutIcon />} onClick={onLogout}>
             Log out
           </Button>
@@ -159,13 +211,20 @@ export function Dashboard({
             ) : (
               <Watchlist
                 items={items}
+                groups={groups}
                 onSelect={(t) => void select(t)}
                 onAdd={(t) => void add(t)}
                 onRemove={(t) => void remove(t)}
+                onCreateGroup={(n) => void createGroupAndRefresh(n)}
+                onRenameGroup={(id, n) => void renameGroupAndRefresh(id, n)}
+                onDeleteGroup={(id) => void deleteGroupAndRefresh(id)}
+                onTag={(t, g) => void tag(t, g)}
+                onUntag={(t, g) => void untag(t, g)}
               />
             )}
           </Box>
         )}
+        {page === 'profile' && <Profile onProfileSaved={() => void refreshMe()} />}
         {page === 'compare' && <CompareView />}
         {page === 'screen' && <Screener onSelect={(t) => void select(t)} />}
         {page === 'movers' && <MoversView onSelect={(t) => void select(t)} />}

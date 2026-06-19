@@ -1,5 +1,16 @@
 import { useState } from 'react'
-import { Alert, Box, Button, Chip, LinearProgress, TablePagination, TextField } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  FormControlLabel,
+  LinearProgress,
+  Stack,
+  Switch,
+  TablePagination,
+  TextField,
+} from '@mui/material'
 import { listCompanies } from '../../api'
 import { PAGE_SIZE } from '../../constants'
 import { usePaginatedFetch } from '../../hooks/usePaginatedFetch'
@@ -21,10 +32,11 @@ export function AllStocks({ onSelect, onAdd }: Props) {
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [sortBy, setSortBy] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [showDelisted, setShowDelisted] = useState(false)
 
   const { rows, total, loading, error } = usePaginatedFetch<CompanyRow>(
-    () => listCompanies(q, filters, sortBy, sortDir, PAGE_SIZE, page * PAGE_SIZE),
-    [q, filters, page, sortBy, sortDir],
+    () => listCompanies(q, filters, sortBy, sortDir, PAGE_SIZE, page * PAGE_SIZE, showDelisted),
+    [q, filters, page, sortBy, sortDir, showDelisted],
   )
 
   const columns: GridColumn<CompanyRow>[] = [
@@ -34,9 +46,14 @@ export function AllStocks({ onSelect, onAdd }: Props) {
       sortValue: (r) => r.company.ticker,
       filter: true,
       cell: (r) => (
-        <Button size="small" onClick={() => onSelect(r.company.ticker)}>
-          {r.company.ticker}
-        </Button>
+        <>
+          <Button size="small" onClick={() => onSelect(r.company.ticker)}>
+            {r.company.ticker}
+          </Button>
+          {r.company.status === 'delisted' && (
+            <Chip size="small" color="warning" variant="outlined" label="Delisted" sx={{ ml: 0.5 }} />
+          )}
+        </>
       ),
     },
     { id: 'name', header: 'Name', sortValue: (r) => r.company.name, filter: true, cell: (r) => r.company.name },
@@ -66,18 +83,33 @@ export function AllStocks({ onSelect, onAdd }: Props) {
 
   return (
     <Box>
-      <TextField
-        size="small"
-        fullWidth
-        placeholder="Search ticker or name"
-        value={q}
-        onChange={(e) => {
-          setPage(0)
-          setQ(e.target.value)
-        }}
-        slotProps={{ htmlInput: { 'aria-label': 'search stocks' } }}
-        sx={{ mb: 2 }}
-      />
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+        <TextField
+          size="small"
+          fullWidth
+          placeholder="Search ticker or name"
+          value={q}
+          onChange={(e) => {
+            setPage(0)
+            setQ(e.target.value)
+          }}
+          slotProps={{ htmlInput: { 'aria-label': 'search stocks' } }}
+        />
+        <FormControlLabel
+          control={
+            <Switch
+              checked={showDelisted}
+              onChange={(e) => {
+                setPage(0)
+                setShowDelisted(e.target.checked)
+              }}
+              slotProps={{ input: { 'aria-label': 'show delisted' } }}
+            />
+          }
+          label="Show delisted"
+          sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+        />
+      </Stack>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {loading && <LinearProgress sx={{ mb: 1 }} />}
       <DataGrid

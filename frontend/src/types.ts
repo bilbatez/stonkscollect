@@ -9,6 +9,19 @@ export interface Company {
   description: string | null
   website: string | null
   employees?: number | null
+  status?: string
+}
+
+/** The authenticated user's editable profile. */
+export interface Me {
+  email: string
+  display_name: string
+}
+
+/** A user-defined watch group ("tag"). */
+export interface WatchGroup {
+  id: number
+  name: string
 }
 
 export interface PricePoint {
@@ -188,6 +201,7 @@ export interface WatchQuote {
   change_pct: number | null
   volume: number | null
   as_of: string | null
+  group_ids: number[]
 }
 
 export interface CompanyData {

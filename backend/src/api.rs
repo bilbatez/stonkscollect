@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth;
 use crate::domain::{
     select_movers, CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, Movers,
-    NewsItem, PricePoint, Ratio, ShareCount,
+    NewsItem, PricePoint, Ratio, ShareCount, WatchGroup,
 };
 use crate::graham;
 use crate::store::{ScreenFilter, Store, StoreError};
@@ -77,11 +77,21 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
+        .route("/auth/profile", axum::routing::put(update_profile))
+        .route("/auth/password", axum::routing::put(change_password))
         .route("/api/watchlist", get(watchlist).post(watch_add))
         .route("/api/watchlist/quotes", get(watchlist_quotes))
+        .route("/api/watchlist/groups", get(list_groups).post(create_group))
+        .route(
+            "/api/watchlist/groups/:id",
+            axum::routing::put(rename_group).delete(delete_group),
+        )
         .route("/api/watchlist/:ticker", delete(watch_remove))
+        .route("/api/watchlist/:ticker/groups", post(tag_watch))
+        .route("/api/watchlist/:ticker/groups/:id", delete(untag_watch))
         .route("/api/companies", get(companies))
         .route("/api/companies/:ticker", get(company))
+        .route("/api/companies/:ticker/status", axum::routing::put(set_status))
         .route("/api/companies/:ticker/prices", get(prices))
         .route("/api/companies/:ticker/facts", get(facts))
         .route("/api/companies/:ticker/ratios", get(ratios))
@@ -140,6 +150,7 @@ struct CompaniesParams {
     sort_dir: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
+    include_delisted: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -173,6 +184,7 @@ async fn companies(
             p.sort_dir.as_deref(),
             p.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
             p.offset.unwrap_or(0),
+            p.include_delisted.unwrap_or(false),
         )
         .await
         .map_err(internal)?;
@@ -180,6 +192,28 @@ async fn companies(
         rows: rows.into_iter().map(|(company, score)| CompanyRow { company, score }).collect(),
         total,
     }))
+}
+
+/// Body for the manual listing-status override endpoint.
+#[derive(Deserialize)]
+struct StatusUpdate {
+    status: String,
+}
+
+/// Manually set a company's listing status (`active`/`delisted`). 400 on a
+/// value outside the allowed set.
+async fn set_status(
+    State(store): State<Arc<Store>>,
+    Path(ticker): Path<String>,
+    _user: AuthUser,
+    Json(s): Json<StatusUpdate>,
+) -> Result<StatusCode, ApiError> {
+    if s.status != "active" && s.status != "delisted" {
+        return Err((StatusCode::BAD_REQUEST, "status must be active or delisted".into()));
+    }
+    let c = resolve(&store, &ticker).await?;
+    store.set_company_status(c.id, &s.status).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn graham_assessment(
@@ -356,6 +390,19 @@ struct TokenResponse {
 #[derive(Serialize)]
 struct Me {
     email: String,
+    display_name: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateProfile {
+    email: String,
+    display_name: String,
+}
+
+#[derive(Deserialize)]
+struct ChangePassword {
+    old_password: String,
+    new_password: String,
 }
 
 #[derive(Deserialize)]
@@ -415,12 +462,46 @@ async fn logout(State(store): State<Arc<Store>>, headers: HeaderMap) -> StatusCo
 }
 
 async fn me(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<Me> {
-    let email = store
-        .user_email(user.user_id)
+    let (email, display_name) = store
+        .user_profile(user.user_id)
         .await
         .map_err(internal)?
         .ok_or((StatusCode::NOT_FOUND, "no such user".into()))?;
-    Ok(Json(Me { email }))
+    Ok(Json(Me { email, display_name }))
+}
+
+/// Update the authenticated user's email + display name. 409 on duplicate email.
+async fn update_profile(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Json(p): Json<UpdateProfile>,
+) -> Result<StatusCode, ApiError> {
+    store
+        .update_profile(user.user_id, &p.email, &p.display_name)
+        .await
+        .map_err(|_| (StatusCode::CONFLICT, "email already registered".into()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Change the authenticated user's password after verifying the old one.
+async fn change_password(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Json(p): Json<ChangePassword>,
+) -> Result<StatusCode, ApiError> {
+    let hash = store
+        .user_password_hash(user.user_id)
+        .await
+        .map_err(internal)?
+        .ok_or((StatusCode::NOT_FOUND, "no such user".into()))?;
+    if !auth::verify_password(&hash, &p.old_password) {
+        return Err((StatusCode::UNAUTHORIZED, "incorrect password".into()));
+    }
+    store
+        .update_password_hash(user.user_id, &auth::hash_password(&p.new_password))
+        .await
+        .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn watchlist(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<Vec<Company>> {
@@ -452,6 +533,83 @@ async fn watch_remove(
 ) -> Result<StatusCode, ApiError> {
     let c = resolve(&store, &ticker).await?;
     store.remove_watch(user.user_id, c.id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct GroupBody {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct TagBody {
+    group_id: i64,
+}
+
+#[derive(Serialize)]
+struct CreatedId {
+    id: i64,
+}
+
+/// The authenticated user's watch groups.
+async fn list_groups(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<Vec<WatchGroup>> {
+    Ok(Json(store.list_groups(user.user_id).await.map_err(internal)?))
+}
+
+/// Create a new watch group. 409 if the user already has one with that name.
+async fn create_group(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Json(b): Json<GroupBody>,
+) -> Result<(StatusCode, Json<CreatedId>), ApiError> {
+    let id = store
+        .create_group(user.user_id, &b.name)
+        .await
+        .map_err(|_| (StatusCode::CONFLICT, "group name already exists".into()))?;
+    Ok((StatusCode::CREATED, Json(CreatedId { id })))
+}
+
+/// Rename one of the user's watch groups.
+async fn rename_group(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Path(id): Path<i64>,
+    Json(b): Json<GroupBody>,
+) -> Result<StatusCode, ApiError> {
+    store.rename_group(user.user_id, id, &b.name).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete one of the user's watch groups (its memberships cascade away).
+async fn delete_group(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    store.delete_group(user.user_id, id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Tag a watched company into one of the user's groups.
+async fn tag_watch(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Path(ticker): Path<String>,
+    Json(b): Json<TagBody>,
+) -> Result<StatusCode, ApiError> {
+    let c = resolve(&store, &ticker).await?;
+    store.add_to_group(user.user_id, b.group_id, c.id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Untag a watched company from one of the user's groups.
+async fn untag_watch(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Path((ticker, id)): Path<(String, i64)>,
+) -> Result<StatusCode, ApiError> {
+    let c = resolve(&store, &ticker).await?;
+    store.remove_from_group(user.user_id, id, c.id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1194,6 +1352,7 @@ mod tests {
         let (status, json) = get(store.clone(), &token, "/auth/me").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["email"], "new@e.com");
+        assert_eq!(json["display_name"], "");
         // login
         let (status, json) = send(
             store.clone(),
@@ -1220,6 +1379,91 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = get(store, &token2, "/auth/me").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn company_status_override_and_delisted_visibility() {
+        let (store, _d, t) = seeded().await; // AAPL active by default
+        // default directory shows AAPL
+        let (_s, json) = get(store.clone(), &t, "/api/companies?limit=10").await;
+        assert_eq!(json["total"], 1);
+        // mark delisted via the manual endpoint
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/api/companies/AAPL/status", Some(&t), Some(json!({"status":"delisted"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        // now hidden by default, visible with include_delisted
+        let (_s, json) = get(store.clone(), &t, "/api/companies?limit=10").await;
+        assert_eq!(json["total"], 0);
+        let (_s, json) = get(store.clone(), &t, "/api/companies?limit=10&include_delisted=true").await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["rows"][0]["company"]["status"], "delisted");
+        // bad status value -> 400
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/api/companies/AAPL/status", Some(&t), Some(json!({"status":"bogus"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // unknown ticker -> 404
+        let (status, _) = send(
+            store,
+            req("PUT", "/api/companies/NOPE/status", Some(&t), Some(json!({"status":"active"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn profile_and_password_can_be_edited() {
+        let (store, _d, t) = seeded().await; // seeded user u@e.com / "pw"
+        // edit profile: email + display name
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/auth/profile", Some(&t), Some(json!({"email":"u2@e.com","display_name":"Uma"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_s, json) = get(store.clone(), &t, "/auth/me").await;
+        assert_eq!(json["email"], "u2@e.com");
+        assert_eq!(json["display_name"], "Uma");
+
+        // duplicate email -> 409 (signup another, then collide)
+        let (_s, _) = send(
+            store.clone(),
+            req("POST", "/auth/signup", None, Some(json!({"email":"taken@e.com","password":"pw"}))),
+        )
+        .await;
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/auth/profile", Some(&t), Some(json!({"email":"taken@e.com","display_name":"X"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        // change password: wrong old password -> 401
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/auth/password", Some(&t), Some(json!({"old_password":"nope","new_password":"fresh"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // correct old password -> 204, and the new password logs in
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", "/auth/password", Some(&t), Some(json!({"old_password":"pw","new_password":"fresh"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = send(
+            store.clone(),
+            req("POST", "/auth/login", None, Some(json!({"email":"u2@e.com","password":"fresh"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1342,6 +1586,56 @@ mod tests {
         let (status, _) = send(store.clone(), req("DELETE", "/api/watchlist/AAPL", Some(&t), None)).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_s, json) = get(store, &t, "/api/watchlist").await;
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn watch_groups_endpoints() {
+        let (store, _d, t) = seeded().await;
+        // watch AAPL
+        send(store.clone(), req("POST", "/api/watchlist", Some(&t), Some(json!({"ticker":"AAPL"})))).await;
+        // create a group
+        let (status, json) =
+            send(store.clone(), req("POST", "/api/watchlist/groups", Some(&t), Some(json!({"name":"Tech"})))).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let gid = json["id"].as_i64().unwrap();
+        // duplicate name -> 409
+        let (status, _) =
+            send(store.clone(), req("POST", "/api/watchlist/groups", Some(&t), Some(json!({"name":"Tech"})))).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        // list groups
+        let (_s, json) = get(store.clone(), &t, "/api/watchlist/groups").await;
+        assert_eq!(json[0]["name"], "Tech");
+        // tag AAPL into the group -> shows in quotes' group_ids
+        let (status, _) = send(
+            store.clone(),
+            req("POST", "/api/watchlist/AAPL/groups", Some(&t), Some(json!({"group_id": gid}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_s, json) = get(store.clone(), &t, "/api/watchlist/quotes").await;
+        assert_eq!(json[0]["group_ids"][0], gid);
+        // rename
+        let (status, _) = send(
+            store.clone(),
+            req("PUT", &format!("/api/watchlist/groups/{gid}"), Some(&t), Some(json!({"name":"Technology"}))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        // untag
+        let (status, _) = send(
+            store.clone(),
+            req("DELETE", &format!("/api/watchlist/AAPL/groups/{gid}"), Some(&t), None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_s, json) = get(store.clone(), &t, "/api/watchlist/quotes").await;
+        assert!(json[0]["group_ids"].as_array().unwrap().is_empty());
+        // delete group
+        let (status, _) =
+            send(store.clone(), req("DELETE", &format!("/api/watchlist/groups/{gid}"), Some(&t), None)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_s, json) = get(store, &t, "/api/watchlist/groups").await;
         assert!(json.as_array().unwrap().is_empty());
     }
 
