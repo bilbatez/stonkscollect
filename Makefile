@@ -3,12 +3,15 @@
 
 BACKEND := backend
 FRONTEND := frontend
+DOCS := docs
 COV_IGNORE := (main|http)\.rs
 # Pass tickers to `make collect`, e.g. `make collect ARGS="--ticker AAPL"`.
 ARGS ?= --all
+# Port for the docs site (`make docs`); override with `make docs DOCS_PORT=4000`.
+DOCS_PORT ?= 3001
 
 .PHONY: help setup demo bootstrap seed-admin collect enrich serve backend frontend \
-        test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
+        docs test test-backend test-frontend cov cov-backend cov-frontend lint e2e up down build
 
 help:
 	@echo "Setup:    make setup        (one-time: .env, data dir, deps, build)"
@@ -18,6 +21,7 @@ help:
 	@echo "          make collect      (collect; ARGS=\"--ticker AAPL\" or default --all)"
 	@echo "          make backend      (API + scheduled collection on :8080; alias: make serve)"
 	@echo "          make frontend     (dashboard dev server)"
+	@echo "          make docs         (serve the docs site on :$(DOCS_PORT))"
 	@echo "Quality:  make test | cov | lint | e2e"
 	@echo "Docker:   make up | down | build"
 
@@ -56,6 +60,13 @@ backend serve:
 
 frontend:
 	cd $(FRONTEND) && npm run dev
+
+# Serve the Docsify documentation site (renders docs/*.md in the browser).
+# Docsify fetches the markdown at runtime, so it must be served over HTTP, not
+# opened as a file:// URL.
+docs:
+	@echo "Docs: http://localhost:$(DOCS_PORT)/  (Ctrl-C to stop)"
+	cd $(DOCS) && python3 -m http.server $(DOCS_PORT)
 
 test: test-backend test-frontend
 
