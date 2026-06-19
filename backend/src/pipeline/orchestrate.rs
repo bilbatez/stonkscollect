@@ -1,4 +1,5 @@
 use super::*;
+use chrono::NaiveDate;
 
 /// Collect every company in the store (the full US universe once bootstrapped).
 ///
@@ -62,8 +63,36 @@ pub async fn collect_all(
     Ok(summary)
 }
 
+/// A company whose last price is older than this (and that EDGAR can no longer
+/// find) is treated as delisted.
+const DELISTED_STALE_DAYS: i64 = 30;
+
+/// Decide a company's listing status from one collect run's signals.
+///
+/// Conservative to avoid false positives from transient outages: only
+/// `"delisted"` when EDGAR reports the CIK missing (404) **and** no fresh prices
+/// arrived this run **and** the newest stored price is stale (or none exists).
+/// Otherwise `"active"`, which self-heals a company once data returns.
+fn delisting_status(
+    edgar_missing: bool,
+    new_prices: usize,
+    latest_price_date: Option<NaiveDate>,
+    now: DateTime<Utc>,
+) -> &'static str {
+    let prices_stale = match latest_price_date {
+        None => true,
+        Some(d) => (now.date_naive() - d).num_days() > DELISTED_STALE_DAYS,
+    };
+    if edgar_missing && new_prices == 0 && prices_stale {
+        "delisted"
+    } else {
+        "active"
+    }
+}
+
 /// One company's full collect: facts ingest, then best-effort prices (first,
-/// so Graham sees a price), news, collection timestamp, and metric recompute.
+/// so Graham sees a price), news, collection timestamp, metric recompute, and a
+/// listing-status (active/delisted) refresh.
 async fn collect_company(
     store: &Store,
     sources: &CollectSources<'_>,
@@ -73,10 +102,24 @@ async fn collect_company(
     let target = target_of(company);
     let report =
         ingest(store, sources.facts, company.id, &target, options.threshold, options.now).await?;
-    let _ = collect_prices_for(store, sources.prices, company.id, &target, options.now).await;
+    let new_prices =
+        collect_prices_for(store, sources.prices, company.id, &target, options.now)
+            .await
+            .unwrap_or(0);
     let _ = collect_news_for(store, sources.news, company.id, &target, options.now).await;
     let _ = store.mark_collected(company.id, options.now).await;
     let _ = recompute_metrics(store, company.id, options.min_revenue, options.now).await;
+    // Index pseudo-companies (synthetic `IDX-` CIK) have no EDGAR facts; never
+    // flag them delisted.
+    if !company.cik.starts_with("IDX-") {
+        let edgar_missing = report
+            .source_errors
+            .iter()
+            .any(|(s, m)| s == "edgar" && m.contains("404"));
+        let latest = store.latest_price_date_any(company.id).await.unwrap_or(None);
+        let status = delisting_status(edgar_missing, new_prices, latest, options.now);
+        let _ = store.set_company_status(company.id, status).await;
+    }
     Ok(report)
 }
 
@@ -187,5 +230,26 @@ fn dei_share_counts(facts: &[FinancialFact]) -> Vec<ShareCount> {
             source: f.source.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod delisting_tests {
+    use super::delisting_status;
+    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+
+    fn now() -> DateTime<Utc> {
+        chrono::Utc.with_ymd_and_hms(2024, 6, 1, 0, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn delisted_only_when_missing_no_new_and_stale() {
+        let old = NaiveDate::from_ymd_opt(2024, 1, 1); // >30d before 2024-06-01
+        let recent = NaiveDate::from_ymd_opt(2024, 5, 28); // within 30d
+        assert_eq!(delisting_status(true, 0, None, now()), "delisted");
+        assert_eq!(delisting_status(true, 0, old, now()), "delisted");
+        assert_eq!(delisting_status(true, 3, old, now()), "active");
+        assert_eq!(delisting_status(false, 0, old, now()), "active");
+        assert_eq!(delisting_status(true, 0, recent, now()), "active");
+    }
 }
 

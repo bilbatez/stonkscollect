@@ -88,6 +88,18 @@ impl Store {
         Ok(date)
     }
 
+    /// The most recent stored price date across all sources (delisting check).
+    pub async fn latest_price_date_any(
+        &self,
+        company_id: i64,
+    ) -> Result<Option<chrono::NaiveDate>> {
+        let date = sqlx::query_scalar("SELECT MAX(date) FROM prices WHERE company_id=?")
+            .bind(company_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(date)
+    }
+
     /// Upsert many prices in one transaction.
     pub async fn save_prices(&self, prices: &[PricePoint]) -> Result<()> {
         let mut tx = self.pool.begin().await?;

@@ -23,12 +23,14 @@ endpoints require `Authorization: Bearer <token>`.
 | Feature | Backend | Frontend | Type |
 |---|---|---|---|
 | Signup / login (Argon2id, 30-day bearer sessions) | `POST /auth/signup`, `POST /auth/login` → `api.rs`; `auth.rs` (hash + tokens); brute-force throttle in `net.rs` `LoginThrottle` | `components/auth/AuthForm.tsx`; token in `localStorage` via `api.ts` | — |
-| Current user / logout | `GET /auth/me`, `POST /auth/logout` | `App.tsx` auth dispatch | — |
+| Current user / logout | `GET /auth/me` (email + display_name), `POST /auth/logout` | `App.tsx` auth dispatch | `Me` |
+| Profile page: edit email + display name, change password | `PUT /auth/profile`, `PUT /auth/password` → `api.rs`; `store::update_profile`/`update_password_hash` (`store/accounts.rs`) | `components/pages/Profile.tsx`; header shows display name | `Me` |
 
 ## 2. Company directory & search
 | Feature | Backend | Frontend | Type |
 |---|---|---|---|
-| Paginated, searchable, sortable directory (excludes index pseudo-companies) | `GET /api/companies` → `store::list_companies` (`store/analytics.rs`) | `components/pages/AllStocks.tsx` + `shared/DataGrid.tsx` | `Company`, `GrahamScore` |
+| Paginated, searchable, sortable directory (excludes index pseudo-companies + delisted by default) | `GET /api/companies` (`?include_delisted=true`) → `store::list_companies` (`store/analytics.rs`) | `components/pages/AllStocks.tsx` + `shared/DataGrid.tsx` | `Company`, `GrahamScore` |
+| Delisted-stock handling: auto-flag on collect (EDGAR 404 + stale prices), manual override, hidden by default with a "Show delisted" toggle | `delisting_status` + `set_company_status` (`pipeline/orchestrate.rs`, `store/companies.rs`); `PUT /api/companies/:ticker/status` | `AllStocks.tsx` toggle + "Delisted" chip | `Company.status` |
 | Single company | `GET /api/companies/:ticker` → `store::get_company` | `components/pages/CompanyView.tsx` | `Company` |
 | One-roundtrip detail header | `GET /api/companies/:ticker/summary` | `CompanyView.tsx` | `CompanySummary` |
 | Autocomplete ticker search | reuses `GET /api/companies?q=` | `pages/CompareView.tsx` | `CompanyRow` |
@@ -88,8 +90,9 @@ Ratios computed (`ratios.rs`): `pe`, `pb`, `roe`, `net_margin`, `gross_margin`,
 ## 9. Watchlist & notes
 | Feature | Backend | Frontend | Type |
 |---|---|---|---|
-| Watchlist add/remove/list | `GET/POST /api/watchlist`, `DELETE /api/watchlist/:ticker` | `layout/Watchlist.tsx` | `Company` |
-| Watchlist with live quotes | `GET /api/watchlist/quotes` → `store::watch_quotes` | `layout/Watchlist.tsx` | `WatchQuote` |
+| Watchlist add/remove/list | `GET/POST /api/watchlist`, `DELETE /api/watchlist/:ticker` | `layout/Watchlist.tsx` (full-page grid) | `Company` |
+| Watchlist with live quotes (price, day change, volume, group tags) | `GET /api/watchlist/quotes` → `store::watch_quotes` | `layout/Watchlist.tsx` + `shared/DataGrid.tsx` | `WatchQuote` |
+| Watch groups (tags): create/rename/delete, tag/untag, filter | `GET/POST /api/watchlist/groups`, `PUT/DELETE /api/watchlist/groups/:id`, `POST /api/watchlist/:ticker/groups`, `DELETE /api/watchlist/:ticker/groups/:id` → `store/accounts.rs` | `layout/Watchlist.tsx` group chips | `WatchGroup` |
 | Private per-company note | `GET/PUT/DELETE /api/companies/:ticker/note` | `panels/NotePanel.tsx` | `Note` |
 
 ## 10. News

@@ -98,10 +98,19 @@ const watchQuote = (ticker: string, overrides: Partial<WatchQuote> = {}): WatchQ
   last_close: 110,
   change: 10,
   change_pct: 0.1,
-  volume: null,
+  volume: 1000,
   as_of: '2024-03-01',
+  group_ids: [],
   ...overrides,
 })
+
+const noopGroupProps = {
+  onCreateGroup: vi.fn(),
+  onRenameGroup: vi.fn(),
+  onDeleteGroup: vi.fn(),
+  onTag: vi.fn(),
+  onUntag: vi.fn(),
+}
 
 test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async () => {
   const onSelect = vi.fn()
@@ -110,9 +119,11 @@ test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async (
   render(
     <Watchlist
       items={[watchQuote('AAPL')]}
+      groups={[]}
       onSelect={onSelect}
       onAdd={onAdd}
       onRemove={onRemove}
+      {...noopGroupProps}
     />,
   )
   await userEvent.click(screen.getByRole('button', { name: /^AAPL/ }))
@@ -126,30 +137,114 @@ test('Watchlist selects, adds (trimmed/upper), ignores blanks, removes', async (
   expect(onAdd).toHaveBeenCalledTimes(1)
 })
 
-test('Watchlist rows show the last price and a colored day change', () => {
+test('Watchlist rows show the last price and a colored day change, and sort', async () => {
   render(
     <Watchlist
       items={[
-        watchQuote('UP'),
+        watchQuote('UP', { group_ids: [99] }), // group id with no matching group -> label fallback
         watchQuote('DOWN', { last_close: 90, change: -10, change_pct: -0.1 }),
-        watchQuote('BARE', { last_close: null, change: null, change_pct: null, as_of: null }),
+        watchQuote('BARE', { last_close: null, change: null, change_pct: null, as_of: null, volume: null }),
       ]}
+      groups={[]}
       onSelect={vi.fn()}
       onAdd={vi.fn()}
       onRemove={vi.fn()}
+      {...noopGroupProps}
     />,
   )
   expect(screen.getByText('110.00')).toBeInTheDocument()
   expect(screen.getByText('+10%')).toBeInTheDocument()
   expect(screen.getByText('-10%')).toBeInTheDocument()
-  // an unpriced company still lists, with a dash and no change chip
-  expect(screen.getByText('BARE')).toBeInTheDocument()
-  expect(screen.getByText('—')).toBeInTheDocument()
+  // an unpriced company still lists, with dashes and no change chip
+  expect(screen.getByRole('button', { name: 'BARE' })).toBeInTheDocument()
+  expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  // a tag with no matching group falls back to showing the raw id
+  expect(screen.getByText('99')).toBeInTheDocument()
+  // sorting each sortable column exercises the (null-tolerant) sort accessors
+  await userEvent.click(screen.getByText('Ticker'))
+  await userEvent.click(screen.getByText('Last'))
+  await userEvent.click(screen.getByText('Change'))
+  await userEvent.click(screen.getByText('Volume'))
+  await userEvent.click(screen.getByText('Name'))
 })
 
 test('Watchlist shows empty state', () => {
-  render(<Watchlist items={[]} onSelect={vi.fn()} onAdd={vi.fn()} onRemove={vi.fn()} />)
+  render(
+    <Watchlist items={[]} groups={[]} onSelect={vi.fn()} onAdd={vi.fn()} onRemove={vi.fn()} {...noopGroupProps} />,
+  )
   expect(screen.getByText(/no tickers yet/i)).toBeInTheDocument()
+})
+
+test('Watchlist creates groups, filters by them, tags/untags, renames and deletes', async () => {
+  const onCreateGroup = vi.fn()
+  const onDeleteGroup = vi.fn()
+  const onRenameGroup = vi.fn()
+  const onTag = vi.fn()
+  const onUntag = vi.fn()
+  const groups = [
+    { id: 1, name: 'Tech' },
+    { id: 2, name: 'Dividends' },
+  ]
+  render(
+    <Watchlist
+      items={[watchQuote('AAPL', { group_ids: [1] }), watchQuote('KO', { group_ids: [2] })]}
+      groups={groups}
+      onSelect={vi.fn()}
+      onAdd={vi.fn()}
+      onRemove={vi.fn()}
+      onCreateGroup={onCreateGroup}
+      onRenameGroup={onRenameGroup}
+      onDeleteGroup={onDeleteGroup}
+      onTag={onTag}
+      onUntag={onUntag}
+    />,
+  )
+  // create group (blank ignored, trimmed)
+  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+  expect(onCreateGroup).not.toHaveBeenCalled()
+  await userEvent.type(screen.getByLabelText('new group'), ' Growth ')
+  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+  expect(onCreateGroup).toHaveBeenCalledWith('Growth')
+
+  // both rows visible initially
+  expect(screen.getByRole('button', { name: 'AAPL' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'KO' })).toBeInTheDocument()
+  // filter chips live in a labelled group region
+  const filters = screen.getByRole('group', { name: 'group filters' })
+  // filter by Tech -> only AAPL; clicking again clears
+  await userEvent.click(within(filters).getByRole('button', { name: 'Tech' }))
+  expect(screen.queryByRole('button', { name: 'KO' })).not.toBeInTheDocument()
+  await userEvent.click(within(filters).getByRole('button', { name: 'Tech' }))
+  expect(screen.getByRole('button', { name: 'KO' })).toBeInTheDocument()
+  // "All" resets
+  await userEvent.click(within(filters).getByRole('button', { name: 'Dividends' }))
+  await userEvent.click(within(filters).getByRole('button', { name: 'All' }))
+  expect(screen.getByRole('button', { name: 'AAPL' })).toBeInTheDocument()
+
+  // untag AAPL from Tech (chip delete inside the AAPL row's Groups cell)
+  const aaplRow = screen.getByRole('row', { name: /AAPL/ })
+  const techChip = within(aaplRow).getByText('Tech').closest('.MuiChip-root') as HTMLElement
+  await userEvent.click(within(techChip).getByTestId('CancelIcon'))
+  expect(onUntag).toHaveBeenCalledWith('AAPL', 1)
+
+  // tag KO into Tech via the row's "+Tech" button
+  await userEvent.click(screen.getByRole('button', { name: 'tag KO into Tech' }))
+  expect(onTag).toHaveBeenCalledWith('KO', 1)
+
+  // rename Tech inline (edit button is in the filter row)
+  await userEvent.click(screen.getByRole('button', { name: 'edit Tech' }))
+  const renameField = screen.getByLabelText('rename Tech')
+  // submitting a blank name is ignored
+  await userEvent.clear(renameField)
+  await userEvent.type(renameField, '{enter}')
+  expect(onRenameGroup).not.toHaveBeenCalled()
+  await userEvent.type(renameField, 'Technology{enter}')
+  expect(onRenameGroup).toHaveBeenCalledWith(1, 'Technology')
+
+  // delete Dividends (chip delete on the filter row)
+  const divChip = within(filters).getByText('Dividends').closest('.MuiChip-root') as HTMLElement
+  await userEvent.click(within(divChip).getByTestId('CancelIcon'))
+  expect(onDeleteGroup).toHaveBeenCalledWith(2)
 })
 
 test('ThemeToggle shows the opposite theme and toggles', async () => {
@@ -301,16 +396,16 @@ test('AllStocks lists, paginates, searches, selects and watches', async () => {
   await userEvent.click(screen.getByRole('button', { name: /next page/i }))
   // numeric column → TanStack sorts desc first; page offset = 25
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, 'score', 'desc', 25, 25),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, 'score', 'desc', 25, 25, false),
   )
   await userEvent.type(screen.getByLabelText('search stocks'), 'a')
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'desc', 25, 0),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'desc', 25, 0, false),
   )
   // second click on same column toggles to asc
   await userEvent.click(screen.getByText('Graham score'))
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'asc', 25, 0),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('a', {}, 'score', 'asc', 25, 0, false),
   )
 })
 
@@ -324,7 +419,7 @@ test('AllStocks pushes a per-column filter to the backend and resets the page', 
   // move to page 2 first so we can assert the filter resets to page 0
   await userEvent.click(screen.getByRole('button', { name: /next page/i }))
   await waitFor(() =>
-    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, null, 'asc', 25, 25),
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, null, 'asc', 25, 25, false),
   )
   vi.mocked(api.listCompanies).mockClear()
   // typing in the Industry column filter triggers a server refetch with the
@@ -338,7 +433,22 @@ test('AllStocks pushes a per-column filter to the backend and resets the page', 
       'asc',
       25,
       0,
+      false,
     ),
+  )
+})
+
+test('AllStocks toggles delisted and renders a delisted chip', async () => {
+  vi.mocked(api.listCompanies).mockResolvedValue({
+    rows: [{ company: { ...company('OLD'), status: 'delisted' }, score: null }],
+    total: 1,
+  })
+  render(<AllStocks onSelect={vi.fn()} onAdd={vi.fn()} />)
+  await screen.findByRole('button', { name: 'OLD' })
+  expect(screen.getByText('Delisted')).toBeInTheDocument()
+  await userEvent.click(screen.getByLabelText('show delisted'))
+  await waitFor(() =>
+    expect(vi.mocked(api.listCompanies)).toHaveBeenCalledWith('', {}, null, 'asc', 25, 0, true),
   )
 })
 

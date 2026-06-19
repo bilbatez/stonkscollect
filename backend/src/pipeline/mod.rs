@@ -165,6 +165,23 @@ mod tests {
         }
     }
 
+    /// An EDGAR fact source whose CIK is gone (delisting signal): a 404.
+    struct EdgarMissingSource;
+    #[async_trait(?Send)]
+    impl FactSource for EdgarMissingSource {
+        fn name(&self) -> &'static str {
+            "edgar"
+        }
+        async fn fetch_facts(
+            &self,
+            _company_id: i64,
+            _target: &SourceTarget,
+            _now: DateTime<Utc>,
+        ) -> Result<Vec<FinancialFact>, CollectorError> {
+            Err(CollectorError::Http("404 Not Found".into()))
+        }
+    }
+
     /// A source that always fails, to exercise error capture.
     struct FailingSource;
     #[async_trait(?Send)]
@@ -324,7 +341,7 @@ mod tests {
         assert_eq!(seed_indices(&store).await.unwrap(), TRACKED_INDICES.len());
         // rerun is safe — still one row per index, hidden from the directory
         seed_indices(&store).await.unwrap();
-        let (_rows, total) = store.list_companies(None, &[], None, None, 100, 0).await.unwrap();
+        let (_rows, total) = store.list_companies(None, &[], None, None, 100, 0, false).await.unwrap();
         assert_eq!(total, 0);
         assert_eq!(store.all_companies().await.unwrap().len(), TRACKED_INDICES.len());
         assert_eq!(store.get_company("^GSPC").await.unwrap().unwrap().cik, "IDX-GSPC");
@@ -643,6 +660,25 @@ mod tests {
         assert_eq!(outcomes.len(), 1); // UNKNOWN skipped
         assert_eq!(outcomes[0].0, "AAPL");
         assert!(outcomes[0].1.facts_written > 0);
+    }
+
+    #[tokio::test]
+    async fn collect_marks_missing_company_delisted_but_spares_indices() {
+        let (store, id, _d) = store_with_company().await; // AAPL, no prices, status active
+        let idx = store.upsert_index("^TEST", "Test Index").await.unwrap();
+        let sources: [&dyn FactSource; 1] = [&EdgarMissingSource];
+        // EDGAR 404 + no prices ever -> AAPL becomes delisted
+        collect_tickers(
+            &store,
+            &facts_only(&sources),
+            &["AAPL".to_string(), "^TEST".to_string()],
+            &opts(fixed_now()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.company_status(id).await.unwrap(), Some("delisted".into()));
+        // the index pseudo-company (IDX- cik) is never delisted
+        assert_eq!(store.company_status(idx).await.unwrap(), Some("active".into()));
     }
 
     /// A fact source returning a fixed set of facts.

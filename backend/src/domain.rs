@@ -48,6 +48,16 @@ pub struct WatchQuote {
     pub change_pct: Option<f64>,
     pub volume: Option<i64>,
     pub as_of: Option<NaiveDate>,
+    /// Ids of the user's watch groups this company is tagged into (may be empty).
+    #[serde(default)]
+    pub group_ids: Vec<i64>,
+}
+
+/// A user-defined named group ("tag") for organizing watched companies.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WatchGroup {
+    pub id: i64,
+    pub name: String,
 }
 
 /// One holder's position in a company (e.g. an insider's reported share count
@@ -169,6 +179,8 @@ pub struct Company {
     pub website: Option<String>,
     /// Full-time headcount, when a vendor profile reports it.
     pub employees: Option<i64>,
+    /// Listing status: `"active"` (default) or `"delisted"`.
+    pub status: String,
 }
 
 /// A partial company-profile enrichment update (from EDGAR + Yahoo). Only the
@@ -367,6 +379,7 @@ mod tests {
                 description: None,
                 website: None,
                 employees: None,
+                status: "active".into(),
             },
             last_close: 100.0 * (1.0 + change_pct),
             change: 100.0 * change_pct,
@@ -419,6 +432,7 @@ mod tests {
             description: None,
             website: None,
             employees: None,
+            status: "active".into(),
         };
         assert_eq!(c.clone(), c);
         assert!(format!("{c:?}").contains("AAPL"));

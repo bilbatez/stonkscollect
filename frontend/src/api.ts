@@ -11,12 +11,14 @@ import type {
   NewsItem,
   Note,
   OwnershipHolding,
+  Me,
   Page,
   PeerRow,
   PricePoint,
   ScreenFilters,
   ScreenRow,
   SectorStats,
+  WatchGroup,
   WatchQuote,
 } from './types'
 
@@ -99,6 +101,23 @@ export async function logout(): Promise<void> {
   clearToken()
 }
 
+// --- Profile ---
+
+/** The current user's profile (email + display name). */
+export function getMe(): Promise<Me> {
+  return getJson<Me>('/auth/me')
+}
+
+/** Update the current user's email + display name. */
+export async function updateProfile(email: string, displayName: string): Promise<void> {
+  await mutate('PUT', '/auth/profile', { email, display_name: displayName })
+}
+
+/** Change the current user's password (old password verified server-side). */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  await mutate('PUT', '/auth/password', { old_password: oldPassword, new_password: newPassword })
+}
+
 // --- Watchlist ---
 
 export function getWatchlist(): Promise<Company[]> {
@@ -111,6 +130,32 @@ export async function addWatch(ticker: string): Promise<void> {
 
 export async function removeWatch(ticker: string): Promise<void> {
   await mutate('DELETE', `/api/watchlist/${encodeURIComponent(ticker)}`)
+}
+
+// --- Watch groups (tags) ---
+
+export function getGroups(): Promise<WatchGroup[]> {
+  return getJson<WatchGroup[]>('/api/watchlist/groups')
+}
+
+export async function createGroup(name: string): Promise<void> {
+  await mutate('POST', '/api/watchlist/groups', { name })
+}
+
+export async function renameGroup(id: number, name: string): Promise<void> {
+  await mutate('PUT', `/api/watchlist/groups/${id}`, { name })
+}
+
+export async function deleteGroup(id: number): Promise<void> {
+  await mutate('DELETE', `/api/watchlist/groups/${id}`)
+}
+
+export async function tagWatch(ticker: string, groupId: number): Promise<void> {
+  await mutate('POST', `/api/watchlist/${encodeURIComponent(ticker)}/groups`, { group_id: groupId })
+}
+
+export async function untagWatch(ticker: string, groupId: number): Promise<void> {
+  await mutate('DELETE', `/api/watchlist/${encodeURIComponent(ticker)}/groups/${groupId}`)
 }
 
 // --- Company data ---
@@ -169,6 +214,7 @@ export function listCompanies(
   sortDir: 'asc' | 'desc',
   limit: number,
   offset: number,
+  includeDelisted = false,
 ): Promise<Page<CompanyRow>> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (q !== '') {
@@ -183,7 +229,15 @@ export function listCompanies(
     params.set('sort_by', sortBy)
     params.set('sort_dir', sortDir)
   }
+  if (includeDelisted) {
+    params.set('include_delisted', 'true')
+  }
   return getJson<Page<CompanyRow>>(`/api/companies?${params.toString()}`)
+}
+
+/** Manually set a company's listing status (active/delisted). */
+export async function setCompanyStatus(ticker: string, status: string): Promise<void> {
+  await mutate('PUT', `/api/companies/${encodeURIComponent(ticker)}/status`, { status })
 }
 
 /** Screen companies by Graham score, ranked, with optional filters + paging. */

@@ -59,6 +59,7 @@ fn company_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Company> {
         description: r.try_get("description")?,
         website: r.try_get("website")?,
         employees: r.try_get("employees")?,
+        status: r.try_get("status")?,
     })
 }
 
@@ -121,7 +122,7 @@ const DB_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DB_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 const SELECT_COMPANY_COLS: &str =
-    "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website,c.employees";
+    "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website,c.employees,c.status";
 
 const SELECT_GRAHAM_COLS: &str =
     "g.company_id,g.score,g.passes_defensive,g.graham_number,\
@@ -800,6 +801,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_profile_and_password_updates() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "hash").await.unwrap();
+        // default display name is blank
+        assert_eq!(store.user_profile(uid).await.unwrap(), Some(("a@e.com".into(), "".into())));
+        assert_eq!(store.user_profile(999).await.unwrap(), None);
+        // update email + display name
+        store.update_profile(uid, "b@e.com", "Bob").await.unwrap();
+        assert_eq!(store.user_profile(uid).await.unwrap(), Some(("b@e.com".into(), "Bob".into())));
+        // colliding with another user's email errors
+        let other = store.create_user("c@e.com", "h").await.unwrap();
+        assert!(store.update_profile(other, "b@e.com", "X").await.is_err());
+        // password hash read + replace
+        assert_eq!(store.user_password_hash(uid).await.unwrap(), Some("hash".into()));
+        assert_eq!(store.user_password_hash(999).await.unwrap(), None);
+        store.update_password_hash(uid, "newhash").await.unwrap();
+        assert_eq!(store.user_password_hash(uid).await.unwrap(), Some("newhash".into()));
+    }
+
+    #[tokio::test]
+    async fn company_status_and_delisted_filtering() {
+        let (store, _d) = temp_store().await;
+        let id = store.insert_company(&sample_company()).await.unwrap();
+        // default status is active
+        assert_eq!(store.company_status(id).await.unwrap(), Some("active".into()));
+        assert_eq!(store.company_status(999).await.unwrap(), None);
+        // latest price date across sources: none, then the newest
+        assert_eq!(store.latest_price_date_any(id).await.unwrap(), None);
+        for (d, src) in [("2024-01-02", "fmp"), ("2024-03-01", "yahoo")] {
+            store
+                .upsert_price(&PricePoint {
+                    company_id: id,
+                    date: NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap(),
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 1.0,
+                    volume: None,
+                    source: src.into(),
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.latest_price_date_any(id).await.unwrap(), NaiveDate::from_ymd_opt(2024, 3, 1));
+        // active company shows in the directory
+        assert_eq!(store.list_companies(None, &[], None, None, 10, 0, false).await.unwrap().1, 1);
+        // mark delisted -> hidden by default, shown when included
+        store.set_company_status(id, "delisted").await.unwrap();
+        assert_eq!(store.company_status(id).await.unwrap(), Some("delisted".into()));
+        assert_eq!(store.list_companies(None, &[], None, None, 10, 0, false).await.unwrap().1, 0);
+        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0, true).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].0.status, "delisted");
+    }
+
+    #[tokio::test]
     async fn graham_scores_save_get_and_screen() {
         let (store, _d) = temp_store().await;
         let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
@@ -876,25 +933,25 @@ mod tests {
             .unwrap();
 
         // page of all, ordered by ticker; AAPL has a score, MSFT does not
-        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0).await.unwrap();
+        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(rows[0].0.ticker, "AAPL");
         assert!(rows[0].1.is_some());
         assert!(rows[1].1.is_none());
         // search by name
-        let (msrows, mstotal) = store.list_companies(Some("micro"), &[], None, None, 10, 0).await.unwrap();
+        let (msrows, mstotal) = store.list_companies(Some("micro"), &[], None, None, 10, 0, false).await.unwrap();
         assert_eq!(mstotal, 1);
         assert_eq!(msrows[0].0.ticker, "MSFT");
         // limit + offset
-        let (p2, _) = store.list_companies(None, &[], None, None, 1, 1).await.unwrap();
+        let (p2, _) = store.list_companies(None, &[], None, None, 1, 1, false).await.unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].0.ticker, "MSFT");
 
         // LIKE wildcards in query must be escaped and treated literally
-        let (pct, pct_total) = store.list_companies(Some("%"), &[], None, None, 10, 0).await.unwrap();
+        let (pct, pct_total) = store.list_companies(Some("%"), &[], None, None, 10, 0, false).await.unwrap();
         assert_eq!(pct_total, 0, "bare % should not match any company");
         assert!(pct.is_empty());
-        let (und, und_total) = store.list_companies(Some("_"), &[], None, None, 10, 0).await.unwrap();
+        let (und, und_total) = store.list_companies(Some("_"), &[], None, None, 10, 0, false).await.unwrap();
         assert_eq!(und_total, 0, "bare _ should not match any company");
         assert!(und.is_empty());
     }
@@ -922,20 +979,20 @@ mod tests {
 
         // filter by ticker
         let (rows, total) =
-            store.list_companies(None, &[("ticker", "AAA")], None, None, 10, 0).await.unwrap();
+            store.list_companies(None, &[("ticker", "AAA")], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0.ticker, "AAA");
 
         // filter by name
         let (rows, total) =
-            store.list_companies(None, &[("name", "Beta")], None, None, 10, 0).await.unwrap();
+            store.list_companies(None, &[("name", "Beta")], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows[0].0.ticker, "BBB");
 
         // filter by industry narrows to the two Software companies
         let (rows, total) =
-            store.list_companies(None, &[("industry", "Software")], None, None, 10, 0).await.unwrap();
+            store.list_companies(None, &[("industry", "Software")], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 2);
         let tickers: Vec<_> = rows.iter().map(|r| r.0.ticker.as_str()).collect();
         assert!(tickers.contains(&"AAA"));
@@ -943,7 +1000,7 @@ mod tests {
 
         // combining filters ANDs them: Software + name Gamma -> only CCC
         let (rows, total) = store
-            .list_companies(None, &[("industry", "Software"), ("name", "Gamma")], None, None, 10, 0)
+            .list_companies(None, &[("industry", "Software"), ("name", "Gamma")], None, None, 10, 0, false)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -951,12 +1008,12 @@ mod tests {
 
         // a column outside the allow-list is ignored (no narrowing)
         let (_rows, total) =
-            store.list_companies(None, &[("sector", "Technology")], None, None, 10, 0).await.unwrap();
+            store.list_companies(None, &[("sector", "Technology")], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 3);
 
         // per-column filter combines with the global q
         let (rows, total) = store
-            .list_companies(Some("AAA"), &[("industry", "Software")], None, None, 10, 0)
+            .list_companies(Some("AAA"), &[("industry", "Software")], None, None, 10, 0, false)
             .await
             .unwrap();
         assert_eq!(total, 1);
@@ -1022,17 +1079,17 @@ mod tests {
             .unwrap();
 
         // sort by score desc -> AAPL(8) first
-        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("desc"), 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("desc"), 10, 0, false).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
         assert_eq!(rows[1].0.ticker, "MSFT");
 
         // sort by score asc -> MSFT(3) first
-        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("asc"), 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("score"), Some("asc"), 10, 0, false).await.unwrap();
         assert_eq!(rows[0].0.ticker, "MSFT");
         assert_eq!(rows[1].0.ticker, "AAPL");
 
         // unknown sort_by falls back to ticker asc
-        let (rows, _) = store.list_companies(None, &[], Some("bogus"), None, 10, 0).await.unwrap();
+        let (rows, _) = store.list_companies(None, &[], Some("bogus"), None, 10, 0, false).await.unwrap();
         assert_eq!(rows[0].0.ticker, "AAPL");
     }
 
@@ -1179,6 +1236,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn watch_groups_crud_membership_and_isolation() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "h").await.unwrap();
+        let other = store.create_user("b@e.com", "h").await.unwrap();
+        let cid = store.insert_company(&sample_company()).await.unwrap();
+        store.add_watch(uid, cid).await.unwrap();
+
+        // create groups; ordered by name
+        let tech = store.create_group(uid, "Tech").await.unwrap();
+        let div = store.create_group(uid, "Dividends").await.unwrap();
+        let groups = store.list_groups(uid).await.unwrap();
+        assert_eq!(groups.iter().map(|g| g.name.clone()).collect::<Vec<_>>(), ["Dividends", "Tech"]);
+        // exercise WatchGroup derives
+        assert_eq!(groups[0].clone(), groups[0]);
+        assert!(format!("{:?}", groups[0]).contains("Dividends"));
+        // duplicate name for the same user errors; other user can reuse it
+        assert!(store.create_group(uid, "Tech").await.is_err());
+        store.create_group(other, "Tech").await.unwrap();
+
+        // tag the company into both groups (idempotent)
+        store.add_to_group(uid, tech, cid).await.unwrap();
+        store.add_to_group(uid, tech, cid).await.unwrap();
+        store.add_to_group(uid, div, cid).await.unwrap();
+        let mut members = store.watch_group_memberships(uid).await.unwrap();
+        members.sort();
+        let mut expected_members = vec![(cid, tech), (cid, div)];
+        expected_members.sort();
+        assert_eq!(members, expected_members);
+        // memberships flow into watch_quotes
+        let q = store.watch_quotes(uid).await.unwrap();
+        let mut gids = q[0].group_ids.clone();
+        gids.sort();
+        let mut expected = vec![tech, div];
+        expected.sort();
+        assert_eq!(gids, expected);
+
+        // another user can't tag into someone else's group (no-op)
+        store.add_to_group(other, tech, cid).await.unwrap();
+        assert_eq!(store.watch_group_memberships(uid).await.unwrap().len(), 2);
+
+        // untag (ownership-checked), rename, delete (cascades members)
+        store.remove_from_group(uid, div, cid).await.unwrap();
+        assert_eq!(store.watch_group_memberships(uid).await.unwrap().len(), 1);
+        store.rename_group(uid, tech, "Technology").await.unwrap();
+        assert!(store.list_groups(uid).await.unwrap().iter().any(|g| g.name == "Technology"));
+        store.delete_group(uid, tech).await.unwrap();
+        assert!(store.watch_group_memberships(uid).await.unwrap().is_empty());
+        // div remains until deleted too
+        store.delete_group(uid, div).await.unwrap();
+        assert!(store.list_groups(uid).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn source_errors_save_and_list_newest_first() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
@@ -1269,7 +1379,7 @@ mod tests {
         // collection still sees the index ...
         assert_eq!(store.all_companies().await.unwrap().len(), 2);
         // ... but the directory hides it
-        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0).await.unwrap();
+        let (rows, total) = store.list_companies(None, &[], None, None, 10, 0, false).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0.ticker, "AAPL");

@@ -143,4 +143,22 @@ impl Store {
         .await?;
         Ok(())
     }
+
+    /// Set a company's listing status (`"active"` / `"delisted"`).
+    pub async fn set_company_status(&self, company_id: i64, status: &str) -> Result<()> {
+        sqlx::query("UPDATE companies SET status=? WHERE id=?")
+            .bind(status)
+            .bind(company_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// A company's current listing status by id, if it exists.
+    pub async fn company_status(&self, company_id: i64) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar("SELECT status FROM companies WHERE id=?")
+            .bind(company_id)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
 }
