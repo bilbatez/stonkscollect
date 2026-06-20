@@ -12,6 +12,9 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/data
+    # Give the API time to drain connections and the collection loop to wind down
+    # (finish in-flight companies) before docker escalates to SIGKILL.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   frontend:

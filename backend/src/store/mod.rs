@@ -145,12 +145,15 @@ impl Default for Policy {
     }
 }
 
-/// SQLite-backed data store. Also holds the process-local login throttle and
-/// [`Policy`], since the `Arc<Store>` is the shared handle every request sees.
+/// SQLite-backed data store. Also holds the process-local login throttle,
+/// [`Policy`], and a graceful-shutdown flag, since the `Arc<Store>` is the
+/// shared handle every request and the collection loop sees.
 pub struct Store {
     pool: SqlitePool,
     login_throttle: LoginThrottle,
     policy: Policy,
+    /// Set on SIGTERM/Ctrl-C so in-flight bulk collection winds down promptly.
+    shutdown: std::sync::atomic::AtomicBool,
 }
 
 /// Map a `sort_by` token + `sort_dir` to a safe (whitelisted) ORDER BY clause for
@@ -242,7 +245,19 @@ impl Store {
             pool,
             login_throttle: LoginThrottle::new(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW),
             policy: Policy::default(),
+            shutdown: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Request graceful shutdown: in-flight bulk collection finishes the
+    /// companies already running and starts no new ones.
+    pub fn request_shutdown(&self) {
+        self.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether graceful shutdown has been requested.
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Override the runtime [`Policy`] (builder-style; call before sharing).
@@ -301,6 +316,14 @@ mod tests {
         Store::connect(&url).await.unwrap();
         // Second connect re-validates already-applied migrations without error.
         Store::connect(&url).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_flag_starts_false_and_latches() {
+        let (store, _d) = temp_store().await;
+        assert!(!store.is_shutting_down());
+        store.request_shutdown();
+        assert!(store.is_shutting_down());
     }
 
     #[tokio::test]

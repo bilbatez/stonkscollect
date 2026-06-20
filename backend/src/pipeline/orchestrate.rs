@@ -27,6 +27,12 @@ pub async fn collect_all(
     let counter = std::sync::atomic::AtomicUsize::new(0);
 
     let outcomes = futures::stream::iter(companies)
+        // Graceful shutdown: stop launching new companies; in-flight ones
+        // (already buffered) finish, then the stream completes.
+        .take_while(|_| {
+            let go = !store.is_shutting_down();
+            async move { go }
+        })
         .map(|company| {
             let counter = &counter;
             async move {
@@ -133,6 +139,10 @@ pub async fn collect_tickers(
 ) -> Result<Vec<(String, IngestReport)>, StoreError> {
     let mut outcomes = Vec::new();
     for ticker in tickers {
+        // Graceful shutdown: stop before starting the next ticker.
+        if store.is_shutting_down() {
+            break;
+        }
         let Some(company) = store.get_company(ticker).await? else {
             continue;
         };

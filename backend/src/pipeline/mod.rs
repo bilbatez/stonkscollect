@@ -419,6 +419,25 @@ mod tests {
         assert_eq!(summary.failed, 1);
     }
 
+    #[tokio::test]
+    async fn collect_winds_down_when_shutting_down() {
+        let (store, _id, _d) = store_with_company().await; // AAPL exists
+        store.request_shutdown();
+        let sources: [&dyn FactSource; 0] = [];
+        // collect_all launches no companies once shutdown is requested.
+        let summary = collect_all(&store, &facts_only(&sources), &opts(fixed_now()), &NoProgress)
+            .await
+            .unwrap();
+        assert_eq!(summary.companies, 0);
+        assert_eq!(summary.failed, 0);
+        // collect_tickers stops before the first ticker too.
+        let outcomes =
+            collect_tickers(&store, &facts_only(&sources), &["AAPL".to_string()], &opts(fixed_now()))
+                .await
+                .unwrap();
+        assert!(outcomes.is_empty());
+    }
+
     #[derive(Default)]
     struct CountProgress {
         start_calls: std::sync::atomic::AtomicUsize,
@@ -908,6 +927,34 @@ mod tests {
         let blocked = dir.path().join("blocked");
         std::fs::write(&blocked, "file in the way").unwrap();
         assert!(export_all_parquet(&store, &blocked).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn bulk_passes_wind_down_when_shutting_down() {
+        let (store, id, dir) = store_with_company().await;
+        store
+            .save_prices(&[PricePoint {
+                company_id: id,
+                date: NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                open: None,
+                high: None,
+                low: None,
+                close: 1.0,
+                volume: None,
+                source: "fmp".into(),
+            }])
+            .await
+            .unwrap();
+        // Graceful shutdown requested -> bulk passes launch no companies.
+        store.request_shutdown();
+        let price = FmpCollector::new(FakeHttp::new(FMP_PRICES), "K".into());
+        let news = FinnhubCollector::new(FakeHttp::new(NEWS_FINNHUB), "K".into());
+        let ps: [&dyn PriceSource; 1] = [&price];
+        let ns: [&dyn NewsSource; 1] = [&news];
+        assert_eq!(collect_prices_all(&store, &ps, fixed_now(), 4).await.unwrap().companies, 0);
+        assert_eq!(collect_news_all(&store, &ns, fixed_now(), 4).await.unwrap().companies, 0);
+        let out = dir.path().join("parquet");
+        assert_eq!(export_all_parquet(&store, &out).await.unwrap().companies, 0);
     }
 
     #[tokio::test]

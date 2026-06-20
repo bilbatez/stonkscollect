@@ -117,6 +117,10 @@ pub async fn collect_prices_all(
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
     let outcomes = futures::stream::iter(companies)
+        .take_while(|_| {
+            let go = !store.is_shutting_down();
+            async move { go }
+        })
         .map(|c| async move {
             collect_prices_for(store, sources, c.id, &target_of(&c), now)
                 .await
@@ -138,6 +142,10 @@ pub async fn collect_news_all(
 ) -> Result<CollectSummary, StoreError> {
     let companies = store.all_companies().await?;
     let outcomes = futures::stream::iter(companies)
+        .take_while(|_| {
+            let go = !store.is_shutting_down();
+            async move { go }
+        })
         .map(|c| async move {
             collect_news_for(store, sources, c.id, &target_of(&c), now)
                 .await
@@ -175,6 +183,10 @@ pub async fn export_all_parquet(
     let companies = store.all_companies().await?;
     let mut s = CollectSummary::default();
     for c in &companies {
+        // Graceful shutdown: stop before exporting the next company.
+        if store.is_shutting_down() {
+            break;
+        }
         let filename = format!("{}.parquet", c.ticker.replace('/', "-"));
         match store.export_prices_parquet(c.id, &dir.join(filename)).await {
             Ok(()) => s.companies += 1,
