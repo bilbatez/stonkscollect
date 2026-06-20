@@ -22,7 +22,7 @@ pub async fn recompute_graham(
 ) -> Result<(), StoreError> {
     let facts = store.get_facts(company_id).await?;
     let price = store.latest_price(company_id).await?;
-    let a = graham::assess(&facts, price, min_revenue);
+    let a = graham::assess(&facts, price, &graham::GrahamConfig { min_revenue, ..Default::default() });
     store
         .save_graham_score(&GrahamScore {
             company_id,

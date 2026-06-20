@@ -107,15 +107,13 @@ async fn main() {
     let command = Cli::parse().command;
     let cfg = Config::parse(|k| std::env::var(k).ok());
     // Shared Arc: axum state, the scheduler loop, and the collectors' HTTP
-    // validator cache all hold the same store.
-    let store = Arc::new(
-        Store::connect(&cfg.database_url)
-            .await
-            .expect("open database")
-            .with_policy(stonkscollect_backend::store::Policy {
-                graham_min_revenue: cfg.graham_min_revenue,
-            }),
-    );
+    // validator cache all hold the same store. A configured Turso URL takes
+    // precedence over the local database_url.
+    let (db_url, db_token) = match &cfg.turso_database_url {
+        Some(url) => (url.as_str(), cfg.turso_auth_token.as_deref()),
+        None => (cfg.database_url.as_str(), None),
+    };
+    let store = Arc::new(Store::open(db_url, db_token).await.expect("open database"));
 
     match command {
         Command::Serve => serve(store, &cfg).await,
@@ -127,6 +125,9 @@ async fn main() {
 }
 
 async fn serve(store: Arc<Store>, cfg: &Config) {
+    // Ensure the market indices exist (idempotent) so /api/markets/summary works
+    // even if `bootstrap` wasn't run with index seeding.
+    let _ = pipeline::seed_indices(&store).await;
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
@@ -226,6 +227,9 @@ async fn scheduler_loop(
         finnhub = FinnhubCollector::new(http_client(&cfg.user_agent, &mk()), key.clone());
         news_sources.push(&finnhub);
     }
+    // EDGAR submissions + Yahoo assetProfile carry sector/industry/website.
+    let yahoo_profile = YahooProfileCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
+    let profile_sources: Vec<&dyn ProfileSource> = vec![&edgar, &yahoo_profile];
 
     while let Some((tier, at)) = scheduler::next_tier(chrono::Utc::now()) {
         if *shutdown.borrow() {
@@ -246,7 +250,7 @@ async fn scheduler_loop(
         let result = scheduler::run_tracked(store, label, None, fired, || async {
             match tier {
                 Tier::Fundamentals => {
-                    collect_fundamentals(store, cfg, &fact_sources, &price_sources, fired).await
+                    collect_fundamentals(store, cfg, &fact_sources, &price_sources, &profile_sources, fired).await
                 }
                 Tier::Price => collect_prices(store, cfg, &price_sources, fired).await,
                 Tier::News => collect_news(store, cfg, &news_sources, fired).await,
@@ -264,14 +268,19 @@ async fn collect_fundamentals(
     cfg: &Config,
     sources: &[&dyn FactSource],
     price_sources: &[&dyn PriceSource],
+    profile_sources: &[&dyn ProfileSource],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<pipeline::CollectSummary, stonkscollect_backend::store::StoreError> {
     let cutoff = cfg
         .collect_max_age_hrs
         .map(|h| now - chrono::Duration::hours(h as i64));
     // News is handled by the dedicated News tier in serve.
-    let collect_sources =
-        pipeline::CollectSources { facts: sources, prices: price_sources, news: &[] };
+    let collect_sources = pipeline::CollectSources {
+        facts: sources,
+        prices: price_sources,
+        news: &[],
+        profiles: profile_sources,
+    };
     let options = collect_options(cfg, now, cutoff);
     // Prices, ratios + Graham scores are recomputed per company inside collect_*
     // (only for companies actually collected this pass), not the whole universe.
@@ -460,10 +469,13 @@ async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all
     }
 
     let now = chrono::Utc::now();
+    let yahoo_profile = YahooProfileCollector::new(http_client(&cfg.user_agent, &yahoo_lim));
+    let profile_sources: Vec<&dyn ProfileSource> = vec![&edgar, &yahoo_profile];
     let collect_sources = pipeline::CollectSources {
         facts: &sources,
         prices: &price_sources,
         news: &news_sources,
+        profiles: &profile_sources,
     };
     // One-shot CLI always collects (no freshness cutoff).
     let options = collect_options(cfg, now, None);

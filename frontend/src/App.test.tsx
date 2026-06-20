@@ -51,6 +51,11 @@ beforeEach(() => {
   localStorage.clear()
   mocked.getToken.mockReturnValue(null)
   mocked.getMe.mockResolvedValue({ email: 'u@e.com', display_name: '' })
+  mocked.getSettings.mockResolvedValue({
+    theme: 'system',
+    graham: { min_revenue: 5e8, pe_max: 15, pb_max: 1.5, pe_pb_max: 22.5, current_ratio_min: 2, eps_growth_min: 0.33 },
+  })
+  mocked.updateSettings.mockResolvedValue()
   mocked.getGroups.mockResolvedValue([])
   mocked.getWatchlistQuotes.mockResolvedValue([])
   mocked.getMarketSummary.mockResolvedValue([])
@@ -100,7 +105,7 @@ test('home trending strip opens a company when a gainer chip is clicked', async 
   await waitFor(() => expect(screen.getByRole('heading', { name: /aapl inc/i })).toBeInTheDocument())
 })
 
-test('home All Stocks tab opens a company; theme toggles; logout returns to auth', async () => {
+test('home All Stocks tab opens a company; logout returns to auth', async () => {
   mocked.getToken.mockReturnValue('tok')
   mocked.loadCompanyData.mockResolvedValue(data('AAPL'))
   mocked.logout.mockResolvedValue()
@@ -127,13 +132,6 @@ test('home All Stocks tab opens a company; theme toggles; logout returns to auth
   // tabs stay visible; "Back to list" returns to All Stocks without clicking Home
   await userEvent.click(screen.getByRole('button', { name: /back to list/i }))
   expect(await screen.findByLabelText('search stocks')).toBeInTheDocument()
-
-  // dark is the default; toggle offers Light first
-  expect(document.documentElement.dataset.theme).toBe('dark')
-  await userEvent.click(screen.getByRole('button', { name: /light/i }))
-  expect(document.documentElement.dataset.theme).toBe('light')
-  await userEvent.click(screen.getByRole('button', { name: /dark/i }))
-  expect(document.documentElement.dataset.theme).toBe('dark')
 
   // back home, then logout
   await userEvent.click(screen.getByRole('button', { name: /home/i }))
@@ -307,4 +305,53 @@ test('Movers nav shows the three buckets and a row opens the company', async () 
   expect(await screen.findByText('Top gainers')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'UP' }))
   await waitFor(() => expect(screen.getByRole('heading', { name: /up inc/i })).toBeInTheDocument())
+})
+
+test('theme follows the OS when preference is system and reacts to scheme changes', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  let handler: (() => void) | undefined
+  const mql = {
+    matches: true,
+    media: '',
+    onchange: null,
+    addEventListener: (_e: string, h: () => void) => {
+      handler = h
+    },
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }
+  const prev = globalThis.matchMedia
+  globalThis.matchMedia = (() => mql) as unknown as typeof window.matchMedia
+  try {
+    render(<App />)
+    await screen.findByLabelText('search stocks')
+    expect(document.documentElement.dataset.theme).toBe('dark') // system + OS dark
+    mql.matches = false
+    handler?.()
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe('light'))
+  } finally {
+    globalThis.matchMedia = prev
+  }
+})
+
+test('explicit dark preference from settings overrides the OS scheme', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  localStorage.setItem('stonks_theme', 'dark')
+  mocked.getSettings.mockResolvedValue({
+    theme: 'dark',
+    graham: { min_revenue: 5e8, pe_max: 15, pb_max: 1.5, pe_pb_max: 22.5, current_ratio_min: 2, eps_growth_min: 0.33 },
+  })
+  render(<App />)
+  await screen.findByLabelText('search stocks')
+  await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
+})
+
+test('a failed settings load leaves the stored theme intact', async () => {
+  mocked.getToken.mockReturnValue('tok')
+  mocked.getSettings.mockRejectedValue(new Error('boom'))
+  render(<App />)
+  await screen.findByLabelText('search stocks')
+  expect(document.documentElement.dataset.theme).toBe('light') // system -> light (matchMedia false)
 })

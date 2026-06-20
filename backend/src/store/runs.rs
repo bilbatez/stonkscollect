@@ -1,5 +1,4 @@
 use super::*;
-use sqlx::Row;
 
 impl Store {
     /// Record the start of a collection run, returning its id.
@@ -9,13 +8,13 @@ impl Store {
         scope: Option<&str>,
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        let id: i64 = sqlx::query_scalar(
+        let id: i64 = query_scalar(
             "INSERT INTO collection_runs (source,scope,started_at,status) VALUES (?,?,?,'running') RETURNING id",
         )
         .bind(source)
         .bind(scope)
         .bind(started_at)
-        .fetch_one(&self.pool)
+        .fetch_one(&self.db)
         .await?;
         Ok(id)
     }
@@ -28,14 +27,14 @@ impl Store {
         finished_at: chrono::DateTime<chrono::Utc>,
         error: Option<&str>,
     ) -> Result<()> {
-        sqlx::query(
+        query(
             "UPDATE collection_runs SET status=?, finished_at=?, error=? WHERE id=?",
         )
         .bind(status)
         .bind(finished_at)
         .bind(error)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&self.db)
         .await?;
         Ok(())
     }
@@ -50,16 +49,16 @@ impl Store {
         if errors.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
+        let tx = self.db.begin().await?;
         for (source, message) in errors {
-            sqlx::query(
+            query(
                 "INSERT INTO source_errors (company_id,source,message,occurred_at) VALUES (?,?,?,?)",
             )
             .bind(company_id)
             .bind(source)
             .bind(message)
             .bind(occurred_at)
-            .execute(&mut *tx)
+            .execute(&tx)
             .await?;
         }
         tx.commit().await?;
@@ -72,13 +71,13 @@ impl Store {
         company_id: i64,
         limit: i64,
     ) -> Result<Vec<SourceError>> {
-        let rows = sqlx::query(
+        let rows = query(
             "SELECT source,message,occurred_at FROM source_errors \
              WHERE company_id=? ORDER BY occurred_at DESC, id DESC LIMIT ?",
         )
         .bind(company_id)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.db)
         .await?;
         rows.into_iter()
             .map(|r| {
@@ -93,9 +92,9 @@ impl Store {
 
     /// Stored HTTP cache validators for `url`, if any.
     pub async fn http_validators(&self, url: &str) -> Result<Option<Validators>> {
-        let row = sqlx::query("SELECT etag,last_modified FROM http_cache WHERE url=?")
+        let row = query("SELECT etag,last_modified FROM http_cache WHERE url=?")
             .bind(url)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.db)
             .await?;
         row.map(|r| {
             Ok(Validators {
@@ -108,7 +107,7 @@ impl Store {
 
     /// Upsert the cache validators a fresh response for `url` arrived with.
     pub async fn save_http_validators(&self, url: &str, v: &Validators) -> Result<()> {
-        sqlx::query(
+        query(
             "INSERT INTO http_cache (url,etag,last_modified) VALUES (?,?,?) \
              ON CONFLICT(url) DO UPDATE SET etag=excluded.etag, \
              last_modified=excluded.last_modified, fetched_at=datetime('now')",
@@ -116,19 +115,19 @@ impl Store {
         .bind(url)
         .bind(&v.etag)
         .bind(&v.last_modified)
-        .execute(&self.pool)
+        .execute(&self.db)
         .await?;
         Ok(())
     }
 
     /// List the most recent collection runs, newest first.
     pub async fn recent_runs(&self, limit: i64) -> Result<Vec<CollectionRun>> {
-        let rows = sqlx::query(
+        let rows = query(
             "SELECT id,source,scope,started_at,finished_at,status,error FROM collection_runs \
              ORDER BY id DESC LIMIT ?",
         )
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.db)
         .await?;
         rows.into_iter()
             .map(|r| {

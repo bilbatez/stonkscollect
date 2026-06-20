@@ -4,6 +4,11 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub database_url: String,
+    /// Remote Turso database URL (`libsql://…`). When set, used instead of the
+    /// local `database_url`; needs `turso_auth_token`.
+    pub turso_database_url: Option<String>,
+    /// Auth token for the remote Turso database.
+    pub turso_auth_token: Option<String>,
     pub port: u16,
     pub user_agent: String,
     pub fmp_api_key: Option<String>,
@@ -33,6 +38,8 @@ impl Config {
         Config {
             database_url: get("DATABASE_URL")
                 .unwrap_or_else(|| "sqlite:///data/stonks.db".to_string()),
+            turso_database_url: get("TURSO_DATABASE_URL"),
+            turso_auth_token: get("TURSO_AUTH_TOKEN"),
             port: get("PORT").and_then(|p| p.parse().ok()).unwrap_or(8080),
             user_agent: get("USER_AGENT")
                 .unwrap_or_else(|| "stonkscollect (contact@example.com)".to_string()),
@@ -101,8 +108,12 @@ mod tests {
             ("RECONCILE_THRESHOLD", "0.1"),
             ("GRAHAM_MIN_REVENUE", "1000000000"),
             ("PARQUET_DIR", "/tmp/pq"),
+            ("TURSO_DATABASE_URL", "libsql://db.turso.io"),
+            ("TURSO_AUTH_TOKEN", "tok"),
         ]));
         assert_eq!(cfg.database_url, "sqlite://x.db");
+        assert_eq!(cfg.turso_database_url, Some("libsql://db.turso.io".into()));
+        assert_eq!(cfg.turso_auth_token, Some("tok".into()));
         assert_eq!(cfg.port, 9000);
         assert_eq!(cfg.user_agent, "me");
         assert_eq!(cfg.fmp_api_key, Some("fk".into()));
@@ -122,6 +133,8 @@ mod tests {
     fn applies_defaults_when_keys_absent() {
         let cfg = Config::parse(|_| None);
         assert_eq!(cfg.database_url, "sqlite:///data/stonks.db");
+        assert_eq!(cfg.turso_database_url, None);
+        assert_eq!(cfg.turso_auth_token, None);
         assert_eq!(cfg.port, 8080);
         assert!(cfg.user_agent.contains("stonkscollect"));
         assert_eq!(cfg.fmp_api_key, None);

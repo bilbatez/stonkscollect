@@ -3,8 +3,11 @@ services:
     build: ./backend
     environment:
       PORT: "8080"
-      # SQLite file lives on the shared volume so it is easy to back up / export.
+      # Local libSQL file on the shared volume (used when TURSO_DATABASE_URL is unset).
       DATABASE_URL: "sqlite:///data/stonks.db"
+      # Set these (e.g. in a .env beside the compose file) to use remote Turso.
+      TURSO_DATABASE_URL: "${TURSO_DATABASE_URL:-}"
+      TURSO_AUTH_TOKEN: "${TURSO_AUTH_TOKEN:-}"
       RUST_LOG: "info"
     # Published so the API is reachable directly at localhost:8080 (the frontend
     # nginx also reaches it internally via the `backend` service name).

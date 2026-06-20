@@ -113,6 +113,11 @@ async fn collect_company(
             .await
             .unwrap_or(0);
     let _ = collect_news_for(store, sources.news, company.id, &target, options.now).await;
+    // Fill in sector/industry/website once (best-effort) so the directory and
+    // sectors page populate without a separate `enrich` run.
+    if company.sector.is_none() && !sources.profiles.is_empty() {
+        let _ = super::enrich::enrich_company(store, sources.profiles, company).await;
+    }
     let _ = store.mark_collected(company.id, options.now).await;
     let _ = recompute_metrics(store, company.id, options.min_revenue, options.now).await;
     // Index pseudo-companies (synthetic `IDX-` CIK) have no EDGAR facts; never

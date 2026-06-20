@@ -1,0 +1,5 @@
+# libSQL/Turso spawns background threads per database handle; running hundreds
+# of #[tokio::test] runtimes in parallel exhausts them and aborts. Pin the test
+# harness to one thread (applies to `cargo test`, `make test`, CI, and coverage).
+[env]
+RUST_TEST_THREADS = "1"

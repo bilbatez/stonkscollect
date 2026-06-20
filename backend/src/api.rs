@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth;
 use crate::domain::{
     select_movers, CollectionRun, Company, Discrepancy, FinancialFact, GrahamScore, Movers,
-    NewsItem, PricePoint, Ratio, ShareCount, WatchGroup,
+    NewsItem, PricePoint, Ratio, ShareCount, UserSettings, WatchGroup,
 };
 use crate::graham;
 use crate::store::{ScreenFilter, Store, StoreError};
@@ -79,6 +79,7 @@ pub fn routes() -> Router<Arc<Store>> {
         .route("/auth/me", get(me))
         .route("/auth/profile", axum::routing::put(update_profile))
         .route("/auth/password", axum::routing::put(change_password))
+        .route("/auth/settings", get(user_settings).put(update_settings))
         .route("/api/watchlist", get(watchlist).post(watch_add))
         .route("/api/watchlist/quotes", get(watchlist_quotes))
         .route("/api/watchlist/groups", get(list_groups).post(create_group))
@@ -219,12 +220,14 @@ async fn set_status(
 async fn graham_assessment(
     State(store): State<Arc<Store>>,
     Path(ticker): Path<String>,
-    _user: AuthUser,
+    user: AuthUser,
 ) -> ApiResult<graham::GrahamAssessment> {
     let c = resolve(&store, &ticker).await?;
     let facts = store.get_facts(c.id).await.map_err(internal)?;
     let price = store.latest_price(c.id).await.map_err(internal)?;
-    Ok(Json(graham::assess(&facts, price, store.policy().graham_min_revenue)))
+    // Assess against the requesting user's configured Graham thresholds.
+    let cfg = store.get_settings(user.user_id).await.map_err(internal)?.graham;
+    Ok(Json(graham::assess(&facts, price, &cfg)))
 }
 
 #[derive(Serialize)]
@@ -501,6 +504,21 @@ async fn change_password(
         .update_password_hash(user.user_id, &auth::hash_password(&p.new_password))
         .await
         .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The authenticated user's settings (theme + Graham thresholds).
+async fn user_settings(State(store): State<Arc<Store>>, user: AuthUser) -> ApiResult<UserSettings> {
+    Ok(Json(store.get_settings(user.user_id).await.map_err(internal)?))
+}
+
+/// Replace the authenticated user's settings.
+async fn update_settings(
+    State(store): State<Arc<Store>>,
+    user: AuthUser,
+    Json(s): Json<UserSettings>,
+) -> Result<StatusCode, ApiError> {
+    store.save_settings(user.user_id, &s).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -862,7 +880,6 @@ mod tests {
 
     #[tokio::test]
     async fn graham_endpoint_uses_configured_min_revenue() {
-        use crate::store::Policy;
         let (store, _dir) = crate::testutil::temp_store().await;
         let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let id = store
@@ -894,8 +911,18 @@ mod tests {
         store.create_session(&token_hash, uid, Utc::now() + Duration::days(1)).await.unwrap();
         // A min-revenue below the seeded 1.0 revenue makes "Adequate size" pass;
         // the default (500M) would fail it. Passing proves the endpoint reads the
-        // configured policy rather than graham::DEFAULT_MIN_REVENUE.
-        let store = Arc::new(store.with_policy(Policy { graham_min_revenue: 0.5 }));
+        // user's saved Graham config rather than graham::DEFAULT_MIN_REVENUE.
+        store
+            .save_settings(
+                uid,
+                &UserSettings {
+                    theme: "system".into(),
+                    graham: crate::graham::GrahamConfig { min_revenue: 0.5, ..Default::default() },
+                },
+            )
+            .await
+            .unwrap();
+        let store = Arc::new(store);
         let (status, body) = get(store, &token, "/api/companies/AAPL/graham").await;
         assert_eq!(status, StatusCode::OK);
         let size = body["criteria"]
@@ -905,6 +932,29 @@ mod tests {
             .find(|c| c["name"] == "Adequate size")
             .unwrap();
         assert_eq!(size["passed"], true);
+    }
+
+    #[tokio::test]
+    async fn settings_endpoints_round_trip_theme_and_graham() {
+        let (store, _d, t) = seeded().await;
+        // defaults
+        let (status, json) = get(store.clone(), &t, "/auth/settings").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["theme"], "system");
+        assert_eq!(json["graham"]["pe_max"], 15.0);
+        // update theme + a Graham knob
+        let body = json!({
+            "theme": "dark",
+            "graham": {
+                "min_revenue": 1.0, "pe_max": 20.0, "pb_max": 1.5,
+                "pe_pb_max": 22.5, "current_ratio_min": 2.0, "eps_growth_min": 0.33
+            }
+        });
+        let (status, _) = send(store.clone(), req("PUT", "/auth/settings", Some(&t), Some(body))).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_s, json) = get(store, &t, "/auth/settings").await;
+        assert_eq!(json["theme"], "dark");
+        assert_eq!(json["graham"]["pe_max"], 20.0);
     }
 
     #[tokio::test]

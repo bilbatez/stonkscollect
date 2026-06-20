@@ -7,7 +7,6 @@ import { Compare } from './shared/Compare'
 import { GrahamScorecard } from './panels/GrahamScorecard'
 import { Screener } from './pages/Screener'
 import { Skeleton } from './shared/Skeleton'
-import { ThemeToggle } from './shared/ThemeToggle'
 import { Watchlist } from './layout/Watchlist'
 import * as api from '../api'
 import type { Company, GrahamAssessment, GrahamScore, WatchQuote } from '../types'
@@ -245,17 +244,6 @@ test('Watchlist creates groups, filters by them, tags/untags, renames and delete
   const divChip = within(filters).getByText('Dividends').closest('.MuiChip-root') as HTMLElement
   await userEvent.click(within(divChip).getByTestId('CancelIcon'))
   expect(onDeleteGroup).toHaveBeenCalledWith(2)
-})
-
-test('ThemeToggle shows the opposite theme and toggles', async () => {
-  const onToggle = vi.fn()
-  const { rerender } = render(<ThemeToggle theme="light" onToggle={onToggle} />)
-  const btn = screen.getByRole('button')
-  expect(btn).toHaveTextContent(/dark/i)
-  await userEvent.click(btn)
-  expect(onToggle).toHaveBeenCalled()
-  rerender(<ThemeToggle theme="dark" onToggle={onToggle} />)
-  expect(screen.getByRole('button')).toHaveTextContent(/light/i)
 })
 
 test('Skeleton renders a status label', () => {

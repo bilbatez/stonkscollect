@@ -24,6 +24,25 @@ export interface WatchGroup {
   name: string
 }
 
+/** UI theme preference; `system` follows the OS color scheme. */
+export type ThemePref = 'system' | 'light' | 'dark'
+
+/** User-tunable Graham defensive thresholds. */
+export interface GrahamConfig {
+  min_revenue: number
+  pe_max: number
+  pb_max: number
+  pe_pb_max: number
+  current_ratio_min: number
+  eps_growth_min: number
+}
+
+/** A user's saved settings: theme + Graham thresholds. */
+export interface UserSettings {
+  theme: ThemePref
+  graham: GrahamConfig
+}
+
 export interface PricePoint {
   company_id: number
   date: string

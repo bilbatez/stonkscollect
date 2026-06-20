@@ -26,6 +26,8 @@ import {
   saveNote,
   screen,
   setCompanyStatus,
+  getSettings,
+  updateSettings,
   setToken,
   signup,
   tagWatch,
@@ -308,4 +310,17 @@ test('listCompanies appends include_delisted and setCompanyStatus puts the statu
   expect(calls[1].url).toBe('/api/companies/AAPL/status')
   expect(calls[1].init.method).toBe('PUT')
   expect(JSON.parse(calls[1].init.body as string)).toEqual({ status: 'delisted' })
+})
+
+test('getSettings and updateSettings hit /auth/settings', async () => {
+  mockFetch(() => ({ json: async () => ({ theme: 'dark', graham: {} }) }))
+  await getSettings()
+  expect(calls[0].url).toBe('/auth/settings')
+  await updateSettings({
+    theme: 'dark',
+    graham: { min_revenue: 1, pe_max: 15, pb_max: 1.5, pe_pb_max: 22.5, current_ratio_min: 2, eps_growth_min: 0.33 },
+  })
+  expect(calls[1].url).toBe('/auth/settings')
+  expect(calls[1].init.method).toBe('PUT')
+  expect(JSON.parse(calls[1].init.body as string).theme).toBe('dark')
 })

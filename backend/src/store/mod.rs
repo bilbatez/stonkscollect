@@ -1,26 +1,25 @@
-//! SQLite-backed persistence + Parquet export. All SQL lives here.
+//! libSQL/Turso-backed persistence + Parquet export. All SQL lives here.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
-use sqlx::{Row, SqlitePool};
 
 use crate::domain::*;
 use crate::net::{LoginThrottle, Validators, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW};
+use crate::params;
+use db::{query, query_scalar, Db, Row, P};
+
+pub(crate) mod db;
 
 /// Errors returned by the store.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
-    Db(#[from] sqlx::Error),
+    Db(#[from] db::DbError),
     #[error("invalid stored value: {0}")]
     Decode(String),
     #[error("{0}")]
@@ -34,46 +33,39 @@ fn other<E: std::fmt::Display>(e: E) -> StoreError {
 
 type Result<T> = std::result::Result<T, StoreError>;
 
-type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
-
-/// Bind a [`Ratio`]'s columns onto a ratios upsert query (order matches `RATIO_UPSERT_SQL`).
-fn bind_ratio<'q>(q: SqliteQuery<'q>, r: &'q Ratio) -> SqliteQuery<'q> {
-    q.bind(r.company_id)
-        .bind(r.period_end)
-        .bind(r.period_type.as_str())
-        .bind(&r.metric)
-        .bind(r.value)
-        .bind(r.computed_at)
+/// A [`Ratio`]'s bound columns (order matches `RATIO_UPSERT_SQL`).
+fn ratio_params(r: &Ratio) -> Vec<P> {
+    params![r.company_id, r.period_end, r.period_type.as_str(), &r.metric, r.value, r.computed_at]
 }
 
 /// Decode the `companies` columns of a row into a [`Company`].
-fn company_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Company> {
+fn company_from_row(r: &Row) -> Result<Company> {
     Ok(Company {
-        id: r.try_get("id")?,
-        cik: r.try_get("cik")?,
-        ticker: r.try_get("ticker")?,
-        name: r.try_get("name")?,
-        exchange: r.try_get("exchange")?,
-        sector: r.try_get("sector")?,
-        industry: r.try_get("industry")?,
-        description: r.try_get("description")?,
-        website: r.try_get("website")?,
-        employees: r.try_get("employees")?,
-        status: r.try_get("status")?,
+        id: r.get("id")?,
+        cik: r.get("cik")?,
+        ticker: r.get("ticker")?,
+        name: r.get("name")?,
+        exchange: r.get("exchange")?,
+        sector: r.get("sector")?,
+        industry: r.get("industry")?,
+        description: r.get("description")?,
+        website: r.get("website")?,
+        employees: r.get("employees")?,
+        status: r.get("status")?,
     })
 }
 
 /// Decode a ratios row (incl. its period_type token) into a [`Ratio`].
-fn ratio_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ratio> {
-    let pt: String = r.try_get("period_type")?;
+fn ratio_from_row(r: &Row) -> Result<Ratio> {
+    let pt: String = r.get("period_type")?;
     Ok(Ratio {
-        company_id: r.try_get("company_id")?,
-        period_end: r.try_get("period_end")?,
+        company_id: r.get("company_id")?,
+        period_end: r.get("period_end")?,
         period_type: PeriodType::parse(&pt)
             .ok_or_else(|| StoreError::Decode(format!("bad period_type: {pt}")))?,
-        metric: r.try_get("metric")?,
-        value: r.try_get("value")?,
-        computed_at: r.try_get("computed_at")?,
+        metric: r.get("metric")?,
+        value: r.get("value")?,
+        computed_at: r.get("computed_at")?,
     })
 }
 
@@ -115,11 +107,37 @@ const RATIO_UPSERT_SQL: &str = "INSERT INTO ratios (company_id,period_end,period
      VALUES (?,?,?,?,?,?) \
      ON CONFLICT(company_id,period_end,period_type,metric) DO UPDATE SET value=excluded.value, computed_at=excluded.computed_at";
 
-const DB_POOL_MAX_CONNECTIONS: u32 = 16;
-/// How long SQLite retries a locked DB before erroring (concurrent writers).
-const DB_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-/// How long a caller waits for a free pooled connection before erroring.
-const DB_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// SQL migrations embedded into the binary, applied in filename order.
+static MIGRATIONS: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/migrations");
+
+/// Apply any not-yet-applied `migrations/*.sql` (idempotent; tracked in
+/// `_migrations`). Replaces the `sqlx::migrate!` macro for libSQL.
+async fn run_migrations(db: &Db) -> Result<()> {
+    db.batch("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)").await?;
+    let mut files: Vec<_> = MIGRATIONS.files().collect();
+    files.sort_by_key(|f| f.path().to_path_buf());
+    for f in files {
+        let Some(name) = f.path().file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".sql") {
+            continue;
+        }
+        let applied: Option<String> = db
+            .scalar_opt("SELECT name FROM _migrations WHERE name=?", params![name])
+            .await?;
+        if applied.is_some() {
+            continue;
+        }
+        let sql = f
+            .contents_utf8()
+            .ok_or_else(|| StoreError::Other(format!("non-utf8 migration {name}")))?;
+        db.batch(sql).await?;
+        db.execute("INSERT INTO _migrations (name) VALUES (?)", params![name]).await?;
+    }
+    Ok(())
+}
 
 const SELECT_COMPANY_COLS: &str =
     "c.id,c.cik,c.ticker,c.name,c.exchange,c.sector,c.industry,c.description,c.website,c.employees,c.status";
@@ -128,30 +146,13 @@ const SELECT_GRAHAM_COLS: &str =
     "g.company_id,g.score,g.passes_defensive,g.graham_number,\
      g.ncav_per_share,g.margin_of_safety,g.net_net,g.computed_at";
 
-/// Process-local, config-derived policy knobs the API consults at request time.
-///
-/// Held by [`Store`] (the shared `Arc<Store>`) so handlers can read configured
-/// values instead of hard-coded constants. Defaults match the historical
-/// hard-coded behavior; production overrides via [`Store::with_policy`].
-#[derive(Clone)]
-pub struct Policy {
-    /// Graham "adequate size" revenue floor used by the assessment endpoint.
-    pub graham_min_revenue: f64,
-}
-
-impl Default for Policy {
-    fn default() -> Self {
-        Self { graham_min_revenue: crate::graham::DEFAULT_MIN_REVENUE }
-    }
-}
-
-/// SQLite-backed data store. Also holds the process-local login throttle,
-/// [`Policy`], and a graceful-shutdown flag, since the `Arc<Store>` is the
-/// shared handle every request and the collection loop sees.
+/// libSQL/Turso-backed data store. Also holds the process-local login throttle
+/// and a graceful-shutdown flag, since the `Arc<Store>` is the shared handle
+/// every request and the collection loop sees. (Per-user Graham thresholds now
+/// live in `user_settings`, not a global policy.)
 pub struct Store {
-    pool: SqlitePool,
+    db: Db,
     login_throttle: LoginThrottle,
-    policy: Policy,
     /// Set on SIGTERM/Ctrl-C so in-flight bulk collection winds down promptly.
     shutdown: std::sync::atomic::AtomicBool,
 }
@@ -226,25 +227,26 @@ impl Store {
     /// WAL + a busy timeout let the scheduler's concurrent collectors write
     /// without hitting "database is locked"; foreign keys are enforced.
     pub async fn connect(url: &str) -> Result<Self> {
-        let opts = SqliteConnectOptions::from_str(url)?
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(DB_BUSY_TIMEOUT)
-            .foreign_keys(true);
-        // WAL lets the read-only API run concurrently with writers. The pool is
-        // sized above the default collection concurrency so parallel ingest
-        // never waits on a connection; acquire_timeout still bounds any wait.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(DB_POOL_MAX_CONNECTIONS)
-            .acquire_timeout(DB_ACQUIRE_TIMEOUT)
-            .connect_with(opts)
-            .await?;
-        sqlx::migrate!("./migrations").run(&pool).await.map_err(other)?;
+        Self::open(url, None).await
+    }
+
+    /// Open the database and apply migrations. A `libsql://`/`http(s)://` URL is a
+    /// remote Turso database (auth token required); anything else is a local
+    /// libSQL file (`sqlite://` prefix optional; `:memory:` for tests).
+    pub async fn open(url: &str, auth_token: Option<&str>) -> Result<Self> {
+        let is_remote = url.starts_with("libsql://")
+            || url.starts_with("http://")
+            || url.starts_with("https://");
+        let db = if is_remote {
+            Db::open_remote(url.to_string(), auth_token.unwrap_or_default().to_string()).await?
+        } else {
+            let path = url.strip_prefix("sqlite://").unwrap_or(url);
+            Db::open_local(path).await?
+        };
+        run_migrations(&db).await?;
         Ok(Self {
-            pool,
+            db,
             login_throttle: LoginThrottle::new(LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW),
-            policy: Policy::default(),
             shutdown: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -260,26 +262,15 @@ impl Store {
         self.shutdown.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Override the runtime [`Policy`] (builder-style; call before sharing).
-    pub fn with_policy(mut self, policy: Policy) -> Self {
-        self.policy = policy;
-        self
-    }
-
-    /// The runtime policy knobs.
-    pub fn policy(&self) -> &Policy {
-        &self.policy
-    }
-
     /// The shared login brute-force throttle.
     pub fn login_throttle(&self) -> &LoginThrottle {
         &self.login_throttle
     }
 
-    /// Close the underlying connection pool. After this, queries error
-    /// (used to exercise best-effort failure paths).
+    /// Close the database handle. After this, queries error (used to exercise
+    /// best-effort failure paths).
     pub async fn close(&self) {
-        self.pool.close().await;
+        self.db.close();
     }
 }
 
@@ -632,11 +623,11 @@ mod tests {
     async fn get_facts_errors_on_bad_statement() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
-        sqlx::query(
+        query(
             "INSERT INTO financial_facts (company_id,statement,line_item,period_type,period_end,value,source,fetched_at) VALUES (?,?,?,?,?,?,?,?)",
         )
         .bind(id).bind("bogus").bind("X").bind("annual").bind("2023-12-31").bind(1.0).bind("edgar").bind("2024-01-01T00:00:00Z")
-        .execute(&store.pool).await.unwrap();
+        .execute(&store.db).await.unwrap();
         let err = store.get_facts(id).await.unwrap_err();
         assert!(matches!(err, StoreError::Decode(_)));
     }
@@ -645,11 +636,11 @@ mod tests {
     async fn get_facts_errors_on_bad_period_type() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
-        sqlx::query(
+        query(
             "INSERT INTO financial_facts (company_id,statement,line_item,period_type,period_end,value,source,fetched_at) VALUES (?,?,?,?,?,?,?,?)",
         )
         .bind(id).bind("income").bind("X").bind("weekly").bind("2023-12-31").bind(1.0).bind("edgar").bind("2024-01-01T00:00:00Z")
-        .execute(&store.pool).await.unwrap();
+        .execute(&store.db).await.unwrap();
         let err = store.get_facts(id).await.unwrap_err();
         assert!(matches!(err, StoreError::Decode(_)));
     }
@@ -658,11 +649,11 @@ mod tests {
     async fn get_ratios_errors_on_bad_period_type() {
         let (store, _d) = temp_store().await;
         let id = store.insert_company(&sample_company()).await.unwrap();
-        sqlx::query(
+        query(
             "INSERT INTO ratios (company_id,period_end,period_type,metric,value,computed_at) VALUES (?,?,?,?,?,?)",
         )
         .bind(id).bind("2023-12-31").bind("weekly").bind("pe").bind(1.0).bind("2024-01-01T00:00:00Z")
-        .execute(&store.pool).await.unwrap();
+        .execute(&store.db).await.unwrap();
         let err = store.get_ratios(id, None).await.unwrap_err();
         assert!(matches!(err, StoreError::Decode(_)));
     }
@@ -841,6 +832,33 @@ mod tests {
         assert_eq!(store.user_password_hash(999).await.unwrap(), None);
         store.update_password_hash(uid, "newhash").await.unwrap();
         assert_eq!(store.user_password_hash(uid).await.unwrap(), Some("newhash".into()));
+    }
+
+    #[tokio::test]
+    async fn user_settings_defaults_null_columns_and_round_trip() {
+        let (store, _d) = temp_store().await;
+        let uid = store.create_user("a@e.com", "h").await.unwrap();
+        // no row -> all defaults
+        let s = store.get_settings(uid).await.unwrap();
+        assert_eq!(s.theme, "system");
+        assert_eq!(s.graham, crate::graham::GrahamConfig::default());
+        // save + read back custom values
+        let custom = UserSettings {
+            theme: "dark".into(),
+            graham: crate::graham::GrahamConfig { min_revenue: 1.0, pe_max: 20.0, ..Default::default() },
+        };
+        store.save_settings(uid, &custom).await.unwrap();
+        assert_eq!(store.get_settings(uid).await.unwrap(), custom);
+        // a row with NULL graham columns falls back to defaults per field
+        let uid2 = store.create_user("b@e.com", "h").await.unwrap();
+        query("INSERT INTO user_settings (user_id,theme) VALUES (?, 'light')")
+            .bind(uid2)
+            .execute(&store.db)
+            .await
+            .unwrap();
+        let s2 = store.get_settings(uid2).await.unwrap();
+        assert_eq!(s2.theme, "light");
+        assert_eq!(s2.graham, crate::graham::GrahamConfig::default());
     }
 
     #[tokio::test]
@@ -1525,7 +1543,7 @@ mod tests {
 
     #[test]
     fn store_error_display_covers_variants() {
-        assert!(StoreError::Db(sqlx::Error::RowNotFound).to_string().contains("database"));
+        assert!(StoreError::Db(db::DbError::Decode("boom".into())).to_string().contains("database"));
         assert!(StoreError::Decode("x".into()).to_string().contains("x"));
         assert!(StoreError::Other("boom".into()).to_string().contains("boom"));
     }
