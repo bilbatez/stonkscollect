@@ -208,9 +208,14 @@ pub struct Db {
 }
 
 impl Db {
-    /// Open a local libSQL file (`:memory:` for tests).
+    /// Open a local libSQL file (`:memory:` for tests). Enables WAL so the
+    /// read-only API runs concurrently with the collection loop's writers
+    /// (libSQL local defaults to a rollback journal, which blocks readers).
     pub async fn open_local(path: &str) -> Result<Db> {
         let db = Builder::new_local(path).build().await?;
+        // journal_mode returns the resulting mode as a row, so use query (execute
+        // rejects row-returning statements with ExecuteReturnedRows).
+        let _ = db.connect()?.query("PRAGMA journal_mode=WAL", ()).await?;
         Ok(Db { db: Arc::new(db), closed: Arc::new(false.into()) })
     }
 
@@ -233,10 +238,14 @@ impl Db {
         Ok(self.db.connect()?)
     }
 
-    /// A connection with foreign-key enforcement on (for write paths).
+    /// A connection for write paths: foreign keys enforced + a busy timeout so
+    /// concurrent collection writers wait for the lock instead of failing with
+    /// SQLITE_BUSY and silently dropping the write.
     async fn write_conn(&self) -> Result<Connection> {
         let c = self.connect()?;
         c.execute("PRAGMA foreign_keys=ON", ()).await?;
+        // busy_timeout returns the new value as a row, so use query, not execute.
+        let _ = c.query("PRAGMA busy_timeout=5000", ()).await?;
         Ok(c)
     }
 
