@@ -86,8 +86,15 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
-    // Load .env (searching cwd upward) if present; real env vars win.
-    let _ = dotenvy::dotenv();
+    // Load .env (searching cwd upward) if present; real env vars win. A malformed
+    // line (e.g. an unquoted value with a space) aborts the whole load, leaving
+    // later vars unset — surface that instead of failing silently. A missing
+    // .env is fine (env may be set another way).
+    if let Err(e) = dotenvy::dotenv() {
+        if !e.not_found() {
+            eprintln!("warning: .env was not fully loaded ({e}); some settings may be unset");
+        }
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
