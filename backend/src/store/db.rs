@@ -394,7 +394,6 @@ impl<T: FromVal> Scalar<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params;
 
     async fn file_db() -> (Db, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
