@@ -6,6 +6,10 @@ services:
       # SQLite file lives on the shared volume so it is easy to back up / export.
       DATABASE_URL: "sqlite:///data/stonks.db"
       RUST_LOG: "info"
+    # Published so the API is reachable directly at localhost:8080 (the frontend
+    # nginx also reaches it internally via the `backend` service name).
+    ports:
+      - "8080:8080"
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -16,4 +20,11 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  # Static Docsify documentation site (nginx serving docs/).
+  docs:
+    build: ./docs
+    ports:
+      - "3001:80"
     restart: unless-stopped

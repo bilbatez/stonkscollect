@@ -23,7 +23,9 @@ help:
 	@echo "          make frontend     (dashboard dev server)"
 	@echo "          make docs         (serve the docs site on :$(DOCS_PORT))"
 	@echo "Quality:  make test | cov | lint | e2e"
-	@echo "Docker:   make up | down | build"
+	@echo "Docker:   make up          (build + run all 3 containers)"
+	@echo "                            api http://localhost:8080 - web http://localhost:3000 - docs http://localhost:3001"
+	@echo "          make down | build"
 
 # Quick local data: ticker universe + a handful of Graham-friendly names
 # (computes ratios + Graham scores as it goes). Run `make setup` first.
