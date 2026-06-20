@@ -1,22 +1,34 @@
 use super::*;
-use sqlx::Row;
 
 /// One row per (company, trading day): the preferred source's close + volume
 /// (`daily.day_rank` = 1 is the latest day). Shared by movers and watchlist
 /// quotes.
-const DAILY_CLOSES_CTE: &str = "ranked AS (
+/// The `ranked`/`daily` CTE (latest source-preferred close per company/day).
+/// `price_where` narrows the scanned `prices` rows — without it, ranking the
+/// full 25M-row history takes ~82s. Movers pass a recent-date window; watchlist
+/// quotes pass a watched-companies filter (so a stale-but-watched stock still
+/// shows its last close).
+fn daily_closes_cte(price_where: &str) -> String {
+    format!(
+        "ranked AS (
          SELECT company_id, date, close, volume,
                 ROW_NUMBER() OVER (
                     PARTITION BY company_id, date
                     ORDER BY CASE source WHEN 'yahoo' THEN 0 WHEN 'fmp' THEN 1 ELSE 2 END, source
                 ) AS src_rank
-         FROM prices
+         FROM prices {price_where}
      ),
      daily AS (
          SELECT company_id, date, close, volume,
                 ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY date DESC) AS day_rank
          FROM ranked WHERE src_rank = 1
-     )";
+     )"
+    )
+}
+
+/// Recent-date window for the full-universe movers scans.
+const MOVERS_PRICE_WINDOW: &str =
+    "WHERE date >= date((SELECT MAX(date) FROM prices), '-10 days')";
 
 /// Screener filters + paging. `Default` matches everything, first page.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,16 +74,16 @@ impl Store {
     /// The most recent close price for a company.
     pub async fn latest_price(&self, company_id: i64) -> Result<Option<f64>> {
         Ok(
-            sqlx::query_scalar("SELECT close FROM prices WHERE company_id=? ORDER BY date DESC LIMIT 1")
+            query_scalar("SELECT close FROM prices WHERE company_id=? ORDER BY date DESC LIMIT 1")
                 .bind(company_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&self.db)
                 .await?,
         )
     }
 
     /// Insert or update a company's Graham score.
     pub async fn save_graham_score(&self, s: &GrahamScore) -> Result<()> {
-        sqlx::query(
+        query(
             "INSERT INTO graham_scores \
              (company_id,score,passes_defensive,graham_number,ncav_per_share,margin_of_safety,net_net,computed_at) \
              VALUES (?,?,?,?,?,?,?,?) \
@@ -88,12 +100,12 @@ impl Store {
         .bind(s.margin_of_safety)
         .bind(s.net_net)
         .bind(s.computed_at)
-        .execute(&self.pool)
+        .execute(&self.db)
         .await?;
         Ok(())
     }
 
-    fn graham_score_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<GrahamScore> {
+    fn graham_score_from_row(r: &Row) -> Result<GrahamScore> {
         Ok(GrahamScore {
             company_id: r.try_get("company_id")?,
             score: r.try_get("score")?,
@@ -108,12 +120,12 @@ impl Store {
 
     /// A company's persisted Graham score, if computed.
     pub async fn get_graham_score(&self, company_id: i64) -> Result<Option<GrahamScore>> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT company_id,score,passes_defensive,graham_number,ncav_per_share,margin_of_safety,net_net,computed_at \
              FROM graham_scores WHERE company_id=?",
         )
         .bind(company_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.db)
         .await?;
         match row {
             Some(r) => Ok(Some(Self::graham_score_from_row(&r)?)),
@@ -146,19 +158,19 @@ impl Store {
             ratio_q.extra_joins, ratio_q.extra_conditions
         );
         let count_sql = format!("SELECT COUNT(*){from_clause}");
-        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(filter.min_score);
+        let mut count_q = query_scalar::<i64>(&count_sql).bind(filter.min_score);
         if let Some(s) = &filter.sector {
             count_q = count_q.bind(s);
         }
         for v in &ratio_q.binds {
             count_q = count_q.bind(*v);
         }
-        let total = count_q.fetch_one(&self.pool).await?;
+        let total = count_q.fetch_one(&self.db).await?;
         let order_by = screen_sort_expr(filter.sort_by.as_deref(), filter.sort_dir.as_deref());
         let sql = format!(
             "SELECT {SELECT_COMPANY_COLS}, {SELECT_GRAHAM_COLS}{from_clause} ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
-        let mut query = sqlx::query(&sql).bind(filter.min_score);
+        let mut query = query(&sql).bind(filter.min_score);
         if let Some(s) = &filter.sector {
             query = query.bind(s);
         }
@@ -168,7 +180,7 @@ impl Store {
         let rows = query
             .bind(filter.limit)
             .bind(filter.offset)
-            .fetch_all(&self.pool)
+            .fetch_all(&self.db)
             .await?;
         let page = rows
             .iter()
@@ -182,8 +194,9 @@ impl Store {
     /// Companies with fewer than two priced days or a zero previous close are
     /// excluded (no change is computable).
     pub async fn day_changes(&self) -> Result<Vec<MoverRow>> {
+        let cte = daily_closes_cte(MOVERS_PRICE_WINDOW);
         let sql = format!(
-            "WITH {DAILY_CLOSES_CTE}
+            "WITH {cte}
              SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
                     last.volume AS volume, prev.close AS prev_close
              FROM daily last
@@ -192,14 +205,15 @@ impl Store {
              WHERE last.day_rank = 1 AND prev.close <> 0.0 AND c.is_index = 0
              ORDER BY c.ticker"
         );
-        Self::move_rows(&self.pool, &sql).await
+        Self::move_rows(&self.db, &sql).await
     }
 
     /// Latest daily move for each market index (mirrors [`day_changes`] but for
     /// `is_index = 1` rows), powering the dashboard's market summary.
     pub async fn index_changes(&self) -> Result<Vec<MoverRow>> {
+        let cte = daily_closes_cte(MOVERS_PRICE_WINDOW);
         let sql = format!(
-            "WITH {DAILY_CLOSES_CTE}
+            "WITH {cte}
              SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
                     last.volume AS volume, prev.close AS prev_close
              FROM daily last
@@ -208,12 +222,12 @@ impl Store {
              WHERE last.day_rank = 1 AND prev.close <> 0.0 AND c.is_index = 1
              ORDER BY c.ticker"
         );
-        Self::move_rows(&self.pool, &sql).await
+        Self::move_rows(&self.db, &sql).await
     }
 
     /// Decode day-change `MoverRow`s from a prepared movers/index query.
-    async fn move_rows(pool: &SqlitePool, sql: &str) -> Result<Vec<MoverRow>> {
-        let rows = sqlx::query(sql).fetch_all(pool).await?;
+    async fn move_rows(db: &Db, sql: &str) -> Result<Vec<MoverRow>> {
+        let rows = query(sql).fetch_all(db).await?;
         rows.iter()
             .map(|r| {
                 let last_close: f64 = r.try_get("last_close")?;
@@ -233,8 +247,11 @@ impl Store {
     /// The user's watchlist, each row carrying the company's latest quote when
     /// prices exist (LEFT JOINs: an unpriced company still appears).
     pub async fn watch_quotes(&self, user_id: i64) -> Result<Vec<WatchQuote>> {
+        // Only rank this user's watched companies' prices (small + fast); no date
+        // window, so a stale-but-watched stock still shows its last close.
+        let cte = daily_closes_cte("WHERE company_id IN (SELECT company_id FROM watchlists WHERE user_id=?)");
         let sql = format!(
-            "WITH {DAILY_CLOSES_CTE}
+            "WITH {cte}
              SELECT {SELECT_COMPANY_COLS}, last.date AS as_of, last.close AS last_close,
                     last.volume AS volume, prev.close AS prev_close
              FROM watchlists w
@@ -244,7 +261,8 @@ impl Store {
              WHERE w.user_id = ?
              ORDER BY c.ticker"
         );
-        let rows = sqlx::query(&sql).bind(user_id).fetch_all(&self.pool).await?;
+        // First bind feeds the CTE's watchlist subquery; second the main WHERE.
+        let rows = query(&sql).bind(user_id).bind(user_id).fetch_all(&self.db).await?;
         // Group memberships, keyed by company id, attached to each quote below.
         let mut by_company: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
         for (company_id, group_id) in self.watch_group_memberships(user_id).await? {
@@ -279,7 +297,7 @@ impl Store {
     /// Sector-level aggregates for the overview page, ordered by avg_score desc.
     /// Companies with no sector are excluded.
     pub async fn get_sectors(&self) -> Result<Vec<crate::domain::SectorStats>> {
-        let rows = sqlx::query(
+        let rows = query(
             "SELECT c.sector, \
              COUNT(DISTINCT c.id) AS company_count, \
              COALESCE(AVG(g.score), 0.0) AS avg_score, \
@@ -294,7 +312,7 @@ impl Store {
              GROUP BY c.sector \
              ORDER BY avg_score DESC",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.db)
         .await?;
         rows.iter()
             .map(|r| {
@@ -325,11 +343,11 @@ impl Store {
              WHERE c.sector = ? AND c.id != ? \
              ORDER BY COALESCE(g.score, -1) DESC, c.ticker ASC LIMIT ?"
         );
-        let rows = sqlx::query(&sql)
+        let rows = query(&sql)
         .bind(sector)
         .bind(company_id)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.db)
         .await?;
         rows.iter()
             .map(|r| {
@@ -346,10 +364,10 @@ impl Store {
     /// Retrieve a user's note for a company, if any.
     pub async fn get_note(&self, user_id: i64, company_id: i64) -> Result<Option<String>> {
         Ok(
-            sqlx::query_scalar("SELECT body FROM notes WHERE user_id = ? AND company_id = ?")
+            query_scalar("SELECT body FROM notes WHERE user_id = ? AND company_id = ?")
                 .bind(user_id)
                 .bind(company_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&self.db)
                 .await?,
         )
     }
@@ -362,7 +380,7 @@ impl Store {
         body: &str,
         updated_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
-        sqlx::query(
+        query(
             "INSERT INTO notes (user_id, company_id, body, updated_at) VALUES (?, ?, ?, ?) \
              ON CONFLICT (user_id, company_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
         )
@@ -370,17 +388,17 @@ impl Store {
         .bind(company_id)
         .bind(body)
         .bind(updated_at)
-        .execute(&self.pool)
+        .execute(&self.db)
         .await?;
         Ok(())
     }
 
     /// Delete a user's note for a company (no-op if absent).
     pub async fn delete_note(&self, user_id: i64, company_id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM notes WHERE user_id = ? AND company_id = ?")
+        query("DELETE FROM notes WHERE user_id = ? AND company_id = ?")
             .bind(user_id)
             .bind(company_id)
-            .execute(&self.pool)
+            .execute(&self.db)
             .await?;
         Ok(())
     }
@@ -426,14 +444,14 @@ impl Store {
             where_clause.push_str(&format!(" AND c.{col} LIKE ? ESCAPE '\\'"));
         }
         let count_sql = format!("SELECT COUNT(*) FROM companies c{where_clause}");
-        let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+        let mut count_q = query_scalar::<i64>(&count_sql);
         if let Some(l) = &like {
             count_q = count_q.bind(l.as_str()).bind(l.as_str());
         }
         for (_, v) in &col_filters {
             count_q = count_q.bind(v.as_str());
         }
-        let total = count_q.fetch_one(&self.pool).await?;
+        let total = count_q.fetch_one(&self.db).await?;
 
         let order_by = companies_sort_expr(sort_by, sort_dir);
         let sql = format!(
@@ -441,14 +459,14 @@ impl Store {
              FROM companies c LEFT JOIN graham_scores g ON g.company_id = c.id{where_clause} \
              ORDER BY {order_by} LIMIT ? OFFSET ?"
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = query(&sql);
         if let Some(l) = &like {
             query = query.bind(l.as_str()).bind(l.as_str());
         }
         for (_, v) in &col_filters {
             query = query.bind(v.as_str());
         }
-        let rows = query.bind(limit).bind(offset).fetch_all(&self.pool).await?;
+        let rows = query.bind(limit).bind(offset).fetch_all(&self.db).await?;
         let page = rows
             .iter()
             .map(|r| {

@@ -42,9 +42,8 @@ import { MoversView } from '../pages/MoversView'
 import { SectorOverview } from '../pages/SectorOverview'
 import { Screener } from '../pages/Screener'
 import { Skeleton } from '../shared/Skeleton'
-import { ThemeToggle, type Theme } from '../shared/ThemeToggle'
 import { Watchlist } from '../layout/Watchlist'
-import type { CompanyData, SectorStats, WatchGroup, WatchQuote } from '../../types'
+import type { CompanyData, SectorStats, ThemePref, WatchGroup, WatchQuote } from '../../types'
 
 type Page = 'home' | 'compare' | 'screen' | 'movers' | 'sectors' | 'profile'
 
@@ -56,12 +55,12 @@ type Detail =
 
 export function Dashboard({
   onLogout,
-  theme,
-  onToggleTheme,
+  themePref,
+  onThemePref,
 }: {
   onLogout: () => void
-  theme: Theme
-  onToggleTheme: () => void
+  themePref: ThemePref
+  onThemePref: (pref: ThemePref) => void
 }) {
   const [items, setItems] = useState<WatchQuote[]>([])
   const [groups, setGroups] = useState<WatchGroup[]>([])
@@ -167,7 +166,6 @@ export function Dashboard({
           >
             Sectors
           </Button>
-          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <Button color="inherit" startIcon={<PersonIcon />} onClick={() => setPage('profile')}>
             {displayName !== '' ? displayName : 'Profile'}
           </Button>
@@ -224,7 +222,9 @@ export function Dashboard({
             )}
           </Box>
         )}
-        {page === 'profile' && <Profile onProfileSaved={() => void refreshMe()} />}
+        {page === 'profile' && (
+          <Profile themePref={themePref} onThemePref={onThemePref} onProfileSaved={() => void refreshMe()} />
+        )}
         {page === 'compare' && <CompareView />}
         {page === 'screen' && <Screener onSelect={(t) => void select(t)} />}
         {page === 'movers' && <MoversView onSelect={(t) => void select(t)} />}

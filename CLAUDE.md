@@ -11,7 +11,7 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
 ## Tech stack
 
 - **Backend:** Rust 1.91, `axum` 0.7, `tower`/`tower-http` (body-limit + timeout +
-  trace middleware), `tokio`, `sqlx` (SQLite), `reqwest`, `scraper`, `cron`,
+  trace middleware), `tokio`, `libsql`/Turso (via a `store::db` shim), `reqwest`, `scraper`, `cron`,
   `arrow`/`parquet`, `argon2`+`sha2` (auth), `futures` (parallel collect),
   `clap` (CLI), `dotenvy`, `serde`, `thiserror`, `tracing`.
 - **Frontend:** React 19 + Vite 8 + TypeScript; **MUI v9** (`@mui/material` +
@@ -19,7 +19,7 @@ Full design: `/Users/bilbatez/.claude/plans/purring-humming-walrus.md`.
   `DataGrid` (`@tanstack/react-table` + `@dnd-kit` — sort, per-column filter,
   drag column-reorder) for the All Stocks / Screener / Discrepancy grids; ECharts
   (lazy, candlestick/line); Vitest + Playwright.
-- **Storage:** SQLite single file on mounted volume (`./data/stonks.db`) + scheduled Parquet
+- **Storage:** libSQL via a sqlx-shaped `store::db` shim — a local SQLite-compatible file (`./data/stonks.db`, dev) or a remote **Turso** DB (`TURSO_DATABASE_URL`+`TURSO_AUTH_TOKEN`); + scheduled Parquet
   export. Backup = copy the `.db` file.
 - **Containers:** separate Dockerfiles for backend + frontend; `docker-compose.yml` wires them
   with a shared `./data` volume. Frontend nginx + Vite dev proxy both forward
@@ -88,7 +88,7 @@ into the background scheduler tier (currently CLI-only).
 From repo root via Makefile:
 
 - `make test` — backend `cargo test` + frontend `vitest run`
-- `make cov` — coverage gates: backend `cargo-llvm-cov` **functions 100% / lines ≥99%** (main/http excluded); frontend `vitest` **100%** (charts excluded)
+- `make cov` — coverage gates: backend `cargo-llvm-cov` **functions / lines ≥99%** (main/http excluded); frontend `vitest` **100%** (charts excluded)
 - `make demo` — bootstrap + collect a few tickers (quick local data)
 - `make lint` — `cargo clippy -D warnings` + `eslint`
 - `make e2e` — Playwright (frontend)
@@ -96,15 +96,16 @@ From repo root via Makefile:
 
 Direct:
 - Backend: `cd backend && cargo test | cargo run | cargo clippy --all-targets -- -D warnings`
-- Backend coverage: `cargo llvm-cov --ignore-filename-regex '(main|http)\.rs' --fail-under-lines 99 --fail-under-functions 100`
+- Backend coverage: `cargo llvm-cov --ignore-filename-regex '(main|http)\.rs' --fail-under-lines 99 --fail-under-functions 99`
 - Frontend: `cd frontend && npm run dev | test:run | coverage | build | e2e`
 
 ## Coding conventions
 
 - **Strict TDD (mandatory):** write failing test → watch it fail (RED) → minimal code (GREEN) →
   refactor. No production code without a failing test first.
-- **Coverage gate** on logic modules: backend functions 100% / lines ≥99% (the
-  ≥99 floor absorbs a cargo-llvm-cov phantom-line artifact over async generic fns,
+- **Coverage gate** on logic modules: backend functions / lines ≥99% (the
+  ≥99 floor absorbs cargo-llvm-cov phantom artifacts over async generic fns (the
+  scheduler + the libSQL `db` shim),
   proven executed by `--text`); frontend 100%. I/O glue (`main.rs`, `http.rs`,
   `frontend/src/{main.tsx,charts/}`) is explicitly excluded — never silently skip logic.
 - **Clean code:** small single-purpose functions; collectors behind `HttpClient` +
@@ -127,6 +128,7 @@ Conflicts: store every source's value; EDGAR canonical; flag discrepancies above
 
 ## Gotchas
 
+- **libSQL tests run single-threaded** — `backend/.cargo/config.toml` sets `RUST_TEST_THREADS=1` because libSQL spawns background threads per DB handle; hundreds of parallel `#[tokio::test]` runtimes otherwise exhaust them and SIGABRT.
 - **`docker compose` plugin not installed locally** — compose files are correct but `make up`/`build`
   need it (`brew install docker-compose`). Backend/frontend dev + tests work without Docker.
 - Frontend `tsconfig.app.json` `types` includes `vitest/globals` + `@testing-library/jest-dom`

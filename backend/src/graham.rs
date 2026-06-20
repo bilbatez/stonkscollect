@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use chrono::Datelike;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{share_count, FinancialFact, PeriodType};
 
@@ -21,6 +21,31 @@ pub const NET_NET_FRACTION: f64 = 2.0 / 3.0;
 /// Default "adequate size" revenue floor (modernized from Graham's ~$100M).
 pub const DEFAULT_MIN_REVENUE: f64 = 500_000_000.0;
 const MIN_STABILITY_YEARS: usize = 3;
+
+/// User-tunable Graham defensive thresholds. `Default` is the textbook values
+/// (the consts above); per-user overrides come from their saved settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GrahamConfig {
+    pub min_revenue: f64,
+    pub pe_max: f64,
+    pub pb_max: f64,
+    pub pe_pb_max: f64,
+    pub current_ratio_min: f64,
+    pub eps_growth_min: f64,
+}
+
+impl Default for GrahamConfig {
+    fn default() -> Self {
+        Self {
+            min_revenue: DEFAULT_MIN_REVENUE,
+            pe_max: PE_MAX,
+            pb_max: PB_MAX,
+            pe_pb_max: PE_PB_MAX,
+            current_ratio_min: CURRENT_RATIO_MIN,
+            eps_growth_min: EPS_GROWTH_MIN,
+        }
+    }
+}
 
 /// Graham Number = √(22.5 · EPS · BVPS), when both are positive.
 pub fn graham_number(eps: f64, bvps: f64) -> Option<f64> {
@@ -70,7 +95,7 @@ fn avg(xs: &[f64]) -> Option<f64> {
 }
 
 /// Run the defensive-investor checks for one company.
-pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f64) -> GrahamAssessment {
+pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, cfg: &GrahamConfig) -> GrahamAssessment {
     // Annual facts grouped by fiscal year: year -> { line_item -> value }.
     let mut by_year: BTreeMap<i32, BTreeMap<&str, f64>> = BTreeMap::new();
     for f in facts {
@@ -97,8 +122,8 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
     match get("Revenue") {
         Some(rev) => add(
             "Adequate size",
-            rev >= min_revenue,
-            format!("revenue {rev:.0} vs min {min_revenue:.0}"),
+            rev >= cfg.min_revenue,
+            format!("revenue {rev:.0} vs min {:.0}", cfg.min_revenue),
         ),
         None => add("Adequate size", false, "insufficient data".into()),
     }
@@ -107,7 +132,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
     match (get("CurrentAssets"), get("CurrentLiabilities")) {
         (Some(ca), Some(cl)) if cl != 0.0 => {
             let r = ca / cl;
-            add("Current ratio >= 2", r >= CURRENT_RATIO_MIN, format!("current ratio {r:.2}"))
+            add("Current ratio >= 2", r >= cfg.current_ratio_min, format!("current ratio {r:.2}"))
         }
         _ => add("Current ratio >= 2", false, "insufficient data".into()),
     }
@@ -151,7 +176,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
         None
     };
     match eps_growth {
-        Some(g) => add("EPS growth >= 33%", g >= EPS_GROWTH_MIN, format!("EPS growth {:.0}%", g * 100.0)),
+        Some(g) => add("EPS growth >= 33%", g >= cfg.eps_growth_min, format!("EPS growth {:.0}%", g * 100.0)),
         None => add("EPS growth >= 33%", false, "insufficient data".into()),
     }
 
@@ -173,7 +198,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
         _ => None,
     };
     match pe {
-        Some(v) => add("P/E <= 15", v <= PE_MAX, format!("P/E {v:.1}")),
+        Some(v) => add("P/E <= 15", v <= cfg.pe_max, format!("P/E {v:.1}")),
         None => add("P/E <= 15", false, "insufficient data".into()),
     }
 
@@ -185,7 +210,7 @@ pub fn assess(facts: &[FinancialFact], latest_price: Option<f64>, min_revenue: f
     match (pe, pb) {
         (Some(pe), Some(pb)) => add(
             "P/B <= 1.5 or P/E*P/B <= 22.5",
-            pb <= PB_MAX || pe * pb <= PE_PB_MAX,
+            pb <= cfg.pb_max || pe * pb <= cfg.pe_pb_max,
             format!("P/B {pb:.2}, P/E*P/B {:.1}", pe * pb),
         ),
         _ => add("P/B <= 1.5 or P/E*P/B <= 22.5", false, "insufficient data".into()),
@@ -297,7 +322,7 @@ mod tests {
     #[test]
     fn strong_company_passes_all_defensive_criteria() {
         // price low enough for P/E and P/B to pass: EPS recent avg ~1.8, BVPS 10.
-        let a = assess(&strong_company(), Some(12.0), 500_000_000.0);
+        let a = assess(&strong_company(), Some(12.0), &GrahamConfig::default());
         assert!(a.passes_defensive, "criteria: {:?}", a.criteria);
         assert_eq!(a.score as usize, a.criteria.len());
         assert!(a.graham_number.is_some());
@@ -322,7 +347,7 @@ mod tests {
         f.push(fact("LongTermDebt", 2023, 500.0)); // > working capital (0)
         f.push(fact("StockholdersEquity", 2023, 10.0));
         f.push(fact("SharesOutstanding", 2023, 10.0)); // BVPS 1
-        let a = assess(&f, Some(100.0), 500_000_000.0);
+        let a = assess(&f, Some(100.0), &GrahamConfig::default());
         assert!(!passed(&a, "Adequate size"));
         assert!(!passed(&a, "Current ratio >= 2"));
         assert!(!passed(&a, "Debt <= working capital"));
@@ -344,14 +369,14 @@ mod tests {
             fact("Eps", 2022, 1.0),
             fact("Eps", 2023, 2.0),
         ];
-        let a = assess(&f, Some(10.0), 500_000_000.0);
+        let a = assess(&f, Some(10.0), &GrahamConfig::default());
         assert_eq!(detail(&a, "EPS growth >= 33%"), "insufficient data");
         assert!(!passed(&a, "EPS growth >= 33%"));
     }
 
     #[test]
     fn missing_data_is_insufficient_not_passing() {
-        let a = assess(&[], None, 500_000_000.0);
+        let a = assess(&[], None, &GrahamConfig::default());
         assert_eq!(a.score, 0);
         assert!(a.criteria.iter().all(|c| !c.passed && c.detail == "insufficient data"));
         assert!(a.graham_number.is_none());
@@ -363,7 +388,7 @@ mod tests {
         let mut f = strong_company();
         f.retain(|x| x.line_item != "SharesOutstanding");
         f.push(fact("SharesOutstandingBalance", 2023, 100.0)); // BVPS still 10
-        let a = assess(&f, Some(12.0), 500_000_000.0);
+        let a = assess(&f, Some(12.0), &GrahamConfig::default());
         assert!(a.passes_defensive, "criteria: {:?}", a.criteria);
         assert!(a.graham_number.is_some());
     }
@@ -373,7 +398,7 @@ mod tests {
         let mut f = strong_company();
         f.retain(|x| x.line_item != "SharesOutstanding");
         f.push(fact("SharesOutstandingDei", 2023, 100.0));
-        let a = assess(&f, Some(12.0), 500_000_000.0);
+        let a = assess(&f, Some(12.0), &GrahamConfig::default());
         // NCAV/share = (400 - 150) / 100 = 2.5 via the DEI share count
         assert_eq!(a.ncav_per_share, Some(2.5));
     }
@@ -386,7 +411,7 @@ mod tests {
         f.retain(|x| x.line_item != "TotalLiabilities");
         f.push(fact("TotalLiabilities", 2023, 100.0));
         // NCAV/share = (10000-100)/100 = 99; price 12 < 2/3*99
-        let a = assess(&f, Some(12.0), 500_000_000.0);
+        let a = assess(&f, Some(12.0), &GrahamConfig::default());
         assert!(a.net_net);
     }
 }

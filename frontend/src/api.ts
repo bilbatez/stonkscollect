@@ -18,6 +18,7 @@ import type {
   ScreenFilters,
   ScreenRow,
   SectorStats,
+  UserSettings,
   WatchGroup,
   WatchQuote,
 } from './types'
@@ -116,6 +117,16 @@ export async function updateProfile(email: string, displayName: string): Promise
 /** Change the current user's password (old password verified server-side). */
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   await mutate('PUT', '/auth/password', { old_password: oldPassword, new_password: newPassword })
+}
+
+/** The current user's settings (theme + Graham thresholds). */
+export function getSettings(): Promise<UserSettings> {
+  return getJson<UserSettings>('/auth/settings')
+}
+
+/** Replace the current user's settings. */
+export async function updateSettings(settings: UserSettings): Promise<void> {
+  await mutate('PUT', '/auth/settings', settings)
 }
 
 // --- Watchlist ---

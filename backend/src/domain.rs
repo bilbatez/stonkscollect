@@ -60,6 +60,20 @@ pub struct WatchGroup {
     pub name: String,
 }
 
+/// A user's saved preferences: UI theme + Graham defensive thresholds.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UserSettings {
+    /// `system` | `light` | `dark`.
+    pub theme: String,
+    pub graham: crate::graham::GrahamConfig,
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        Self { theme: "system".into(), graham: crate::graham::GrahamConfig::default() }
+    }
+}
+
 /// One holder's position in a company (e.g. an insider's reported share count
 /// from an SEC Form 4 filing). `kind` is "insider" or "institutional".
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]

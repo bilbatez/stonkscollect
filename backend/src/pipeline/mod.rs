@@ -32,6 +32,9 @@ pub struct CollectSources<'a> {
     pub facts: &'a [&'a dyn FactSource],
     pub prices: &'a [&'a dyn PriceSource],
     pub news: &'a [&'a dyn NewsSource],
+    /// Profile (sector/industry) sources; enrichment runs on the collect path
+    /// for companies missing a sector.
+    pub profiles: &'a [&'a dyn ProfileSource],
 }
 
 /// Knobs for a collect pass.
@@ -217,7 +220,7 @@ mod tests {
 
     /// Collect sources with only fact sources populated.
     fn facts_only<'a>(facts: &'a [&'a dyn FactSource]) -> CollectSources<'a> {
-        CollectSources { facts, prices: &[], news: &[] }
+        CollectSources { facts, prices: &[], news: &[], profiles: &[] }
     }
 
     /// Standard test options: 5% threshold, concurrency 2, no cutoff.
@@ -618,6 +621,7 @@ mod tests {
         let sources: [&dyn FactSource; 1] = [&edgar];
         let price_sources: [&dyn PriceSource; 1] = [&GoodPriceSource];
         let news_sources: [&dyn NewsSource; 1] = [&GoodNewsSource];
+        let profile_sources: [&dyn ProfileSource; 1] = [&FakeProfile];
         assert_eq!(GoodPriceSource.name(), "good");
         assert_eq!(GoodNewsSource.name(), "goodnews");
 
@@ -625,6 +629,7 @@ mod tests {
             facts: &sources,
             prices: &price_sources,
             news: &news_sources,
+            profiles: &profile_sources,
         };
         collect_tickers(&store, &all_sources, &["AAPL".to_string()], &opts(fixed_now()))
             .await
@@ -634,10 +639,12 @@ mod tests {
         let price = store.latest_price(id).await.unwrap();
         assert!(price.is_some(), "price persisted by the collect path");
         assert!(!store.get_news(id).await.unwrap().is_empty(), "news collected by the collect path");
+        // profile enrichment ran on the collect path (sector was missing).
+        assert_eq!(store.get_company("AAPL").await.unwrap().unwrap().sector.as_deref(), Some("Tech"));
         // and that price reaches Graham: the P/E criterion is now computed
         // (price / EPS) instead of being reported as "insufficient data".
         let facts = store.get_facts(id).await.unwrap();
-        let a = graham::assess(&facts, price, 500_000_000.0);
+        let a = graham::assess(&facts, price, &graham::GrahamConfig::default());
         let pe = a.criteria.iter().find(|c| c.name == "P/E <= 15").unwrap();
         assert_ne!(pe.detail, "insufficient data", "P/E computed from the collected price");
         // a Graham score row was persisted for the company
