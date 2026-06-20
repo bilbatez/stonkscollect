@@ -5,6 +5,9 @@ BACKEND := backend
 FRONTEND := frontend
 DOCS := docs
 COV_IGNORE := (main|http)\.rs
+# Use the Compose v2 plugin (`docker compose`) when available, else fall back to
+# the standalone v1 binary (`docker-compose`). Override with `make up COMPOSE=...`.
+COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 # Pass tickers to `make collect`, e.g. `make collect ARGS="--ticker AAPL"`.
 ARGS ?= --all
 # Port for the docs site (`make docs`); override with `make docs DOCS_PORT=4000`.
@@ -102,10 +105,10 @@ e2e:
 	cd $(FRONTEND) && npm run e2e
 
 build:
-	docker compose build
+	$(COMPOSE) build
 
 up:
-	docker compose up --build
+	$(COMPOSE) up --build
 
 down:
-	docker compose down
+	$(COMPOSE) down
