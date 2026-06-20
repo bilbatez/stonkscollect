@@ -131,14 +131,31 @@ async fn serve(store: Arc<Store>, cfg: &Config) {
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind listener");
     tracing::info!("listening on {addr}");
 
-    // Serve the API (with graceful shutdown) and run the tiered collection loop
-    // on the same task. A shutdown signal ends axum's future, which ends the
-    // select and drops the loop.
-    tokio::select! {
-        result = axum::serve(listener, app(store.clone()))
-            .with_graceful_shutdown(shutdown_signal()) => result.expect("server error"),
-        _ = scheduler_loop(&store, cfg) => {}
+    // One shutdown signal, fanned out: a `watch` channel both ends await. On the
+    // signal we flip the store flag (so in-flight bulk collection winds down) and
+    // publish `true` so axum drains and the scheduler loop exits.
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let store = store.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown requested; draining");
+            store.request_shutdown();
+            let _ = tx.send(true);
+        });
     }
+
+    // Run the API and the scheduler concurrently and wait for BOTH to wind down
+    // gracefully (join, not select) — the scheduler finishes its in-flight
+    // collection pass and exits instead of being dropped mid-pass.
+    let mut axum_rx = tx.subscribe();
+    let server = axum::serve(listener, app(store.clone()))
+        .with_graceful_shutdown(async move {
+            let _ = axum_rx.wait_for(|down| *down).await;
+        });
+    let (result, ()) = tokio::join!(server, scheduler_loop(&store, cfg, tx.subscribe()));
+    result.expect("server error");
     tracing::info!("shut down");
 }
 
@@ -165,10 +182,17 @@ async fn shutdown_signal() {
 /// Background loop: sleep until the next tier fires, then collect for that tier
 /// (Fundamentals = facts + ratios, Price = prices, News = news). Operates on the
 /// whole universe if COLLECT_ALL, else the configured tickers; idle when neither.
-async fn scheduler_loop(store: &Arc<Store>, cfg: &Config) {
+async fn scheduler_loop(
+    store: &Arc<Store>,
+    cfg: &Config,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     if !cfg.collect_all && cfg.tickers.is_empty() {
         tracing::info!("no TICKERS and COLLECT_ALL unset; collection loop idle");
-        std::future::pending::<()>().await;
+        // Wait for shutdown (then exit) instead of blocking forever, so the
+        // process can stop cleanly even with collection disabled.
+        let _ = shutdown.wait_for(|down| *down).await;
+        return;
     }
 
     // One rate limiter PER HOST (REQUEST_DELAY_MS spacing each) so EDGAR, Yahoo
@@ -204,10 +228,18 @@ async fn scheduler_loop(store: &Arc<Store>, cfg: &Config) {
     }
 
     while let Some((tier, at)) = scheduler::next_tier(chrono::Utc::now()) {
+        if *shutdown.borrow() {
+            break;
+        }
         let now = chrono::Utc::now();
         let wait = (at - now).to_std().unwrap_or(std::time::Duration::ZERO);
         tracing::info!("next collection: {} at {at}", tier.label());
-        tokio::time::sleep(wait).await;
+        // Interruptible sleep: wake immediately on shutdown instead of waiting
+        // out the (possibly hours-long) inter-tier delay.
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = shutdown.wait_for(|down| *down) => break,
+        }
         let fired = chrono::Utc::now();
         let label = tier.label();
 

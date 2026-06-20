@@ -6,3 +6,5 @@
 FROM nginx:alpine
 COPY . /usr/share/nginx/html
 EXPOSE 80
+# SIGQUIT = nginx graceful shutdown (drain, then exit) on docker stop/down.
+STOPSIGNAL SIGQUIT
