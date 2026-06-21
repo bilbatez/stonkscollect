@@ -3,6 +3,11 @@
 # ---- builder ----
 FROM rust:1.91-slim AS builder
 WORKDIR /app
+# libsql-ffi (bundled SQLite), ring and zstd-sys compile C — rust:slim ships no
+# C toolchain, so install one (build stage only; discarded in the runtime image).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 # Cache deps: copy manifests, build a stub, then the real sources.
 COPY Cargo.toml Cargo.lock* ./
 RUN mkdir src \
