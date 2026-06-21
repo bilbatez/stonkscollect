@@ -1,0 +1,9 @@
+# Keep the build context tiny: never ship local build artifacts or the DB.
+# `target/` alone is multiple GB and made `docker compose build` tar the whole
+# tree (slow + I/O errors); the image rebuilds it from source anyway.
+target/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env

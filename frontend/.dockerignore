@@ -1,0 +1,7 @@
+# Keep the build context small: the image runs `npm ci` + `npm run build`
+# itself, so local installs/builds must not leak in.
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
