@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use libsql::{Builder, Connection, Database, Value};
+use libsql::{Builder, Connection, Value};
 
 /// Errors from the database layer.
 #[derive(Debug, thiserror::Error)]
@@ -203,7 +203,14 @@ impl Row {
 /// (parallel `buffer_unordered`) never shares one connection.
 #[derive(Clone)]
 pub struct Db {
-    db: Arc<Database>,
+    /// One long-lived connection shared by every call. libSQL opens a *new*
+    /// connection per `Database::connect()`, and on Linux a fresh connection does
+    /// not see another connection's committed WAL write (nor does `:memory:`,
+    /// which is per-connection) — so connect-per-call crashed in the container
+    /// with "no such table". Sharing one connection keeps every read/write on the
+    /// same view; libSQL serializes concurrent statements internally. The
+    /// `Connection` holds its own ref to the database, so no separate handle is kept.
+    conn: Connection,
     closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -213,16 +220,19 @@ impl Db {
     /// (libSQL local defaults to a rollback journal, which blocks readers).
     pub async fn open_local(path: &str) -> Result<Db> {
         let db = Builder::new_local(path).build().await?;
+        let conn = db.connect()?;
         // journal_mode returns the resulting mode as a row, so use query (execute
-        // rejects row-returning statements with ExecuteReturnedRows).
-        let _ = db.connect()?.query("PRAGMA journal_mode=WAL", ()).await?;
-        Ok(Db { db: Arc::new(db), closed: Arc::new(false.into()) })
+        // rejects row-returning statements with ExecuteReturnedRows). WAL is set
+        // once on the shared connection.
+        let _ = conn.query("PRAGMA journal_mode=WAL", ()).await?;
+        Ok(Db { conn, closed: Arc::new(false.into()) })
     }
 
     /// Open a remote Turso database.
     pub async fn open_remote(url: String, token: String) -> Result<Db> {
         let db = Builder::new_remote(url, token).build().await?;
-        Ok(Db { db: Arc::new(db), closed: Arc::new(false.into()) })
+        let conn = db.connect()?;
+        Ok(Db { conn, closed: Arc::new(false.into()) })
     }
 
     /// Mark the handle closed so subsequent queries error (exercises best-effort
@@ -231,11 +241,14 @@ impl Db {
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// The shared connection. Every call returns the *same* underlying connection
+    /// (cheap clone — libSQL `Connection` is an `Arc` internally) so writes are
+    /// visible to later reads regardless of platform.
     fn connect(&self) -> Result<Connection> {
         if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(DbError::Decode("database is closed".into()));
         }
-        Ok(self.db.connect()?)
+        Ok(self.conn.clone())
     }
 
     /// A connection for write paths: foreign keys enforced + a busy timeout so
@@ -477,6 +490,18 @@ mod tests {
         assert!(db.query("SELECT 1", params![]).await.is_err());
         assert!(db.execute("SELECT 1", params![]).await.is_err());
         assert!(db.begin().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn operations_share_one_connection() {
+        // A write through one Db call must be visible to a later call. With the old
+        // connect-per-call shim this failed on `:memory:` (a fresh DB per connect)
+        // and on Linux WAL (a new connection couldn't see the prior connection's
+        // committed write) — the exact "no such table: _migrations" container crash.
+        let db = Db::open_local(":memory:").await.unwrap();
+        db.batch("CREATE TABLE t (i INTEGER)").await.unwrap();
+        db.execute("INSERT INTO t (i) VALUES (?)", params![42i64]).await.unwrap();
+        assert_eq!(db.scalar::<i64>("SELECT i FROM t", params![]).await.unwrap(), 42);
     }
 
     #[tokio::test]
