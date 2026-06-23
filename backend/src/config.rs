@@ -66,6 +66,14 @@ impl Config {
                 .into(),
         }
     }
+
+    /// Decide whether a one-shot `collect` run is bulk (whole universe) or a
+    /// ticker list. Precedence: an explicit `--all` flag wins; otherwise an
+    /// explicit `--ticker` on the CLI wins (collect just those, even if the
+    /// `COLLECT_ALL` env default is set); otherwise fall back to `collect_all`.
+    pub fn collect_is_bulk(&self, all_flag: bool, explicit_tickers: &[String]) -> bool {
+        all_flag || (explicit_tickers.is_empty() && self.collect_all)
+    }
 }
 
 /// Interpret common truthy strings.
@@ -147,6 +155,22 @@ mod tests {
         assert_eq!(cfg.reconcile_threshold, 0.05);
         assert_eq!(cfg.graham_min_revenue, crate::graham::DEFAULT_MIN_REVENUE);
         assert_eq!(cfg.parquet_dir, std::path::PathBuf::from("/data/parquet"));
+    }
+
+    #[test]
+    fn explicit_cli_ticker_overrides_collect_all_env() {
+        let bulk_env = Config::parse(getter(&[("COLLECT_ALL", "1")]));
+        // `--all` always means bulk.
+        assert!(bulk_env.collect_is_bulk(true, &[]));
+        // An explicit `--ticker` on the CLI wins over the env default: collect just
+        // those tickers, not the whole 10k universe.
+        assert!(!bulk_env.collect_is_bulk(false, &["AAPL".to_string()]));
+        // No flags + COLLECT_ALL set -> bulk (the env default).
+        assert!(bulk_env.collect_is_bulk(false, &[]));
+        // No flags + COLLECT_ALL unset -> not bulk (collect the configured tickers).
+        let no_env = Config::parse(|_| None);
+        assert!(!no_env.collect_is_bulk(false, &[]));
+        assert!(no_env.collect_is_bulk(true, &[])); // explicit --all still wins
     }
 
     #[test]
