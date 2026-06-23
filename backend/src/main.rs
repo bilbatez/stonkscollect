@@ -434,7 +434,10 @@ async fn bootstrap(store: &Store, cfg: &Config) {
 }
 
 async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all: bool) {
-    let bulk = all || cfg.collect_all;
+    // An explicit `--ticker` on the CLI collects just those tickers even when the
+    // COLLECT_ALL env default is set (otherwise `collect --ticker AAPL` silently
+    // ran the whole ~10k universe).
+    let bulk = cfg.collect_is_bulk(all, &tickers);
 
     // One rate limiter PER HOST (each client owns its clone), so EDGAR, Yahoo and
     // the vendors throttle independently and actually run in parallel under
