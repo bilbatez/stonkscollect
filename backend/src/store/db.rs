@@ -505,6 +505,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_transactions_on_shared_connection() {
+        // Bulk collect persists many companies at once (buffer_unordered), each via
+        // its own begin()/commit() on the shared connection. Assert that N
+        // concurrent transactions all land and none error/clobber.
+        let (db, _dir) = file_db().await;
+        db.batch("CREATE TABLE t (i INTEGER PRIMARY KEY)").await.unwrap();
+        let db = std::sync::Arc::new(db);
+        let tasks = (0..16i64).map(|i| {
+            let db = db.clone();
+            async move {
+                let tx = db.begin().await?;
+                query("INSERT INTO t (i) VALUES (?)").bind(i).execute(&tx).await?;
+                tx.commit().await
+            }
+        });
+        let results = futures::future::join_all(tasks).await;
+        let ok = results.iter().filter(|r| r.is_ok()).count();
+        let n = db.scalar::<i64>("SELECT COUNT(*) FROM t", params![]).await.unwrap();
+        assert_eq!(ok, 16, "all transactions should commit");
+        assert_eq!(n, 16, "all rows should land");
+    }
+
+    #[tokio::test]
     async fn open_remote_builds_a_handle() {
         // build() constructs the client without connecting; covers the ctor.
         let _ = Db::open_remote("libsql://example.invalid".into(), "tok".into()).await;
