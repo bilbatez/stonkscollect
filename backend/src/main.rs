@@ -16,7 +16,7 @@ use stonkscollect_backend::collectors::news::{FinnhubCollector, YahooNewsCollect
 use stonkscollect_backend::collectors::scrape::ScrapeCollector;
 use stonkscollect_backend::collectors::yahoo::{YahooCollector, YahooProfileCollector};
 use stonkscollect_backend::collectors::{
-    FactSource, HolderSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
+    FactSource, NewsSource, PriceSource, ProfileSource, SourceTarget,
 };
 use stonkscollect_backend::config::Config;
 use stonkscollect_backend::http::ReqwestClient;
@@ -520,18 +520,13 @@ async fn collect(store: &Arc<Store>, cfg: &Config, mut tickers: Vec<String>, all
         }
         cs
     };
-    for c in &companies {
-        let target = SourceTarget { cik: c.cik.clone(), symbol: c.ticker.clone() };
-        match holders.fetch_holders(c.id, &target).await {
-            Ok(h) if !h.is_empty() => {
-                if let Err(e) = store.save_ownership(&h).await {
-                    tracing::warn!("save ownership for {} failed: {e}", c.ticker);
-                }
-            }
-            Ok(_) => {}
-            Err(e) => tracing::debug!("form 4 collection for {} failed: {e}", c.ticker),
-        }
-    }
+    // Concurrent + progress-reported so a full-universe pass is fast and visible
+    // instead of a long silent serial tail (it used to look like the CLI hung).
+    let progress: &dyn pipeline::CollectProgress = if bulk { &CliProgress } else { &pipeline::NoProgress };
+    let saved =
+        pipeline::collect_ownership(store, &holders, &companies, cfg.collect_concurrency, progress)
+            .await;
+    tracing::info!("insider holders saved for {saved}/{} companies", companies.len());
 
     // Close the pool so the one-shot process exits (see bootstrap).
     store.close().await;

@@ -1000,4 +1000,54 @@ mod tests {
         assert_eq!(s.companies, 1);
         assert_eq!(store.get_ratios(id, None).await.unwrap().len(), 1);
     }
+
+    /// Holders for AAPL, none for EMPTY, an error for anything else.
+    struct FakeHolders;
+    #[async_trait(?Send)]
+    impl crate::collectors::HolderSource for FakeHolders {
+        fn name(&self) -> &'static str {
+            "fakeholders"
+        }
+        async fn fetch_holders(
+            &self,
+            company_id: i64,
+            t: &SourceTarget,
+        ) -> Result<Vec<crate::domain::OwnershipHolding>, CollectorError> {
+            match t.symbol.as_str() {
+                "AAPL" => Ok(vec![crate::domain::OwnershipHolding {
+                    company_id,
+                    holder: "Tim".into(),
+                    kind: "insider".into(),
+                    shares: 100.0,
+                    as_of: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                    source: "edgar".into(),
+                }]),
+                "EMPTY" => Ok(vec![]),
+                _ => Err(CollectorError::Http("boom".into())),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_ownership_persists_concurrently_and_skips_failures() {
+        let (store, _id, _d) = store_with_company().await; // inserts AAPL
+        for (cik, t) in [("2", "EMPTY"), ("3", "ERR")] {
+            store
+                .insert_company(&NewCompany {
+                    cik: cik.into(),
+                    ticker: t.into(),
+                    name: t.into(),
+                    exchange: None,
+                    sector: None,
+                    industry: None,
+                })
+                .await
+                .unwrap();
+        }
+        let companies = store.all_companies().await.unwrap();
+        let saved = collect_ownership(&store, &FakeHolders, &companies, 2, &NoProgress).await;
+        assert_eq!(saved, 1); // only AAPL yielded holders; EMPTY + ERR skipped
+        let aapl = store.get_company("AAPL").await.unwrap().unwrap();
+        assert_eq!(store.get_ownership(aapl.id).await.unwrap().len(), 1);
+    }
 }

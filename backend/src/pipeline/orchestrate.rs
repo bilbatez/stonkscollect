@@ -69,6 +69,57 @@ pub async fn collect_all(
     Ok(summary)
 }
 
+/// Best-effort insider-ownership pass: fetch EDGAR Form 4 holders for each
+/// company and persist them. Holdings are not period-keyed facts, so this runs
+/// separately from the fact/price pipeline (after `collect_*`). Runs up to
+/// `concurrency` companies at once and reports `progress`, so a full-universe
+/// run is fast and visible instead of a long silent serial tail. A per-company
+/// failure is logged and skipped. Returns how many companies yielded holders.
+pub async fn collect_ownership(
+    store: &Store,
+    source: &dyn crate::collectors::HolderSource,
+    companies: &[crate::domain::Company],
+    concurrency: usize,
+    progress: &dyn CollectProgress,
+) -> usize {
+    use crate::collectors::SourceTarget;
+    let total = companies.len();
+    progress.start(total);
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+    let saved = std::sync::atomic::AtomicUsize::new(0);
+    futures::stream::iter(companies.iter())
+        .map(|c| {
+            let counter = &counter;
+            let saved = &saved;
+            async move {
+                let done = || counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let target = SourceTarget { cik: c.cik.clone(), symbol: c.ticker.clone() };
+                let ok = match source.fetch_holders(c.id, &target).await {
+                    Ok(h) if !h.is_empty() => match store.save_ownership(&h).await {
+                        Ok(()) => {
+                            saved.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            true
+                        }
+                        Err(e) => {
+                            tracing::warn!("save ownership for {} failed: {e}", c.ticker);
+                            false
+                        }
+                    },
+                    Ok(_) => true, // queried fine, just no Form 4 holders
+                    Err(e) => {
+                        tracing::debug!("form 4 collection for {} failed: {e}", c.ticker);
+                        false
+                    }
+                };
+                progress.company_done(done(), total, &c.ticker, ok);
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+    saved.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// A company whose last price is older than this (and that EDGAR can no longer
 /// find) is treated as delisted.
 const DELISTED_STALE_DAYS: i64 = 30;
